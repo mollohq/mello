@@ -1667,6 +1667,44 @@ fn reactions_show_as_chips_and_a_click_toggles_mine() {
     );
 }
 
+/// ★ Regression: the action bar sat in a 28px gutter that three buttons
+/// overflowed, under the body. Every message on screen has React, Reply and
+/// More, and Reply starts reply mode for that message.
+#[test]
+fn every_message_on_screen_has_its_action_bar() {
+    let mut h = Harness::new();
+    open_chat(&mut h);
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 3),
+        has_more_history: false,
+    });
+    next_frame();
+    let_feed_settle();
+    assert_eq!(h.controls_labelled("React").len(), 3);
+    assert_eq!(h.controls_labelled("Reply").len(), 3);
+    let reply = h.controls_labelled("Reply");
+    let (top, bottom) = feed_frame(&h);
+    for r in &reply {
+        let y = r.absolute_position().y;
+        assert!(
+            y > top - 30.0 && y < bottom,
+            "the bar sits with its message: {y}"
+        );
+        assert!(
+            r.size().width > 10.0 && r.size().height > 10.0,
+            "a real button"
+        );
+    }
+    reply[1].mock_single_click(slint::platform::PointerEventButton::Left);
+    h.pump();
+    next_frame();
+    assert_eq!(
+        h.controls_labelled("Cancel reply").len(),
+        1,
+        "reply mode is on, with its bar in the composer"
+    );
+}
+
 /// React on a message opens the picker in reaction mode: the pick becomes a
 /// reaction, the picker closes, and the field keeps its text.
 #[test]
@@ -1920,10 +1958,10 @@ fn an_emoji_only_message_is_flagged_for_the_jumbo_size() {
     assert!(edited.is_emoji_only, "the edit changed the row in place");
 }
 
-/// A pick adds the emoji to the field and leaves the picker open, because
-/// people pick more than one. Escape in the field closes it.
+/// A pick adds the emoji to the field and closes the picker. Escape in the
+/// field closes it too. Recent keeps the picks, newest first.
 #[test]
-fn the_emoji_picker_stays_open_after_a_pick() {
+fn the_emoji_picker_closes_after_a_pick() {
     use slint::Model;
     let mut h = Harness::new();
     open_chat(&mut h);
@@ -1955,14 +1993,18 @@ fn the_emoji_picker_stays_open_after_a_pick() {
     );
     h.click_label("fire");
     next_frame();
+    assert!(
+        !h.app().get_emoji_popover_open(),
+        "a pick closes the picker"
+    );
+    assert_eq!(h.app().get_chat_input_text(), "🔥");
+
+    h.app().set_emoji_popover_open(true);
+    next_frame();
     h.app().invoke_emoji_search("skull".into());
     next_frame();
     h.click_label("skull");
     next_frame();
-    assert!(
-        h.app().get_emoji_popover_open(),
-        "still open after two picks"
-    );
     assert_eq!(h.app().get_chat_input_text(), "🔥💀");
     let recent: Vec<String> = (0..h.app().get_recent_emoji().row_count())
         .filter_map(|i| h.app().get_recent_emoji().row_data(i))
@@ -1970,6 +2012,8 @@ fn the_emoji_picker_stays_open_after_a_pick() {
         .collect();
     assert_eq!(recent, ["💀", "🔥"], "newest pick first");
 
+    h.app().set_emoji_popover_open(true);
+    next_frame();
     h.app()
         .window()
         .dispatch_event(slint::platform::WindowEvent::KeyPressed {
@@ -2057,10 +2101,12 @@ fn open_chat(h: &mut Harness) {
     next_frame();
 }
 
-/// Let the 1 ms scroll and history timers fire, then settle the frame.
+/// Let the scroll and history timers run their three frames, then settle.
 fn let_feed_settle() {
-    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(2));
-    next_frame();
+    for _ in 0..4 {
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(16));
+        next_frame();
+    }
 }
 
 fn feed_frame(h: &Harness) -> (f32, f32) {
@@ -2140,6 +2186,54 @@ fn a_short_feed_keeps_its_rows_together_at_the_bottom() {
     assert!(
         bottom - second_bottom < 80.0,
         "the last message sits at the bottom of the feed: {second_bottom} vs {bottom}"
+    );
+}
+
+/// Sending while reading older rows: the own message lands in view at the
+/// bottom, and the "New messages" pill does not show for it.
+#[test]
+fn an_own_message_scrolls_the_feed_to_the_bottom() {
+    let mut h = Harness::new();
+    open_chat(&mut h);
+    h.app().set_user_id("u-alice".into());
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 60),
+        has_more_history: false,
+    });
+    next_frame();
+    let_feed_settle();
+    let (top, bottom) = feed_frame(&h);
+    h.app()
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(1400.0, top + 200.0),
+            delta_x: 0.0,
+            delta_y: 50_000.0,
+        });
+    h.pump();
+    next_frame();
+    assert!(
+        visible_body(&h, "message m59 from bob").is_none(),
+        "scrolled away from the bottom"
+    );
+
+    h.app().invoke_send_message("mine".into());
+    h.pump();
+    let mut own = chat_message_fixture("own1", "alice", 9000);
+    own.content = "mine".into();
+    own.display_body = "mine".into();
+    h.emit(Event::MessageReceived { message: own });
+    next_frame();
+    let_feed_settle();
+    let mine = visible_body(&h, "mine").expect("the own message is on screen");
+    let mine_bottom = mine.absolute_position().y + mine.size().height;
+    assert!(
+        mine_bottom <= bottom + 0.5 && mine.absolute_position().y >= top,
+        "at the bottom: {mine_bottom} vs {bottom}"
+    );
+    assert!(
+        !h.app().get_has_new_messages(),
+        "no pill for your own message"
     );
 }
 

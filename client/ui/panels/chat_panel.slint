@@ -557,14 +557,13 @@ export component ChatPanel inherits Rectangle {
     callback image-copy(/* url */ string);
 
     /// A pick in the picker: a reaction when a message asked for one, else
-    /// text in the field. The picker stays open for text, because people pick
-    /// more than one; a reaction closes it.
+    /// text in the field. The picker closes either way.
     function pick-emoji(emoji: string) {
         root.emoji-picked(emoji);
+        root.emoji-popover-open = false;
         if root.emoji-target-message != "" {
             root.react(root.emoji-target-message, emoji);
             root.emoji-target-message = "";
-            root.emoji-popover-open = false;
             return;
         }
         chat-input.text += emoji;
@@ -617,6 +616,10 @@ export component ChatPanel inherits Rectangle {
     // New messages pill state
     in-out property <bool> has-new-messages: false;
     in-out property <bool> scroll-to-bottom-request: false;
+    // Frames each scroll timer has applied its target on (see the timers).
+    property <int> bottom-ticks: 0;
+    property <int> unread-ticks: 0;
+    property <int> history-ticks: 0;
     /// Open the feed with the unread rule near the top, not at the bottom.
     in-out property <bool> scroll-to-unread-request: false;
     /// Where the unread rule sits in the rows, reported by the rule's row.
@@ -764,11 +767,13 @@ export component ChatPanel inherits Rectangle {
             // Content height captured when older history is requested, so the prepend
             // nudge below can keep the anchor message exactly in place.
             property <length> saved-content-height;
+            property <length> saved-content-y;
 
             changed content-y => {
                 root.chat-viewport-changed(self.at-bottom);
                 if self.at-top && !self.was-at-top && root.has-more-history && !root.loading-history {
                     self.saved-content-height = self.content-height;
+                    self.saved-content-y = self.content-y;
                     root.request-history();
                 }
                 self.was-at-top = self.at-top;
@@ -956,7 +961,7 @@ export component ChatPanel inherits Rectangle {
 
                     // Message row: left gutter (hover actions) + text/reply (media is below)
                     if !msg.is-system && !msg.is-unread-divider
-                        && (msg.text != "" || msg.reply-to-id != "" || msg.is-deleted || msg.is-gif || msg.is-clip): HorizontalLayout {
+                        && (msg.text != "" || msg.reply-to-id != "" || msg.is-deleted || msg.is-gif || msg.is-clip || msg.is-image): HorizontalLayout {
                         spacing: 8px;
                         width: feed.width;
                         padding-left: 4px;
@@ -964,103 +969,14 @@ export component ChatPanel inherits Rectangle {
                         alignment: start;
                         property <length> actions-y: 0px;
                         property <bool> body-hovered: body-hover.has-hover
-                            || hover-bar-hover.has-hover
+                            || react-touch.has-hover
                             || reply-touch.has-hover
                             || more-menu.pointer-hover
                             || root.more-menu-message-id == msg.message-id;
 
-                        // Gutter column for hover actions (avatar is in header row above)
+                        // Gutter column: keeps the body under the name, next to the avatar.
                         Rectangle {
                             width: 28px;
-
-                            hover-bar-hover := TouchArea {
-                                // a11y: none (hover detector: shows the message action bar)
-                                x: 0;
-                                y: actions-y;
-                                width: 28px;
-                                height: 24px;
-
-                                HorizontalLayout {
-                                    width: parent.width;
-                                    height: 24px;
-                                    opacity: body-hovered ? 1 : 0;
-                                    spacing: 2px;
-                                    alignment: center;
-
-                                    Rectangle {
-                                        width: 16px;
-                                        height: 16px;
-                                        border-radius: 4px;
-                                        background: react-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
-
-                                        Image {
-                                            source: @image-url("../icons/smile.svg");
-                                            width: 12px;
-                                            height: 12px;
-                                            colorize: Theme.text-secondary;
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                        }
-
-                                        react-touch := TouchArea {
-                                            accessible-role: button;
-                                            accessible-label: "React";
-                                            clicked => { root.pick-reaction-for(msg.message-id); }
-                                        }
-                                    }
-
-                                    Rectangle {
-                                        width: 16px;
-                                        height: 16px;
-                                        border-radius: 4px;
-                                        background: reply-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
-
-                                        Image {
-                                            source: @image-url("../icons/reply.svg");
-                                            width: 12px;
-                                            height: 12px;
-                                            colorize: Theme.text-secondary;
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                        }
-
-                                        reply-touch := TouchArea {
-                                            accessible-role: button;
-                                            accessible-label: "Reply";
-                                            clicked => {
-                                                root.reply-mode = true;
-                                                root.reply-to-id = msg.message-id;
-                                                root.reply-to-name = msg.sender-name;
-                                            }
-                                        }
-                                    }
-
-                                    more-menu := MessageMoreMenu {
-                                        active: root.more-menu-message-id == msg.message-id;
-                                        open-above: feed.at-bottom && idx >= messages.length - 2;
-                                        is-own-message: msg.sender-id == root.user-id;
-                                        toggled => {
-                                            root.more-menu-message-id =
-                                                root.more-menu-message-id == msg.message-id ? "" : msg.message-id;
-                                        }
-                                        edit-requested => {
-                                            root.edit-mode = true;
-                                            root.edit-message-id = msg.message-id;
-                                            chat-input.text = msg.text;
-                                            chat-input.focus();
-                                            root.more-menu-message-id = "";
-                                        }
-                                        delete-requested => {
-                                            root.delete-confirm-message-id = msg.message-id;
-                                            root.more-menu-message-id = "";
-                                        }
-                                        copy-requested => {
-                                            root.copy-message-text(msg.text);
-                                            root.more-menu-message-id = "";
-                                        }
-                                    }
-                                }
-                            }
                         }
 
                         // Message content
@@ -1178,6 +1094,115 @@ export component ChatPanel inherits Rectangle {
                                 font-italic: true;
                                 wrap: word-wrap;
                             }
+                            }
+
+                            // The action bar: React, Reply, More, at the top right of the
+                            // message, over the header line, as in every chat app. Drawn
+                            // after the text so it takes the pointer first.
+                            actions-bar := Rectangle {
+                                x: parent.width - self.width - 4px;
+                                y: -14px;
+                                width: 72px;
+                                height: 24px;
+                                opacity: body-hovered ? 1 : 0;
+                                background: transparent;
+
+                                CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: 6px;
+                                    fill: Theme.graphic-light;
+                                }
+                                CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: 6px;
+                                    inset: Theme.keyline;
+                                    fill: Theme.surface-hover;
+                                }
+
+                                HorizontalLayout {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    spacing: 2px;
+                                    padding-left: 4px;
+                                    padding-right: 4px;
+                                    alignment: center;
+
+                                    Rectangle {
+                                        width: 16px;
+                                        height: 16px;
+                                        border-radius: 4px;
+                                        background: react-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
+
+                                        Image {
+                                            source: @image-url("../icons/smile.svg");
+                                            width: 12px;
+                                            height: 12px;
+                                            colorize: Theme.text-secondary;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                        }
+
+                                        react-touch := TouchArea {
+                                            accessible-role: button;
+                                            accessible-label: "React";
+                                            mouse-cursor: pointer;
+                                            clicked => { root.pick-reaction-for(msg.message-id); }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        width: 16px;
+                                        height: 16px;
+                                        border-radius: 4px;
+                                        background: reply-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
+
+                                        Image {
+                                            source: @image-url("../icons/reply.svg");
+                                            width: 12px;
+                                            height: 12px;
+                                            colorize: Theme.text-secondary;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                        }
+
+                                        reply-touch := TouchArea {
+                                            accessible-role: button;
+                                            accessible-label: "Reply";
+                                            clicked => {
+                                                root.reply-mode = true;
+                                                root.reply-to-id = msg.message-id;
+                                                root.reply-to-name = msg.sender-name;
+                                            }
+                                        }
+                                    }
+
+                                    more-menu := MessageMoreMenu {
+                                        active: root.more-menu-message-id == msg.message-id;
+                                        open-above: feed.at-bottom && idx >= messages.length - 2;
+                                        is-own-message: msg.sender-id == root.user-id;
+                                        toggled => {
+                                            root.more-menu-message-id =
+                                                root.more-menu-message-id == msg.message-id ? "" : msg.message-id;
+                                        }
+                                        edit-requested => {
+                                            root.edit-mode = true;
+                                            root.edit-message-id = msg.message-id;
+                                            chat-input.text = msg.text;
+                                            chat-input.focus();
+                                            root.more-menu-message-id = "";
+                                        }
+                                        delete-requested => {
+                                            root.delete-confirm-message-id = msg.message-id;
+                                            root.more-menu-message-id = "";
+                                        }
+                                        copy-requested => {
+                                            root.copy-message-text(msg.text);
+                                            root.more-menu-message-id = "";
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1475,36 +1500,52 @@ export component ChatPanel inherits Rectangle {
             }
         }
 
+        // The three scroll timers each apply their target on three frames,
+        // because a row the model just got is laid out on the next frame,
+        // and a target read before that is one row short.
         scroll-timer := Timer {
-            interval: 1ms;
+            interval: 16ms;
             running: root.scroll-to-bottom-request;
             triggered => {
                 feed.content-y = -max(0px, feed.content-height - feed.height);
-                root.scroll-to-bottom-request = false;
-                root.has-new-messages = false;
-                root.scroll-to-bottom-done();
+                root.bottom-ticks += 1;
+                if root.bottom-ticks >= 3 {
+                    root.bottom-ticks = 0;
+                    root.scroll-to-bottom-request = false;
+                    root.has-new-messages = false;
+                    root.scroll-to-bottom-done();
+                }
             }
         }
 
         unread-timer := Timer {
-            interval: 1ms;
+            interval: 16ms;
             running: root.scroll-to-unread-request;
             triggered => {
                 // The rule a little below the top edge, never past the end.
                 feed.content-y = -max(0px, min(root.unread-row-y - 24px, feed.content-height - feed.height));
-                root.scroll-to-unread-request = false;
+                root.unread-ticks += 1;
+                if root.unread-ticks >= 3 {
+                    root.unread-ticks = 0;
+                    root.scroll-to-unread-request = false;
+                }
             }
         }
 
         history-timer := Timer {
-            interval: 1ms;
+            interval: 16ms;
             running: root.history-prepended-rows > 0;
             triggered => {
                 // Keep the anchor message in place. content-y is 0 at the top
                 // and negative further down, so new content above the anchor
                 // moves it down by the exact growth, and the viewport follows.
-                feed.content-y -= feed.content-height - feed.saved-content-height;
-                root.history-prepended-done();
+                // From the saved values each time, so three applications are one.
+                feed.content-y = feed.saved-content-y - (feed.content-height - feed.saved-content-height);
+                root.history-ticks += 1;
+                if root.history-ticks >= 3 {
+                    root.history-ticks = 0;
+                    root.history-prepended-done();
+                }
             }
         }
         } // close feed container Rectangle
@@ -1779,6 +1820,16 @@ export component ChatPanel inherits Rectangle {
                         vertical-alignment: center;
                         edited => { root.emoji-search(self.text); }
                         init => { self.focus(); }
+                        // Escape closes the picker from the search field too.
+                        key-pressed(event) => {
+                            if event.text == Key.Escape {
+                                root.emoji-popover-open = false;
+                                root.emoji-target-message = "";
+                                chat-input.focus();
+                                return accept;
+                            }
+                            reject
+                        }
                     }
 
                     if emoji-search-input.text == "": Text {
@@ -2194,8 +2245,9 @@ export component ChatPanel inherits Rectangle {
         VerticalLayout {
             padding: 20px;
             spacing: 12px;
-            alignment: center;
 
+            // No `alignment` here: it would drop the stretch and give the
+            // image box no height at all.
             Rectangle {
                 vertical-stretch: 1;
                 if root.has-image-open-image: Image {
