@@ -1,7 +1,8 @@
 import { Theme, MelloTextInput } from "../theme.slint";
 import { CutShape, CutButtonShape, CutMask } from "../components/cut.slint";
 import { UserAvatar } from "../components/avatar.slint";
-import { ChatFocus, ChatMessageData, ChatLinkData, ChatImageData, AttachmentData, GifItemData, EmojiItemData, MentionMemberData } from "../types.slint";
+import { ChatFocus, ChatMessageData, ChatLinkData, ChatImageData, AttachmentData, GifItemData, EmojiItemData, EmojiRowData, EmojiCategoryData, MentionMemberData } from "../types.slint";
+import { ListView } from "std-widgets.slint";
 
 component LinkPill inherits Rectangle {
     in property <string> url;
@@ -596,7 +597,13 @@ export component ChatPanel inherits Rectangle {
     in property <int> history-prepended-rows: 0;
     in property <[MentionMemberData]> mention-members: [];
     in property <[MentionMemberData]> mention-suggestions: [];
-    in property <[EmojiItemData]> emoji-list: [];
+    in property <[EmojiRowData]> emoji-rows: [];
+    in property <[EmojiItemData]> recent-emoji: [];
+    in property <[EmojiCategoryData]> emoji-categories: [];
+    in-out property <int> emoji-category: 0;
+    callback emoji-search(/* query */ string);
+    callback emoji-category-selected(/* index */ int);
+    callback emoji-picked(/* emoji */ string);
 
     in-out property <bool> emoji-popover-open: false;
     in-out property <string> more-menu-message-id: "";
@@ -1587,7 +1594,7 @@ export component ChatPanel inherits Rectangle {
 
         // --- Emoji popover ---
         if root.emoji-popover-open: Rectangle {
-            height: 240px;
+            height: 320px;
             background: transparent;
 
             CutShape {
@@ -1604,57 +1611,173 @@ export component ChatPanel inherits Rectangle {
                 fill: Theme.surface;
             }
 
-            Flickable {
-                width: parent.width;
-                height: parent.height;
+            VerticalLayout {
+                padding: 8px;
+                spacing: 6px;
 
-                // The layout takes the Flickable's width, so the content is
-                // never wider than the viewport and nothing scrolls sideways.
-                VerticalLayout {
-                    width: parent.width;
-                    padding: 8px;
-                    spacing: 4px;
+                // Search, with focus on open.
+                Rectangle {
+                    height: 32px;
+                    background: Theme.bg-app;
+                    border-width: 1px;
+                    border-color: emoji-search-input.has-focus ? Theme.graphic-med : Theme.graphic-light;
 
-                    // Nine square cells that share the width (about 36px in
-                    // the 400px panel) with a 24px glyph. The 18px glyph in a
-                    // 32px cell was the size of body text and hard to pick.
-                    for row-start[row-idx] in [0, 9, 18, 27, 36, 45, 54, 63, 72, 81, 90, 99, 108, 117, 126, 135, 144, 153]: HorizontalLayout {
+                    emoji-search-input := MelloTextInput {
+                        accessible-label: "Search emoji";
+                        x: 10px;
+                        width: parent.width - 20px;
+                        height: parent.height;
+                        font-size: Theme.font-md;
+                        color: Theme.text-primary;
+                        vertical-alignment: center;
+                        edited => { root.emoji-search(self.text); }
+                        init => { self.focus(); }
+                    }
+
+                    if emoji-search-input.text == "": Text {
+                        font-weight: Theme.weight-sentence;
+                        font-family: Theme.font-body;
+                        x: 10px;
+                        text: "Search emoji";
+                        font-size: Theme.font-md;
+                        color: Theme.text-tertiary;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // Recent: one row, newest first. Only while not searching.
+                if root.recent-emoji.length > 0 && emoji-search-input.text == "": VerticalLayout {
+                    spacing: 2px;
+                    Text {
+                        font-family: Theme.font-label;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: Theme.track-label;
+                        text: "RECENT";
+                        font-size: 9px;
+                        color: Theme.text-tertiary;
+                        height: 14px;
+                        vertical-alignment: center;
+                    }
+                    recent-row := HorizontalLayout {
                         spacing: 2px;
-
-                        for col in [0, 1, 2, 3, 4, 5, 6, 7, 8]: Rectangle {
-                            property <int> emoji-index: row-start + col;
-                            property <bool> in-range: emoji-index < emoji-list.length;
-                            horizontal-stretch: 1;
-                            height: self.width;
-                            clip: true;
-
-                            if in-range: Rectangle {
+                        height: 36px;
+                        alignment: start;
+                        for r[ri] in root.recent-emoji: Rectangle {
+                            // Nine cells share the width; a short row keeps the size.
+                            width: (recent-row.width - 16px) / 9;
+                            background: recent-touch.has-hover ? Theme.bg-tertiary : transparent;
+                            Text {
+                                text: r.emoji;
+                                font-size: 24px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
                                 width: parent.width;
                                 height: parent.height;
-                                background: emoji-cell-touch.has-hover ? Theme.bg-tertiary : transparent;
-
-                                // No font-family: Oxanium and Barlow carry
-                                // no emoji, so naming either of them here
-                                // gives a grid of tofu boxes. Left unset,
-                                // the platform emoji font resolves them.
-                                Text {
-                                    text: emoji-list[emoji-index].emoji;
-                                    font-size: 24px;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
+                            }
+                            recent-touch := TouchArea {
+                                accessible-role: button;
+                                accessible-label: r.name;
+                                clicked => {
+                                    chat-input.text += r.emoji;
+                                    root.chat-input-changed(chat-input.text);
+                                    root.emoji-picked(r.emoji);
+                                    chat-input.focus();
                                 }
+                            }
+                        }
+                    }
+                }
 
-                                emoji-cell-touch := TouchArea {
-                                    accessible-role: button;
-                                    accessible-label: emoji-list[emoji-index].name;
-                                    // The picker stays open: people pick more than one.
-                                    // The pill or Escape closes it.
-                                    clicked => {
-                                        chat-input.text += emoji-list[emoji-index].emoji;
-                                        root.chat-input-changed(chat-input.text);
-                                        chat-input.focus();
-                                    }
+                // The grid: the active category, or the search hits. Nine
+                // cells share the width, 24px glyphs. A ListView is right
+                // here: every row is the same height, so no estimate lies.
+                emoji-grid := ListView {
+                    vertical-stretch: 1;
+                    vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+                    horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+
+                    for row[row-idx] in root.emoji-rows: HorizontalLayout {
+                        height: 38px;
+                        width: emoji-grid.visible-width;
+                        spacing: 2px;
+                        padding-bottom: 2px;
+                        alignment: start;
+
+                        for cell[ci] in row.cells: Rectangle {
+                            // Nine cells share the width; a short last row keeps the size.
+                            width: (emoji-grid.visible-width - 16px) / 9;
+                            background: emoji-cell-touch.has-hover ? Theme.bg-tertiary : transparent;
+
+                            // No font-family: Oxanium and Barlow carry no emoji.
+                            Text {
+                                text: cell.emoji;
+                                font-size: 24px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                width: parent.width;
+                                height: parent.height;
+                            }
+
+                            emoji-cell-touch := TouchArea {
+                                accessible-role: button;
+                                accessible-label: cell.name;
+                                // The picker stays open: people pick more than one.
+                                // The pill or Escape closes it.
+                                clicked => {
+                                    chat-input.text += cell.emoji;
+                                    root.chat-input-changed(chat-input.text);
+                                    root.emoji-picked(cell.emoji);
+                                    chat-input.focus();
                                 }
+                            }
+                        }
+                    }
+                }
+
+                if root.emoji-rows.length == 0 && emoji-search-input.text != "": Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
+                    text: "No emoji called that";
+                    font-size: Theme.font-md;
+                    color: Theme.text-tertiary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    height: 60px;
+                }
+
+                // Category tabs along the bottom. The active one is white underlined.
+                Rectangle {
+                    height: 1px;
+                    background: Theme.graphic-light;
+                }
+                HorizontalLayout {
+                    height: 30px;
+                    spacing: 2px;
+                    for cat[ci] in root.emoji-categories: Rectangle {
+                        horizontal-stretch: 1;
+                        property <bool> on: ci == root.emoji-category && emoji-search-input.text == "";
+                        Text {
+                            text: cat.icon;
+                            font-size: 16px;
+                            opacity: on || tab-touch.has-hover ? 1 : 0.5;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: parent.width;
+                            height: parent.height - 2px;
+                        }
+                        Rectangle {
+                            x: 0;
+                            y: parent.height - self.height;
+                            width: parent.width;
+                            height: 2px;
+                            background: on ? Theme.action : transparent;
+                        }
+                        tab-touch := TouchArea {
+                            accessible-role: tab;
+                            accessible-label: cat.name;
+                            clicked => {
+                                emoji-search-input.text = "";
+                                root.emoji-category-selected(ci);
                             }
                         }
                     }
@@ -2073,12 +2196,6 @@ export component Preview inherits ChatPanel {
     user-id: "u1";
     messages-this-week: 12;
     has-new-messages: true;
-    emoji-list: [
-        { emoji: "😀", name: "grinning" },
-        { emoji: "👍", name: "thumbsup" },
-        { emoji: "🔥", name: "fire" },
-        { emoji: "❤️", name: "heart" },
-    ];
     mention-members: [
         { user-id: "u2", display-name: "oweboweob", initials: "OW" },
         { user-id: "u3", display-name: "k0ji", initials: "K0" },
@@ -2207,17 +2324,24 @@ export component PreviewEmoji inherits ChatPanel {
     user-name: "bobdev";
     user-id: "u1";
     emoji-popover-open: true;
-    emoji-list: [
-        { emoji: "😀", name: "grinning" },
-        { emoji: "👍", name: "thumbsup" },
-        { emoji: "🔥", name: "fire" },
-        { emoji: "❤️", name: "heart" },
-        { emoji: "😂", name: "joy" },
-        { emoji: "🎮", name: "game" },
-        { emoji: "💀", name: "skull" },
-        { emoji: "🙏", name: "pray" },
-        { emoji: "👀", name: "eyes" },
-        { emoji: "🤝", name: "handshake" },
+    recent-emoji: [
+        { emoji: "🔥", name: "fire" }, { emoji: "💀", name: "skull" }, { emoji: "😂", name: "joy" },
+    ];
+    emoji-categories: [
+        { name: "Smileys & People", icon: "😀" }, { name: "Animals & Nature", icon: "🐱" },
+        { name: "Food & Drink", icon: "🍕" }, { name: "Activities", icon: "⚽" },
+        { name: "Travel & Places", icon: "🚗" }, { name: "Objects", icon: "💡" },
+        { name: "Symbols", icon: "❤️" }, { name: "Flags", icon: "🏳️" },
+    ];
+    emoji-rows: [
+        { cells: [
+            { emoji: "😀", name: "grinning" }, { emoji: "😃", name: "big eyes" }, { emoji: "😄", name: "smiling eyes" },
+            { emoji: "😁", name: "beaming" }, { emoji: "😆", name: "squinting" }, { emoji: "😅", name: "sweat" },
+            { emoji: "🤣", name: "rolling" }, { emoji: "😂", name: "joy" }, { emoji: "🙂", name: "slightly" },
+        ] },
+        { cells: [
+            { emoji: "🙃", name: "upside" }, { emoji: "😉", name: "wink" }, { emoji: "😊", name: "blush" },
+        ] },
     ];
 }
 

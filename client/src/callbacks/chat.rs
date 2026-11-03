@@ -9,16 +9,105 @@ use crate::app_context::AppContext;
 use crate::converters::apply_unread_to_crews;
 use crate::{EmojiItemData, MentionMemberData};
 
-/// The picker's emoji with their names. The name is the cell's accessible
-/// label, so a screen reader and the e2e driver can pick "fire".
-pub fn default_emoji_list() -> Vec<EmojiItemData> {
-    mello_core::emoji::all_emoji()
-        .into_iter()
-        .map(|e| EmojiItemData {
-            emoji: e.emoji.into(),
-            name: e.name.into(),
+/// One emoji per category as the tab's icon, in `CATEGORIES` order.
+const CATEGORY_ICONS: [&str; 8] = ["😀", "🐱", "🍕", "⚽", "🚗", "💡", "❤️", "🏳️"];
+/// Cells per picker row.
+const EMOJI_COLUMNS: usize = 9;
+/// Recent emoji kept: one row.
+const RECENT_EMOJI: usize = EMOJI_COLUMNS;
+
+fn emoji_item(e: &mello_core::emoji::EmojiEntry) -> EmojiItemData {
+    EmojiItemData {
+        emoji: e.emoji.into(),
+        name: e.name.into(),
+    }
+}
+
+/// The picker grid as rows of nine.
+fn emoji_rows(entries: &[mello_core::emoji::EmojiEntry]) -> slint::ModelRc<crate::EmojiRowData> {
+    let rows: Vec<crate::EmojiRowData> = entries
+        .chunks(EMOJI_COLUMNS)
+        .map(|chunk| crate::EmojiRowData {
+            cells: Rc::new(slint::VecModel::from(
+                chunk.iter().map(emoji_item).collect::<Vec<_>>(),
+            ))
+            .into(),
         })
-        .collect()
+        .collect();
+    Rc::new(slint::VecModel::from(rows)).into()
+}
+
+fn emoji_categories() -> slint::ModelRc<crate::EmojiCategoryData> {
+    let cats: Vec<crate::EmojiCategoryData> = mello_core::emoji::CATEGORIES
+        .iter()
+        .zip(CATEGORY_ICONS.iter())
+        .map(|(name, icon)| crate::EmojiCategoryData {
+            name: (*name).into(),
+            icon: (*icon).into(),
+        })
+        .collect();
+    Rc::new(slint::VecModel::from(cats)).into()
+}
+
+/// The picker: the full set by category, search by name, and a Recent row
+/// kept for the session.
+fn wire_emoji_picker(ctx: &AppContext) {
+    ctx.app.set_emoji_categories(emoji_categories());
+    ctx.app
+        .set_emoji_rows(emoji_rows(&mello_core::emoji::emoji_in_category(0)));
+    ctx.app.set_emoji_category(0);
+    {
+        let app_weak = ctx.app.as_weak();
+        ctx.app.on_emoji_search(move |query| {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            let entries = if query.trim().is_empty() {
+                mello_core::emoji::emoji_in_category(app.get_emoji_category().max(0) as usize)
+            } else {
+                mello_core::emoji::search_emoji(query.as_str())
+            };
+            app.set_emoji_rows(emoji_rows(&entries));
+        });
+    }
+    {
+        let app_weak = ctx.app.as_weak();
+        ctx.app.on_emoji_category_selected(move |index| {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            let index = (index.max(0) as usize).min(mello_core::emoji::CATEGORIES.len() - 1);
+            app.set_emoji_category(index as i32);
+            app.set_emoji_rows(emoji_rows(&mello_core::emoji::emoji_in_category(index)));
+        });
+    }
+    {
+        let app_weak = ctx.app.as_weak();
+        let recent: Rc<RefCell<Vec<String>>> = Rc::default();
+        ctx.app.on_emoji_picked(move |emoji| {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            let mut list = recent.borrow_mut();
+            list.retain(|e| e != emoji.as_str());
+            list.insert(0, emoji.to_string());
+            list.truncate(RECENT_EMOJI);
+            let all = mello_core::emoji::all_emoji();
+            let items: Vec<EmojiItemData> = list
+                .iter()
+                .map(|e| EmojiItemData {
+                    emoji: e.clone().into(),
+                    name: all
+                        .iter()
+                        .find(|x| x.emoji == e.as_str())
+                        .map(|x| x.name)
+                        .unwrap_or("emoji")
+                        .into(),
+                })
+                .collect();
+            app.set_recent_emoji(Rc::new(slint::VecModel::from(items)).into());
+        });
+    }
 }
 
 pub fn refresh_mention_members(ctx: &AppContext) {
@@ -77,8 +166,7 @@ pub fn add_mention_member(ctx: &AppContext, user_id: &str, display_name: &str, i
 }
 
 pub fn wire(ctx: &AppContext) {
-    ctx.app
-        .set_emoji_list(Rc::new(slint::VecModel::from(default_emoji_list())).into());
+    wire_emoji_picker(ctx);
     refresh_mention_members(ctx);
     let picks: MentionPicks = Rc::default();
 

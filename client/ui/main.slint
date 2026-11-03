@@ -36,7 +36,7 @@ import {
     NoticeEntryData,
     TesterData,
     InvitePersonData,
-    VideoRect, AttachmentData} from "types.slint";
+    VideoRect, AttachmentData, EmojiRowData, EmojiCategoryData} from "types.slint";
 import { CrewPanel } from "panels/crew_panel.slint";
 import { StreamSourcePicker } from "panels/stream_source_picker.slint";
 import { StreamSourceMenu } from "panels/stream_source_menu.slint";
@@ -214,7 +214,11 @@ export component MainWindow inherits Window {
     in-out property <bool> scroll-to-bottom-request: false;
     in-out property <int> history-prepended-rows: 0;
     in property <[MentionMemberData]> mention-members: [];
-    in property <[EmojiItemData]> emoji-list: [];
+    /// The picker grid: the active category, or the search hits.
+    in property <[EmojiRowData]> emoji-rows: [];
+    in property <[EmojiItemData]> recent-emoji: [];
+    in property <[EmojiCategoryData]> emoji-categories: [];
+    in-out property <int> emoji-category: 0;
     /// The composer's pending image chips.
     in property <[AttachmentData]> chat-attachments: [];
     /// The image open in the viewer over the chat panel. Empty when closed.
@@ -684,6 +688,9 @@ export component MainWindow inherits Window {
     callback chat-image-save(/* url */ string);
     callback chat-image-copy(/* url */ string);
     callback emoji-pill-clicked();
+    callback emoji-search(/* query */ string);
+    callback emoji-category-selected(/* index */ int);
+    callback emoji-picked(/* emoji */ string);
     callback chat-viewport-changed(/* at_bottom */ bool);
     callback scroll-to-bottom-done();
     callback link-clicked(/* url */ string);
@@ -1292,7 +1299,13 @@ export component MainWindow inherits Window {
                     history-prepended-rows: root.history-prepended-rows;
                     mention-members: root.mention-members;
                     mention-suggestions: root.mention-suggestions;
-                    emoji-list: root.emoji-list;
+                    emoji-rows: root.emoji-rows;
+                    recent-emoji: root.recent-emoji;
+                    emoji-categories: root.emoji-categories;
+                    emoji-category <=> root.emoji-category;
+                    emoji-search(query) => { root.emoji-search(query); }
+                    emoji-category-selected(index) => { root.emoji-category-selected(index); }
+                    emoji-picked(emoji) => { root.emoji-picked(emoji); }
                     emoji-popover-open <=> root.emoji-popover-open;
                     attachments: root.chat-attachments;
                     image-open <=> root.chat-image-open;

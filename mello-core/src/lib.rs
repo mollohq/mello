@@ -15,6 +15,7 @@ pub mod crew_state;
 #[cfg(feature = "e2e-game")]
 pub mod e2e_game;
 pub mod emoji;
+pub mod emoji_table;
 pub mod error;
 pub mod events;
 pub mod feed_reload;

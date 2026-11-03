@@ -674,6 +674,17 @@ export struct EmojiItemData {
     name: string,
 }
 
+/// One row of the picker grid, nine cells at most.
+export struct EmojiRowData {
+    cells: [EmojiItemData],
+}
+
+/// A category tab: its name for the label, one emoji as its icon.
+export struct EmojiCategoryData {
+    name: string,
+    icon: string,
+}
+
 export struct MentionMemberData {
     user-id: string,
     display-name: string,

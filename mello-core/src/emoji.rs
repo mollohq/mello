@@ -1,233 +1,94 @@
-/// Curated emoji dataset for the picker.
-/// Each entry: (emoji, name, category_index).
-/// Categories: 0=Smileys, 1=People, 2=Nature, 3=Food, 4=Activities, 5=Travel, 6=Objects, 7=Symbols
-pub const CATEGORIES: &[&str] = &[
-    "Smileys",
-    "People",
-    "Nature",
-    "Food",
-    "Activities",
-    "Travel",
-    "Objects",
-    "Symbols",
-];
+//! The picker's emoji: the full Unicode set the bundled font covers, with
+//! names for search and accessibility. The table is generated, see
+//! `tools/emoji/gen_emoji_table.py`.
+
+pub use crate::emoji_table::CATEGORIES;
+use crate::emoji_table::EMOJI;
 
 pub struct EmojiEntry {
     pub emoji: &'static str,
     pub name: &'static str,
+    /// Index into [`CATEGORIES`].
     pub category: usize,
 }
 
+fn entry(row: &(&'static str, &'static str, u8)) -> EmojiEntry {
+    EmojiEntry {
+        emoji: row.0,
+        name: row.1,
+        category: row.2 as usize,
+    }
+}
+
+/// Every emoji, in Unicode order.
 pub fn all_emoji() -> Vec<EmojiEntry> {
-    EMOJI_DATA
+    EMOJI.iter().map(entry).collect()
+}
+
+/// The emoji of one category, in Unicode order.
+pub fn emoji_in_category(category: usize) -> Vec<EmojiEntry> {
+    EMOJI
         .iter()
-        .map(|(e, n, c)| EmojiEntry {
-            emoji: e,
-            name: n,
-            category: *c,
-        })
+        .filter(|(_, _, c)| *c as usize == category)
+        .map(entry)
         .collect()
 }
 
+/// Emoji whose name holds every word of `query`. The exact name comes first,
+/// then names that start with the query: "fire" finds 🔥 before 🧑‍🚒.
 pub fn search_emoji(query: &str) -> Vec<EmojiEntry> {
-    let q = query.to_lowercase();
-    EMOJI_DATA
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return Vec::new();
+    }
+    let words: Vec<&str> = q.split_whitespace().collect();
+    // Rank: the exact name, then a name that starts with the query, then
+    // a name that holds every word. Stable, so Unicode order breaks ties.
+    let mut hits: Vec<(u8, EmojiEntry)> = EMOJI
         .iter()
-        .filter(|(_, name, _)| name.contains(&q))
-        .map(|(e, n, c)| EmojiEntry {
-            emoji: e,
-            name: n,
-            category: *c,
+        .filter_map(|row| {
+            let name = row.1.to_lowercase();
+            if !words.iter().all(|w| name.contains(w)) {
+                return None;
+            }
+            let rank = if name == q {
+                0
+            } else if name.starts_with(&q) {
+                1
+            } else {
+                2
+            };
+            Some((rank, entry(row)))
         })
-        .collect()
+        .collect();
+    hits.sort_by_key(|(rank, _)| *rank);
+    hits.into_iter().map(|(_, e)| e).collect()
 }
-
-const EMOJI_DATA: &[(&str, &str, usize)] = &[
-    // Smileys
-    ("😀", "grinning", 0),
-    ("😃", "smiley", 0),
-    ("😄", "smile", 0),
-    ("😁", "grin", 0),
-    ("😆", "laughing", 0),
-    ("😅", "sweat smile", 0),
-    ("🤣", "rofl", 0),
-    ("😂", "joy", 0),
-    ("🙂", "slightly smiling", 0),
-    ("🙃", "upside down", 0),
-    ("😉", "wink", 0),
-    ("😊", "blush", 0),
-    ("😇", "innocent", 0),
-    ("🥰", "smiling hearts", 0),
-    ("😍", "heart eyes", 0),
-    ("🤩", "star struck", 0),
-    ("😘", "kissing heart", 0),
-    ("😋", "yum", 0),
-    ("😜", "stuck out tongue winking", 0),
-    ("🤪", "zany", 0),
-    ("😎", "sunglasses", 0),
-    ("🤓", "nerd", 0),
-    ("🧐", "monocle", 0),
-    ("😏", "smirk", 0),
-    ("😒", "unamused", 0),
-    ("😞", "disappointed", 0),
-    ("😔", "pensive", 0),
-    ("😟", "worried", 0),
-    ("🙁", "slightly frowning", 0),
-    ("😮", "open mouth", 0),
-    ("😯", "hushed", 0),
-    ("😲", "astonished", 0),
-    ("😳", "flushed", 0),
-    ("🥺", "pleading", 0),
-    ("😢", "cry", 0),
-    ("😭", "sob", 0),
-    ("😤", "triumph", 0),
-    ("😠", "angry", 0),
-    ("😡", "rage", 0),
-    ("🤬", "cursing", 0),
-    ("😈", "smiling imp", 0),
-    ("💀", "skull", 0),
-    ("💩", "poop", 0),
-    ("🤡", "clown", 0),
-    ("👻", "ghost", 0),
-    ("😱", "scream", 0),
-    ("🥶", "cold face", 0),
-    ("🥵", "hot face", 0),
-    ("🤮", "vomiting", 0),
-    ("🤧", "sneezing", 0),
-    ("🤠", "cowboy", 0),
-    ("🫡", "salute", 0),
-    ("🫠", "melting", 0),
-    // People
-    ("👋", "wave", 1),
-    ("🤚", "raised back of hand", 1),
-    ("✋", "raised hand", 1),
-    ("🖖", "vulcan salute", 1),
-    ("👌", "ok hand", 1),
-    ("🤌", "pinched fingers", 1),
-    ("✌", "victory", 1),
-    ("🤞", "crossed fingers", 1),
-    ("🤟", "love you", 1),
-    ("🤘", "rock on", 1),
-    ("👍", "thumbs up", 1),
-    ("👎", "thumbs down", 1),
-    ("👏", "clap", 1),
-    ("🙌", "raised hands", 1),
-    ("🤝", "handshake", 1),
-    ("🙏", "pray", 1),
-    ("💪", "muscle", 1),
-    ("🫶", "heart hands", 1),
-    // Nature
-    ("🐶", "dog", 2),
-    ("🐱", "cat", 2),
-    ("🐭", "mouse", 2),
-    ("🐰", "rabbit", 2),
-    ("🦊", "fox", 2),
-    ("🐻", "bear", 2),
-    ("🐼", "panda", 2),
-    ("🐨", "koala", 2),
-    ("🦁", "lion", 2),
-    ("🐸", "frog", 2),
-    ("🐔", "chicken", 2),
-    ("🐧", "penguin", 2),
-    ("🦅", "eagle", 2),
-    ("🦋", "butterfly", 2),
-    ("🌸", "cherry blossom", 2),
-    ("🌹", "rose", 2),
-    ("🌻", "sunflower", 2),
-    ("🌲", "evergreen tree", 2),
-    ("🔥", "fire", 2),
-    ("🌈", "rainbow", 2),
-    ("⭐", "star", 2),
-    ("🌙", "crescent moon", 2),
-    ("☀", "sun", 2),
-    ("⛈", "thunder cloud rain", 2),
-    // Food
-    ("🍎", "apple", 3),
-    ("🍕", "pizza", 3),
-    ("🍔", "hamburger", 3),
-    ("🍟", "fries", 3),
-    ("🌮", "taco", 3),
-    ("🍣", "sushi", 3),
-    ("🍜", "ramen", 3),
-    ("🍩", "doughnut", 3),
-    ("🍪", "cookie", 3),
-    ("🎂", "birthday cake", 3),
-    ("🍰", "shortcake", 3),
-    ("☕", "coffee", 3),
-    ("🧋", "bubble tea", 3),
-    ("🍺", "beer", 3),
-    ("🍷", "wine", 3),
-    // Activities
-    ("⚽", "soccer", 4),
-    ("🏀", "basketball", 4),
-    ("🎮", "video game", 4),
-    ("🎯", "dart", 4),
-    ("🎲", "dice", 4),
-    ("🎸", "guitar", 4),
-    ("🎤", "microphone", 4),
-    ("🎬", "clapper board", 4),
-    ("🎨", "art palette", 4),
-    ("🏆", "trophy", 4),
-    ("🥇", "gold medal", 4),
-    ("🎉", "party popper", 4),
-    ("🎊", "confetti ball", 4),
-    // Travel
-    ("🚗", "car", 5),
-    ("✈", "airplane", 5),
-    ("🚀", "rocket", 5),
-    ("🏠", "house", 5),
-    ("🏖", "beach", 5),
-    ("🗺", "world map", 5),
-    // Objects
-    ("💻", "laptop", 6),
-    ("📱", "phone", 6),
-    ("⌨", "keyboard", 6),
-    ("🖥", "desktop", 6),
-    ("📷", "camera", 6),
-    ("💡", "lightbulb", 6),
-    ("📝", "memo", 6),
-    ("📚", "books", 6),
-    ("🔧", "wrench", 6),
-    ("🔒", "lock", 6),
-    ("🔑", "key", 6),
-    // Symbols
-    ("❤", "red heart", 7),
-    ("🧡", "orange heart", 7),
-    ("💛", "yellow heart", 7),
-    ("💚", "green heart", 7),
-    ("💙", "blue heart", 7),
-    ("💜", "purple heart", 7),
-    ("🖤", "black heart", 7),
-    ("🤍", "white heart", 7),
-    ("💯", "hundred", 7),
-    ("✅", "check mark", 7),
-    ("❌", "cross mark", 7),
-    ("⚠", "warning", 7),
-    ("💬", "speech bubble", 7),
-    ("👀", "eyes", 7),
-    ("🔴", "red circle", 7),
-    ("🟢", "green circle", 7),
-];
 
 #[cfg(test)]
 mod tests {
-    use super::EMOJI_DATA;
+    use super::*;
 
-    /// Slint's font fallback does not resolve `<base> + U+FE0F`. Ten
-    /// entries carried that variation selector and every one of them drew
-    /// a tofu box in the picker, while the same character without it draws
-    /// a colour emoji. The selector only asks for emoji presentation, and
-    /// the platform already gives it, so the table must not carry one.
     #[test]
-    fn no_emoji_carries_a_variation_selector() {
-        let offenders: Vec<&str> = EMOJI_DATA
-            .iter()
-            .filter(|(emoji, _, _)| emoji.contains('\u{FE0F}'))
-            .map(|(_, name, _)| *name)
-            .collect();
+    fn the_table_is_the_full_set_in_eight_categories() {
+        assert!(all_emoji().len() > 1500, "{}", all_emoji().len());
+        assert_eq!(CATEGORIES.len(), 8);
+        for c in 0..CATEGORIES.len() {
+            assert!(!emoji_in_category(c).is_empty(), "category {c} has emoji");
+        }
+        assert!(all_emoji().iter().all(|e| e.category < CATEGORIES.len()));
+    }
+
+    #[test]
+    fn search_finds_by_name_and_puts_the_exact_start_first() {
+        let fire = search_emoji("fire");
+        assert_eq!(fire[0].emoji, "🔥");
         assert!(
-            offenders.is_empty(),
-            "these would render as boxes in the picker: {offenders:?}"
+            fire.iter().any(|e| e.emoji == "🧯"),
+            "fire extinguisher is a hit too"
         );
+        assert_eq!(search_emoji("  ").len(), 0);
+        assert_eq!(search_emoji("thumbs up")[0].emoji, "👍");
+        assert_eq!(search_emoji("flag sweden")[0].emoji, "🇸🇪");
     }
 }

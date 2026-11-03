@@ -1625,19 +1625,9 @@ fn an_emoji_only_message_is_flagged_for_the_jumbo_size() {
 /// people pick more than one. Escape in the field closes it.
 #[test]
 fn the_emoji_picker_stays_open_after_a_pick() {
+    use slint::Model;
     let mut h = Harness::new();
     open_chat(&mut h);
-    h.app()
-        .set_emoji_list(slint::ModelRc::new(slint::VecModel::from(vec![
-            crate::EmojiItemData {
-                emoji: "🔥".into(),
-                name: "fire".into(),
-            },
-            crate::EmojiItemData {
-                emoji: "💀".into(),
-                name: "skull".into(),
-            },
-        ])));
     h.app().set_emoji_popover_open(true);
     next_frame();
     assert_eq!(
@@ -1645,16 +1635,28 @@ fn the_emoji_picker_stays_open_after_a_pick() {
         1,
         "the field stays a control while the picker is open"
     );
+    assert_eq!(h.app().get_emoji_categories().row_count(), 8);
+    assert!(
+        h.app().get_emoji_rows().row_count() > 10,
+        "the first category fills the grid"
+    );
+
+    // Fire lives far down Travel & Places, past what the virtualized grid
+    // draws, so search brings it to the first row.
+    h.app().invoke_emoji_search("fire".into());
+    next_frame();
     // ★ Regression: fixed 36px cells made the grid wider than the popover,
     // and the picker scrolled sideways. The cells share the panel width.
     let fire = h.controls_labelled("fire");
-    let skull = h.controls_labelled("skull");
+    assert_eq!(fire.len(), 1, "one fire cell at the top of the hits");
     assert!(
-        (fire[0].size().width - skull[0].size().width).abs() < 0.5 && fire[0].size().width > 30.0,
-        "equal cells of a useful size, got {}",
+        fire[0].size().width > 30.0,
+        "a useful cell size, got {}",
         fire[0].size().width
     );
     h.click_label("fire");
+    next_frame();
+    h.app().invoke_emoji_search("skull".into());
     next_frame();
     h.click_label("skull");
     next_frame();
@@ -1663,6 +1665,11 @@ fn the_emoji_picker_stays_open_after_a_pick() {
         "still open after two picks"
     );
     assert_eq!(h.app().get_chat_input_text(), "🔥💀");
+    let recent: Vec<String> = (0..h.app().get_recent_emoji().row_count())
+        .filter_map(|i| h.app().get_recent_emoji().row_data(i))
+        .map(|e| e.emoji.to_string())
+        .collect();
+    assert_eq!(recent, ["💀", "🔥"], "newest pick first");
 
     h.app()
         .window()
@@ -1673,6 +1680,31 @@ fn the_emoji_picker_stays_open_after_a_pick() {
     assert!(
         !h.app().get_emoji_popover_open(),
         "Escape closes the picker"
+    );
+}
+
+/// Search filters the grid by name; clearing it brings the category back.
+#[test]
+fn the_emoji_picker_searches_by_name() {
+    use slint::Model;
+    let mut h = Harness::new();
+    h.app().invoke_emoji_search("thumbs up".into());
+    let rows = h.app().get_emoji_rows();
+    let first = rows
+        .row_data(0)
+        .and_then(|r| r.cells.row_data(0))
+        .expect("a hit");
+    assert_eq!(first.emoji, "👍");
+    h.app().invoke_emoji_search("zzzz".into());
+    assert_eq!(
+        h.app().get_emoji_rows().row_count(),
+        0,
+        "no hits, the panel says so"
+    );
+    h.app().invoke_emoji_search("".into());
+    assert!(
+        h.app().get_emoji_rows().row_count() > 10,
+        "the category is back"
     );
 }
 
