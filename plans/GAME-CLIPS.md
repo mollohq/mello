@@ -298,7 +298,7 @@ Playback opens in the expanded view of the feed area, as `ExpandedStreamCard` do
 | `post_clip` | Accept `clip_type` in `voice`, `game`. Reject others. A game clip carries `width`, `height`, `has_voice`. The waveform stays optional. |
 | `clip_upload_url` | For `game`: presign `crews/{crew_id}/{clip_id}.mp4` as `video/mp4` and `crews/{crew_id}/{clip_id}.jpg` as `image/jpeg`. Bind `Content-Length` with a cap of 64 MB for the MP4 and 1 MB for the JPEG. |
 | `clip_upload_complete` | Sets `media_url` and `poster_url` on `StoredClip`. |
-| Storage | The existing `mello-clips` bucket. Local dev: MinIO. |
+| Storage | The existing `mello-clips` bucket. Local dev: RustFS. |
 | Retention | Game clip media is kept forever, as voice clip media is (Q10). |
 | Limits | The existing per-user daily clip limit applies to game clips. |
 
@@ -426,7 +426,7 @@ A scenario in the perf harness (20-PERF-HARNESS.md), on the Windows PC:
 | `replay.gate-cpu` | The replay lane, CPU. |
 | `replay.gate-hw` | The replay lane, hardware. Windows PC. |
 | `perf.replay` | The perf scenario. Windows PC. |
-| Journey `game-clip` (mello-driver) | Local stack only, voice through the local SFU. An `e2e-game` build injects a fake game (`mello-core/src/e2e_game.rs`), and the replay capture uses the reference source in that build. Join voice with a second client, wait for `recording`, press F8, assert the card in the feed with a poster, assert the MP4 in local MinIO, open it on a second client and play it. |
+| Journey `game-clip` (mello-driver) | Local stack only, voice through the local SFU. An `e2e-game` build injects a fake game (`mello-core/src/e2e_game.rs`), and the replay capture uses the reference source in that build. Join voice with a second client, wait for `recording`, press F8, assert the card in the feed with a poster, assert the MP4 in local RustFS, open it on a second client and play it. |
 
 No test, script or journey points at production.
 

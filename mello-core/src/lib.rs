@@ -30,6 +30,7 @@ pub mod nakama;
 pub mod oauth;
 pub mod pending_session_ends;
 pub mod presence;
+pub mod roblox_names;
 pub mod session;
 pub mod session_store;
 pub mod stats;

@@ -708,6 +708,13 @@ pub enum Event {
         /// viewer's own game from the same moment as the crew sees it.
         started_at_ms: i64,
     },
+    /// The activity inside an open gated session got a name (spec 18
+    /// §3.11): the Roblox experience. Empty when the activity changed and the
+    /// new name is not known yet. The bar shows it under the game's name.
+    GameActivity {
+        game_id: String,
+        activity: String,
+    },
     /// A game process exited.
     GameEnded {
         game_id: String,

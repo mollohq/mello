@@ -590,11 +590,16 @@ pub fn format_game_line(game: &mello_core::presence::GamePresence, now_ms: i64) 
                 .map(|started_ms| format_elapsed_minutes(now_ms.saturating_sub(started_ms)))
                 .unwrap_or_default()
         });
-    if duration.is_empty() {
-        game.game_name.clone()
-    } else {
-        format!("{} · {duration}", game.game_name)
+    let mut line = game.game_name.clone();
+    if !game.activity.is_empty() {
+        line.push_str(" · ");
+        line.push_str(&game.activity);
     }
+    if !duration.is_empty() {
+        line.push_str(" · ");
+        line.push_str(&duration);
+    }
+    line
 }
 
 pub fn game_line_from_presence(
@@ -909,6 +914,7 @@ mod tests {
             game_name: String::new(),
             game_id: "g1".into(),
             started_at: mello_core::presence::to_rfc3339(1_700_000_000_000),
+            activity: String::new(),
         };
         assert_eq!(
             game_line_from_presence(Some(&empty_name), 1_700_000_000_000),
@@ -924,8 +930,23 @@ mod tests {
             game_name: "Valorant".into(),
             game_id: "valorant".into(),
             started_at: started,
+            activity: String::new(),
         };
         assert_eq!(format_game_line(&game, now), "Valorant · 1h 23m");
+    }
+
+    /// A Roblox crewmate's line names the experience between the game and
+    /// the time.
+    #[test]
+    fn game_line_names_the_activity_inside_the_game() {
+        let now = 1_700_000_000_000i64;
+        let game = GamePresence {
+            game_name: "Roblox".into(),
+            game_id: "roblox".into(),
+            started_at: mello_core::presence::to_rfc3339(now - 12 * 60_000),
+            activity: "Grow a Garden".into(),
+        };
+        assert_eq!(format_game_line(&game, now), "Roblox · Grow a Garden · 12m");
     }
 
     #[test]

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Run the end-to-end suite against a local Nakama stack.
 #
-# Brings up backend/docker-compose.yml (Postgres + MinIO + Nakama), seeds it,
+# Brings up backend/docker-compose.yml (Postgres + RustFS + Nakama), seeds it,
 # runs tools/e2e, and by default tears the stack down again.
 #
 # This is the only thing in the repo that exercises Go RPC handlers and hooks.

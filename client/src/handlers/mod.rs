@@ -202,6 +202,7 @@ fn dispatch(ctx: &AppContext, event: Event) {
 
         // Game sensing + telemetry
         Event::GameDetected { .. }
+        | Event::GameActivity { .. }
         | Event::GameEnded { .. }
         | Event::PostGameTimeout
         | Event::MatchEnded { .. }

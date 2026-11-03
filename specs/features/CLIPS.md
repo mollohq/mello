@@ -180,7 +180,7 @@ A 30-second voice clip encodes to ~240 KB MP4. Encoding takes <200 ms on any mod
 
 ### 6.2 Cloud (S3-Compatible — Cloudflare R2)
 
-Production uses **Cloudflare R2** (S3-compatible, zero egress fees). Local dev uses **MinIO** in Docker.
+Production uses **Cloudflare R2** (S3-compatible, zero egress fees). Local dev uses **RustFS** in Docker.
 
 Upload flow:
 
@@ -195,7 +195,7 @@ Backend generates presigned PUT URL (15 min TTL) via AWS SDK
 Object key: crews/{crew_id}/{clip_id}.mp4
     │
     ▼
-Client HTTP PUTs MP4 directly to R2/MinIO (no backend proxy)
+Client HTTP PUTs MP4 directly to R2/RustFS (no backend proxy)
     │
     ▼
 Client calls `clip_upload_complete` RPC
@@ -217,14 +217,14 @@ A 30-second voice-only MP4/AAC clip ≈ 240 KB. Per active crew per month (~20 c
 
 | Variable | Local Dev | Production | Purpose |
 |----------|-----------|------------|---------|
-| `S3_ENDPOINT` | `http://minio:9000` | `https://<account>.r2.cloudflarestorage.com` | S3 API endpoint (internal) |
+| `S3_ENDPOINT` | `http://s3:9000` | `https://<account>.r2.cloudflarestorage.com` | S3 API endpoint (internal) |
 | `S3_PRESIGN_ENDPOINT` | `http://localhost:9000` | *(not set, falls back to S3_ENDPOINT)* | Endpoint used in presigned URLs (client-reachable) |
 | `S3_BUCKET` | `mello-clips` | `mello-clips` | Bucket name |
 | `S3_ACCESS_KEY` | `minioadmin` | R2 API token access key | S3 credentials |
 | `S3_SECRET_KEY` | `minioadmin` | R2 API token secret key | S3 credentials |
 | `S3_PUBLIC_URL` | `http://localhost:9000/mello-clips` | `https://clips.m3llo.app` | Public base URL for media_url construction |
 
-`S3_PRESIGN_ENDPOINT` exists because in Docker, Nakama reaches MinIO via `minio:9000` (internal DNS), but presigned URLs must be reachable by the client on the host. In production (R2), the endpoint is the same for both, so this var is omitted.
+`S3_PRESIGN_ENDPOINT` exists because in Docker, Nakama reaches RustFS via `s3:9000` (internal DNS), but presigned URLs must be reachable by the client on the host. In production (R2), the endpoint is the same for both, so this var is omitted.
 
 See [05-GETTING-STARTED.md](../05-GETTING-STARTED.md) for R2 setup instructions.
 

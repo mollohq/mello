@@ -1,5 +1,6 @@
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use slint::{Model, Weak};
 
@@ -10,11 +11,30 @@ use crate::MainWindow;
 const MAX_CONCURRENT: usize = 3;
 
 /// Loads session snapshot JPEGs to disk and delivers thumb-sized images via feed row updates.
+///
+/// A poster is decoded only while its card is near the visible part of the
+/// feed (`FeedView.poster-wanted` in types.slint), at the size the card draws
+/// it, and dropped when the card moves away. The JPEGs stay on disk, so a card
+/// that comes back decodes its poster again.
 pub struct SnapshotLoader {
     client: reqwest::Client,
     generation: Arc<AtomicU32>,
     rt: tokio::runtime::Handle,
     semaphore: Arc<tokio::sync::Semaphore>,
+    /// Cards that want their poster now. A decode that ends after its card
+    /// moved away is not applied.
+    wanted: Arc<Mutex<HashSet<String>>>,
+    /// Cards with a poster decode under way, so a card asks only once.
+    inflight: Arc<Mutex<HashSet<String>>>,
+}
+
+/// Takes the card off `inflight` when its poster task ends, on every path.
+struct Inflight(Arc<Mutex<HashSet<String>>>, String);
+
+impl Drop for Inflight {
+    fn drop(&mut self) {
+        self.0.lock().unwrap().remove(&self.1);
+    }
 }
 
 impl SnapshotLoader {
@@ -24,6 +44,8 @@ impl SnapshotLoader {
             generation: Arc::new(AtomicU32::new(1)),
             rt,
             semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT)),
+            wanted: Arc::new(Mutex::new(HashSet::new())),
+            inflight: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -50,18 +72,69 @@ impl SnapshotLoader {
         });
     }
 
-    /// Load poster (frame 0) and update the feed card row.
-    pub fn request_poster(
+    /// A card came near the visible part of the feed (`wanted`), or moved
+    /// away from it. `max_w` is the poster width it draws, in physical pixels.
+    pub fn poster_wanted(
+        &self,
+        app_weak: Weak<MainWindow>,
+        card_id: String,
+        wanted: bool,
+        max_w: u32,
+    ) {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        // A feed rebuild gives a card new rows and a new instance, which
+        // reports again: look at the row, not at what was asked before.
+        let row = card_models(&app)
+            .iter()
+            .find_map(|cards| find_card_row(cards, &card_id).and_then(|i| cards.row_data(i)));
+        let Some(row) = row else {
+            return;
+        };
+        if !wanted {
+            self.wanted.lock().unwrap().remove(&card_id);
+            let holds = row.snapshot_poster_ready
+                || row.snapshot_poster.size().width > 0
+                || row.snapshot_playback_frame.size().width > 0;
+            if holds {
+                update_card(&app, &card_id, |card| {
+                    card.snapshot_poster = slint::Image::default();
+                    card.snapshot_playback_frame = slint::Image::default();
+                    card.snapshot_poster_ready = false;
+                    card.snapshot_loading = !card.snapshot_error;
+                });
+            }
+            return;
+        }
+        self.wanted.lock().unwrap().insert(card_id.clone());
+        if row.snapshot_poster_ready || !self.inflight.lock().unwrap().insert(card_id.clone()) {
+            return;
+        }
+        let Some(url) = first_snapshot_url(&row) else {
+            self.inflight.lock().unwrap().remove(&card_id);
+            return;
+        };
+        let gen = self.current_generation();
+        self.request_poster(app_weak, card_id, url, gen, max_w);
+    }
+
+    /// Load poster (frame 0), at most `max_w` wide, and update the feed card row.
+    fn request_poster(
         &self,
         app_weak: Weak<MainWindow>,
         card_id: String,
         url: String,
         gen: u32,
+        max_w: u32,
     ) {
         let client = self.client.clone();
         let sem = self.semaphore.clone();
         let generation = self.generation.clone();
+        let wanted = self.wanted.clone();
+        let inflight = Inflight(self.inflight.clone(), card_id.clone());
         self.rt.spawn(async move {
+            let _inflight = inflight;
             let _permit = sem.acquire().await.ok();
             if generation.load(Ordering::SeqCst) != gen {
                 return;
@@ -84,7 +157,8 @@ impl SnapshotLoader {
             }
 
             let rgba = match tokio::task::spawn_blocking(move || {
-                snapshot_cache::decode_thumb_rgba(&raw, &url)
+                let (bytes, w, h) = snapshot_cache::decode_thumb_rgba(&raw, &url)?;
+                snapshot_cache::fit_width(bytes, w, h, max_w)
             })
             .await
             {
@@ -104,6 +178,9 @@ impl SnapshotLoader {
             }
 
             let _ = slint::invoke_from_event_loop(move || {
+                if !wanted.lock().unwrap().contains(&card_id) {
+                    return;
+                }
                 if let Some(app) = app_weak.upgrade() {
                     let (bytes, w, h) = rgba;
                     let img = snapshot_cache::rgba_bytes_to_image(bytes, w, h);
@@ -163,9 +240,11 @@ impl SnapshotLoader {
         });
     }
 
-    /// After the feed is set: disk-prefetch frame 0 + decode posters for
-    /// session-preview cards in both the this_week grid and the memory band.
+    /// After the feed is set: disk-prefetch frame 0 for session-preview cards
+    /// in both the this_week grid and the memory band. The posters decode
+    /// when the cards ask for them (`poster_wanted`).
     pub fn load_session_preview_cards(&self, app_weak: Weak<MainWindow>, gen: u32) {
+        self.wanted.lock().unwrap().clear();
         if let Some(app) = app_weak.upgrade() {
             for cards in card_models(&app) {
                 for i in 0..cards.row_count() {
@@ -185,8 +264,7 @@ impl SnapshotLoader {
                     card.snapshot_error = false;
                     cards.set_row_data(i, card.clone());
 
-                    self.prefetch_disk(url.clone(), gen);
-                    self.request_poster(app_weak.clone(), card.id.to_string(), url, gen);
+                    self.prefetch_disk(url, gen);
                 }
             }
         }

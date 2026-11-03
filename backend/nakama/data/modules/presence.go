@@ -40,6 +40,9 @@ type GamePresence struct {
 	GameName  string `json:"game_name"`
 	GameID    string `json:"game_id"`
 	StartedAt string `json:"started_at"`
+	// The activity inside the game (spec 17 §5.1): the Roblox experience's
+	// name. Empty for a game without one.
+	Activity string `json:"activity,omitempty"`
 }
 
 // UserPresence stored in Nakama storage: presence/{user_id}

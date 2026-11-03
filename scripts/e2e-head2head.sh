@@ -88,11 +88,11 @@ services:
   postgres:
     container_name: mello-h2h-postgres
     ports: !reset []
-  minio:
-    container_name: mello-h2h-minio
+  s3:
+    container_name: mello-h2h-s3
     ports: !reset []
-  minio-init:
-    container_name: mello-h2h-minio-init
+  s3-init:
+    container_name: mello-h2h-s3-init
   nakama-build:
     container_name: mello-h2h-nakama-build
   nakama:

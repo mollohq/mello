@@ -53,11 +53,11 @@ cd backend
 cp .env.example .env
 # Edit .env if needed (defaults work for local dev)
 
-# Start Nakama + PostgreSQL + MinIO (local S3)
+# Start Nakama + PostgreSQL + RustFS (local S3)
 docker compose up -d
 
 # Verify: open http://localhost:7351 (admin / mello_admin_dev)
-# MinIO console: http://localhost:9001 (minioadmin / minioadmin)
+# RustFS console: http://localhost:9001 (minioadmin / minioadmin)
 ```
 
 ### Common backend commands
@@ -146,7 +146,7 @@ compiled out.
 
 | Variable | Local Dev Value | Purpose |
 |----------|----------------|---------|
-| `S3_ENDPOINT` | `http://minio:9000` | S3 API (Docker-internal) |
+| `S3_ENDPOINT` | `http://s3:9000` | S3 API (Docker-internal) |
 | `S3_PRESIGN_ENDPOINT` | `http://localhost:9000` | Presigned URL base (client-reachable) |
 | `S3_BUCKET` | `mello-clips` | Bucket name |
 | `S3_ACCESS_KEY` | `minioadmin` | S3 credentials |
@@ -236,8 +236,8 @@ chore: bump slint to 1.9
 | Nakama Console | http://localhost:7351 |
 | Nakama REST API | http://localhost:7350 |
 | PostgreSQL | localhost:5432 |
-| MinIO Console | http://localhost:9001 (minioadmin / minioadmin) |
-| MinIO S3 API | http://localhost:9000 |
+| RustFS Console | http://localhost:9001 (minioadmin / minioadmin) |
+| RustFS S3 API | http://localhost:9000 |
 
 ---
 
@@ -278,7 +278,7 @@ S3_SECRET_KEY=<secret-access-key>
 S3_PUBLIC_URL=https://clips.m3llo.app
 ```
 
-`S3_PRESIGN_ENDPOINT` is **not needed** in production — the R2 endpoint is directly reachable by clients (unlike Docker where MinIO has an internal hostname).
+`S3_PRESIGN_ENDPOINT` is **not needed** in production — the R2 endpoint is directly reachable by clients (unlike Docker where RustFS has an internal hostname).
 
 ### 10.5 Retention lifecycle (future)
 

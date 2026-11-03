@@ -127,8 +127,9 @@ public:
     void set_echo_cancellation(bool enabled);
     void set_agc(bool enabled) { echo_canceller_.set_agc_enabled(enabled); }
     /// Neural residual-echo suppressor (flag-off rollout). Soft dependency:
-    /// missing model degrades to passthrough, never blocks audio.
-    void set_echo_suppression(bool enabled) { echo_suppressor_.set_enabled(enabled); }
+    /// missing model degrades to passthrough, never blocks audio. The first
+    /// enable loads the model on the calling thread.
+    void set_echo_suppression(bool enabled);
     bool echo_suppression_enabled() const { return echo_suppressor_.enabled(); }
     void set_noise_suppression(bool enabled) { set_ns_mode(enabled ? NsMode::Rnnoise : NsMode::Off); }
     void set_ns_mode(NsMode mode);
@@ -303,6 +304,8 @@ private:
     /// of the current backend. Every playback replacement calls it before
     /// start() (spec 03 section 4.2).
     void wire_render_source();
+    /// Load the echo suppressor model once; under echo_load_mutex_.
+    void load_echo_suppressor();
     /// Device-thread render source: `count` interleaved samples of
     /// `channels` channels (1 or 2). Pulls 10 ms frames from render_frame()
     /// through the output ring. Returns `count` when any of it is audible,
@@ -334,6 +337,7 @@ private:
     NoiseSuppressor noise_suppressor_;
     EchoCanceller echo_canceller_;
     EchoSuppressor echo_suppressor_;
+    std::mutex echo_load_mutex_;
     // Post-AGC downward expander: pushes the AGC-pumped noise floor back down in
     // speech gaps (keyed off the Silero VAD), so a quiet mic that forces large
     // AGC gain does not transmit a swelling floor between words. See

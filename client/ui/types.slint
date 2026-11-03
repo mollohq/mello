@@ -842,6 +842,18 @@ export global VideoRect {
     callback geometry-changed(float, float, float, float, float, float);
 }
 
+/// The crew feed's visible band in window coordinates, set by CrewFeed. A
+/// session-preview card wants its poster only while it is within one band
+/// height of the band: 37 posters of 480x270 kept for a long feed were 19 MB
+/// of the client's private working set.
+export global FeedView {
+    in-out property <length> top;
+    in-out property <length> bottom;
+    // Args: card id, wanted, media width, media height (logical pixels; Rust
+    // multiplies by scale_factor). Wanted false: Rust drops the poster.
+    callback poster-wanted(string, bool, float, float);
+}
+
 // --- stage 9 (streaming-quality): the stream card's controls ---
 
 /// The watched stream's receive values, once a second
