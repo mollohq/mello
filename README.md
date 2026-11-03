@@ -17,26 +17,20 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/status-alpha-orange" alt="Status: Alpha" />
-  <img src="https://img.shields.io/badge/platform-windows%20%7C%20macos-blue" alt="Platform: Windows, macOS" />
+  <img src="https://img.shields.io/badge/platform-windows%20%7C%20macos%20%7C%20linux-blue" alt="Platform: Windows, macOS, Linux" />
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License: Apache 2.0" />
   <img src="https://img.shields.io/github/stars/mollohq/mello?style=flat&color=EB4D5F" alt="GitHub stars" />
 </p>
 
 ---
 
-> [!WARNING]
-> **m3llo is alpha software.** Many things are unfinished, broken, or missing entirely. Not recommended for anything you'd rely on. We're building in public and things will break. You've been warned, and we love you for being here anyway.
-
----
-
 <p align="center">
-  <img src=".github/assets/screenshot.png" alt="m3llo app screenshot showing crew feed, live stream, voice chat, and crew chat" width="100%" />
+  <img src=".github/assets/readme-hero.png" alt="m3llo app screenshot showing crew feed, live stream, voice chat, and crew chat" width="100%" />
 </p>
 
 ## What is m3llo
 
-App for gaming crews. Voice chat, game streaming, text chat and a crew feed that remembers what you did together. Perfect for crews up to 100 people. 100.000 member communities are probably better at Discord, but you're welcome to try it in m3llo ;)
+m3llo is the app for your gaming crew. Voice, streams, clips, and a feed that remembers every session. Perfect for crews up to 100 people. 100.000 member communities are probably better at Discord, but you're welcome to try it in m3llo ;)
 
 Open source. Made in Europe. Apache 2.0.
 
@@ -51,7 +45,7 @@ For the longer version see **[m3llo.app](https://m3llo.app)** or the **[honest c
 
 ## Download
 
-Grab the latest alpha build for your platform:
+Grab the latest build for your platform:
 
 <p align="center">
   <a href="https://github.com/mollohq/mello/releases/latest/download/m3llo-win-x64-stable-Setup.exe">
@@ -61,11 +55,13 @@ Grab the latest alpha build for your platform:
   <a href="https://github.com/mollohq/mello/releases/latest/download/m3llo-osx-arm64-stable-Setup.pkg">
     <img src="https://img.shields.io/badge/Download-macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS" />
   </a>
+  &nbsp;
+  <a href="https://github.com/mollohq/mello/releases/latest/download/m3llo-linux-x64-stable.AppImage">
+    <img src="https://img.shields.io/badge/Download-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Download for Linux" />
+  </a>
 </p>
 
 All releases, changelogs, and previous versions on the [Releases page](https://github.com/mollohq/mello/releases).
-
-**Linux:** planned. Contributions welcome.
 
 ---
 
@@ -88,13 +84,13 @@ The rest of this README is for people who want to build m3llo from source, contr
 ## Guiding principles
 
 - **Performance is the feature.** Targets: `<100MB install` · `<80MB RAM in active voice` · `1080p60 stream` · `<60ms WAN latency`
-- **Self-hostable.** The full client and backend is Apache 2.0. Run your own instance with no dependency on our infrastructure.
-- **P2P as a first-class citizen for self-hosters.** Voice and streaming can be direct peer-to-peer. No server in the middle unless you wish.
+- **Self-hostable.** The client, backend and SFU are open source. Run your own instance with no dependency on our infrastructure.
+- **Your own SFU.** Voice and streams run through [mello-sfu](https://github.com/mollohq/mello-sfu). Run ours in the EU or host it yourself.
 - **UX matters as much as code.** Follow the design system in [`designs/design-system.html`](designs/design-system.html).
 
 ## Build from source
 
-Building and running is supported on Windows and macOS. Contributions welcome for Linux and other platforms.
+Building and running is supported on Windows, macOS and Linux.
 
 **Prerequisites:**
 
@@ -115,9 +111,9 @@ cd backend && docker compose up -d
 cd .. && cargo run -p mello-client
 ```
 
-Nakama console at `http://localhost:7351` (admin / admin)
+Nakama console at `http://localhost:7351` (admin / adminadmin)
 
-Full setup and platform-specific notes in [/docs/getting-started.md](./docs/getting-started.md).
+Full setup and platform-specific notes in [`specs/05-GETTING-STARTED.md`](./specs/05-GETTING-STARTED.md).
 
 ## Architecture
 
@@ -138,7 +134,7 @@ Full setup and platform-specific notes in [/docs/getting-started.md](./docs/gett
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                         BACKEND                             │
-│         Nakama (Auth, Chat, Presence, P2P Signaling)        │
+│          Nakama (Auth, Chat, Presence, SFU tokens)          │
 │                        PostgreSQL                           │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -152,30 +148,13 @@ Deep dives live in [`/specs`](./specs). Start with [`00-ARCHITECTURE.md`](./spec
 | UI | [Slint](https://slint.dev) | Rust-native |
 | Client logic | Rust | mello-core |
 | Media layer | C++ | libmello |
-| P2P transport | [libdatachannel](https://github.com/paullouisageneau/libdatachannel) | WebRTC, ICE, DTLS |
+| Transport | [libdatachannel](https://github.com/paullouisageneau/libdatachannel) | WebRTC to the SFU |
 | Audio codec | Opus | BSD licensed |
 | Noise suppression | RNNoise | BSD licensed |
 | Echo cancellation | WebRTC AEC3 + AGC2 | BSD licensed |
 | Voice activity | Silero VAD | MIT licensed |
 | Video decode | OpenH264 + dav1d | BSD licensed, no GPL |
 | Backend | [Nakama](https://heroiclabs.com/nakama/) + PostgreSQL | Apache 2.0 |
-
-## Project structure
-
-```
-mello/
-├── client/             # Slint UI (Rust)
-├── mello-core/         # App logic (Rust)
-├── mello-sys/          # FFI bindings (Rust)
-├── libmello/           # Media layer (C++)
-│   └── src/
-│       ├── audio/      # Capture, VAD, AEC, noise suppression, Opus
-│       ├── video/      # DXGI capture, hardware encode/decode
-│       └── transport/  # WebRTC, ICE, DTLS
-├── backend/
-│   └── nakama/         # Server modules (Go)
-└── specs/              # Design documents, read before contributing
-```
 
 ## Contributing
 
@@ -192,16 +171,17 @@ Contributions are welcome.
 - Code: PRs welcome, read specs first
 - Docs: always needed
 
+Run the gate before you push.
+
 ```bash
-cargo fmt       # format
-cargo clippy    # lint
+./scripts/check.sh
 ```
 
 ---
 
 ## Self-hosting
 
-The full client and backend is Apache 2.0. For those of you who never really got over losing Ventrilo. For the tinkerers who need another project for that dusty Raspberry Pi in the drawer. We're one of you ourselves.
+The client, backend and SFU are open source. For those of you who never really got over losing Ventrilo. For the tinkerers who need another project for that dusty Raspberry Pi in the drawer. We're one of you ourselves.
 
 Full setup instructions in [/docs/self-hosting.md](./docs/self-hosting.md).
 
@@ -209,25 +189,13 @@ Full setup instructions in [/docs/self-hosting.md](./docs/self-hosting.md).
 
 |   | Self-hosted | m3llo.app |
 |---|---|---|
-| Voice | P2P mesh, up to 6 per channel | P2P for free crews; hosted SFU capacity for entitled crews |
-| Streaming | P2P, up to 5 viewers | P2P up to 5 viewers; hosted H.264 RTP SFU capacity for entitled crews |
+| Voice and streams | Your own SFU | Hosted SFU in the EU |
 | All other features | Identical | Identical |
 | Your data | Stays on your hardware | EU-based, GDPR |
 | Setup | Your own hardware | Zero setup |
 | Cost | Free | Free, optional add-ons |
 
-The primary difference is media scale. Self-hosted uses direct P2P connections:
-voice supports up to 6 members per channel and a stream host sends independently
-to at most 5 viewers. m3llo.app can route entitled crews through the hosted SFU.
-No mandatory subscription, no features held back to push you toward paid.
-
-### Why 6 participants on P2P?
-
-P2P means your stream goes directly to each viewer. At the 5-viewer stream cap,
-the host uploads five independently paced RTP copies. Upload bandwidth becomes
-the bottleneck quickly.
-
-The add-on routes streams through our infrastructure in Europe, receiving once and relaying to all viewers. Same client, same quality, different plumbing.
+Same client, same features. The difference is who runs the backend and the SFU.
 
 ---
 
@@ -235,10 +203,9 @@ The add-on routes streams through our infrastructure in Europe, receiving once a
 
 Apache 2.0. See [LICENSE](LICENSE).
 
-Extended streaming limits for self-hosted instances require infrastructure not included in this repo. Available as an optional add-on at [m3llo.app](https://m3llo.app).
-
 ---
 
 <p align="center">
+  <sub>Early. Built in public. New build most weeks.</sub><br/>
   <sub>Made in Göteborg, Sweden by <a href="https://github.com/mollohq">Mollo Tech AB</a></sub>
 </p>
