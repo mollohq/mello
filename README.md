@@ -30,14 +30,14 @@ m3llo is the app for your gaming crew. Voice and streams while you play, a clip 
 
 Built for the people you actually play with. Five of you, or fifty, who know each other by name. If you run a big community on Discord, this is not for you.
 
-Open source. Made in Europe. Apache 2.0.
-
 - **Voice** that stays out of the way. Low latency, neural noise cancellation.
 - **Stream** your screen at 1080p60. Hardware encoded on your GPU, your CPU stays with your game.
 - **Chat** with markdown, replies, reactions, GIFs.
 - **Crew feed** with clips, sessions, and a weekly recap. Come back tomorrow, the crew is still there.
 
 For the longer version see **[m3llo.app](https://m3llo.app)** or the **[honest comparison](https://m3llo.app/vs/)** against Discord, TeamSpeak, Guilded, and Medal.
+
+Made in Europe.
 
 ---
 
