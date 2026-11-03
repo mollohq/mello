@@ -921,8 +921,6 @@ Estimates at 720p60. The perf scenario that measures them is not built yet
 | Item | State |
 |---|---|
 | macOS | ScreenCaptureKit window capture with app audio, VideoToolbox, `AVAssetWriter`. Until then the Settings section is hidden and F8 does nothing on macOS. |
-| The chat card | No chat message carries a clip today, a voice clip neither. |
-| The physical F7 and F8 key on Bob's PC | A synthetic key press reaches the key hook, the physical key does not (Logitech G HUB runs there). The cause is not known. |
 | The hw seek | 1784 ms against 1000 ms at 1080p60 (section 15.9). Before the seek the MPEG-4 source makes one or two more reads, and the keyframe spans two 1 MiB ranges. A fix needs a seek that starts at once (or a demux of our own) and a smaller first range. |
 | Unread first frames on hw | In 2 replay lane runs the first frames of a play did not read. The cause is not known. |
 | R2 and the signed `Content-Length` | MinIO refuses a part of the wrong length. R2 is not checked. |
