@@ -2,19 +2,27 @@
 //!
 //! Slint lays text out in core (shared parley); this cache only turns a font
 //! blob plus face index plus synthesis (fake bold, oblique) into an
-//! `IDWriteFontFace` for `DrawGlyphRun`. The in-memory loader copies the file
-//! bytes once per face. Bounded: cleared when it holds more than `CAPACITY`
-//! faces (Skia keeps 64). One per thread, shared by every window; the
-//! DirectWrite factory is process-shared and survives a lost D3D device.
+//! `IDWriteFontFace` for `DrawGlyphRun`. The in-memory loader reads the bytes
+//! of parley's blob in place: a `BlobOwner` keeps the blob alive for as long as
+//! DirectWrite holds the file. Without an owner, DirectWrite copies the file
+//! once per face (2.6 MB for the emoji font, again for each synthesis).
+//! Bounded: cleared when it holds more than `CAPACITY` faces (Skia keeps 64).
+//! One per thread, shared by every window; the DirectWrite factory is
+//! process-shared and survives a lost D3D device.
 
 use i_slint_common::sharedfontique::HashedBlob;
 use i_slint_core::textlayout::sharedparley::{fontique, parley};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use windows::core::Interface;
+use windows::core::{implement, IUnknown, Interface};
 use windows::Win32::Graphics::DirectWrite::*;
 
 const CAPACITY: usize = 32;
+
+/// Holds a font blob for DirectWrite, which releases it with the last
+/// reference to the font file.
+#[implement()]
+struct BlobOwner(#[allow(dead_code)] parley::fontique::Blob<u8>);
 
 pub struct FontCache {
     dwrite: IDWriteFactory5,
@@ -86,13 +94,14 @@ impl FontCache {
         unsafe {
             let data: &[u8] = font.data.as_ref();
             let base: IDWriteFactory = self.dwrite.cast().ok()?;
+            let owner: IUnknown = BlobOwner(font.data.clone()).into();
             let file = self
                 .loader
                 .CreateInMemoryFontFileReference(
                     &base,
                     data.as_ptr() as *const _,
                     data.len() as u32,
-                    None,
+                    &owner,
                 )
                 .ok()?;
             let mut supported = windows::core::BOOL::default();

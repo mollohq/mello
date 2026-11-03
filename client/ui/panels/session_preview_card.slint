@@ -3,6 +3,7 @@ import { CutShape } from "../components/cut.slint";
 import { UserAvatar } from "../components/avatar.slint";
 import { StreamTag, PlayRing, FootageWash } from "../components/stream_hero.slint";
 import { CutMask, CutButtonShape } from "../components/cut.slint";
+import { FeedView } from "../types.slint";
 
 
 export component SessionPreviewCard inherits Rectangle {
@@ -66,6 +67,38 @@ export component SessionPreviewCard inherits Rectangle {
 
     property <int> next-index: image-count > 0 ? Math.mod((frame-index + 1), image-count) : 0;
 
+    // The poster is decoded only while the card is within one band height of
+    // the feed's visible band (FeedView); out of it, Rust drops the poster.
+    property <length> band: FeedView.bottom - FeedView.top;
+    property <bool> near-view: has-urls
+        && self.absolute-position.y + self.height > FeedView.top - band
+        && self.absolute-position.y < FeedView.bottom + band;
+    property <image> no-image;
+
+    function want-poster() {
+        FeedView.poster-wanted(root.session-id, root.near-view, media.width / 1px, media.height / 1px);
+    }
+
+    // Also when far: a feed rebuild can hand a new instance a row that still
+    // holds a poster.
+    init => {
+        root.want-poster();
+    }
+    changed near-view => {
+        if !root.near-view {
+            // Stop a slideshow and let go of its images, so that the pixels
+            // are freed when Rust drops the poster.
+            root.playing = false;
+            root.paused = false;
+            root.finished = false;
+            root.fading = false;
+            root.has-current = false;
+            root.current-image = root.no-image;
+            root.next-image = root.no-image;
+        }
+        root.want-poster();
+    }
+
     background: transparent;
     border-width: 0px;
     clip: true;
@@ -110,7 +143,7 @@ export component SessionPreviewCard inherits Rectangle {
     VerticalLayout {
         padding: root.is-hero ? Theme.keyline : 0px;
 
-        Rectangle {
+        media := Rectangle {
             vertical-stretch: 3;
             min-height: is-hero ? 200px : 110px;
             clip: true;

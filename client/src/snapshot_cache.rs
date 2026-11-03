@@ -221,6 +221,18 @@ fn decode_rgba_bytes(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
     Some((rgba.into_raw(), w, h))
 }
 
+/// Scale an RGBA buffer down to `max_w` pixels wide, keeping the aspect; a
+/// buffer that is not wider is returned as it is.
+pub fn fit_width(rgba: Vec<u8>, w: u32, h: u32, max_w: u32) -> Option<(Vec<u8>, u32, u32)> {
+    if max_w == 0 || w <= max_w {
+        return Some((rgba, w, h));
+    }
+    let img = image::RgbaImage::from_raw(w, h, rgba)?;
+    let nh = ((h as f64 * max_w as f64 / w as f64).round() as u32).max(1);
+    let out = image::imageops::resize(&img, max_w, nh, FilterType::Triangle);
+    Some((out.into_raw(), max_w, nh))
+}
+
 pub fn rgba_bytes_to_image(rgba: Vec<u8>, w: u32, h: u32) -> slint::Image {
     rgba_to_image(&rgba, w, h)
 }
@@ -270,5 +282,18 @@ mod tests {
 
         let (rgba, w, h) = decoded.expect("jpeg decode should succeed");
         assert_eq!(rgba.len(), (w * h * 4) as usize);
+    }
+
+    #[test]
+    fn fit_width_scales_down_and_keeps_the_aspect() {
+        let (rgba, w, h) = fit_width(vec![255; 480 * 270 * 4], 480, 270, 285).unwrap();
+        assert_eq!((w, h), (285, 160));
+        assert_eq!(rgba.len(), 285 * 160 * 4);
+    }
+
+    #[test]
+    fn fit_width_never_scales_up() {
+        let (rgba, w, h) = fit_width(vec![0; 4 * 2 * 4], 4, 2, 480).unwrap();
+        assert_eq!((w, h, rgba.len()), (4, 2, 32));
     }
 }

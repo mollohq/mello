@@ -239,13 +239,9 @@ bool AudioPipeline::initialize() {
         return false;
     }
 
-    // Neural suppressor is a soft dependency: missing model degrades to
-    // passthrough and the flag stays effective for when it appears.
-    std::string echo_model = find_model_file("echo_suppressor.onnx");
-    if (!echo_suppressor_.initialize(echo_model)) {
-        MELLO_LOG_WARN("pipeline", "echo suppressor unavailable (model_path=%s)",
-                       echo_model.c_str());
-    }
+    // The neural suppressor is off by default: its model (5 MB, about 7 MB in
+    // ONNX Runtime) loads when it is turned on, not here.
+    if (echo_suppressor_.enabled()) load_echo_suppressor();
     wire_render_source();
 
     if (!playback_->start()) {
@@ -260,6 +256,23 @@ bool AudioPipeline::initialize() {
     MELLO_LOG_INFO("pipeline", "audio pipeline ready (frame=%d samples, %dHz mono)",
                    FRAME_SIZE, SAMPLE_RATE);
     return true;
+}
+
+void AudioPipeline::set_echo_suppression(bool enabled) {
+    if (enabled && initialized_) load_echo_suppressor();
+    echo_suppressor_.set_enabled(enabled);
+}
+
+void AudioPipeline::load_echo_suppressor() {
+    std::lock_guard<std::mutex> lock(echo_load_mutex_);
+    if (echo_suppressor_.ready()) return;
+    // Soft dependency: a missing model degrades to passthrough, and the next
+    // enable tries again.
+    std::string echo_model = find_model_file("echo_suppressor.onnx");
+    if (!echo_suppressor_.initialize(echo_model)) {
+        MELLO_LOG_WARN("pipeline", "echo suppressor unavailable (model_path=%s)",
+                       echo_model.c_str());
+    }
 }
 
 void AudioPipeline::shutdown() {
