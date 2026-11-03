@@ -654,6 +654,8 @@ export struct ChatMessageData {
     is-emoji-only: bool,
     is-image: bool,
     images: [ChatImageData],
+    /// "Today", "Yesterday" or a date when this message starts a day. "" otherwise.
+    day-label: string,
     gif-width: int,
     gif-height: int,
     is-clip: bool,

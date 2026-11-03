@@ -230,6 +230,7 @@ pub fn chat_messages_to_slint(
             is_continuation: d.is_continuation,
             is_system: d.is_system,
             is_unread_divider: false,
+            day_label: d.day_label.clone().into(),
             is_gif,
             gif_image: slint::Image::default(),
             has_gif_image: false,
@@ -313,6 +314,7 @@ fn chat_row_same(a: &ChatMessageData, b: &ChatMessageData) -> bool {
         && a.sender_name == b.sender_name
         && a.is_emoji_only == b.is_emoji_only
         && a.is_image == b.is_image
+        && a.day_label == b.day_label
         && a.images.row_count() == b.images.row_count()
 }
 

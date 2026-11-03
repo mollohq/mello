@@ -753,6 +753,48 @@ export component ChatPanel inherits Rectangle {
             for msg[idx] in messages: VerticalLayout {
                     width: feed.width;
                     padding-top: msg.is-unread-divider ? 8px : (msg.is-group-start && idx > 0 ? 16px : 2px);
+
+                    // Day separator: a graphite rule with the day in the label
+                    // register. Red is for unread; a date is not a state.
+                    if msg.day-label != "" && !msg.is-unread-divider: HorizontalLayout {
+                        width: parent.width;
+                        height: 22px;
+                        spacing: 10px;
+                        padding-left: 4px;
+                        padding-right: 4px;
+                        padding-bottom: 6px;
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            Rectangle {
+                                height: 1px;
+                                width: parent.width;
+                                y: (parent.height - self.height) / 2;
+                                background: Theme.graphic-light;
+                            }
+                        }
+
+                        Text {
+                            font-family: Theme.font-label;
+                            font-weight: Theme.weight-label;
+                            letter-spacing: Theme.track-label;
+                            text: msg.day-label;
+                            font-size: Theme.font-xs;
+                            color: Theme.text-secondary;
+                            horizontal-stretch: 0;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            Rectangle {
+                                height: 1px;
+                                width: parent.width;
+                                y: (parent.height - self.height) / 2;
+                                background: Theme.graphic-light;
+                            }
+                        }
+                    }
                     padding-bottom: idx == messages.length - 1 ? 24px : 0px;
 
                     // Unread divider — stretch wrappers for lines; inner rect centers 1px rule (y ignored on HL children)
@@ -2049,7 +2091,7 @@ export component Preview inherits ChatPanel {
             display-text: "hey crew, stream at 8?",
             display-styled: @markdown("hey crew, stream at 8?"),
             timestamp: "May 19, 8:02 PM", display-time: "Yesterday",
-            is-group-start: true,
+            is-group-start: true, day-label: "Yesterday",
         },
         {
             message-id: "p2", sender-id: "u2", sender-name: "oweboweob",

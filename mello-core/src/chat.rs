@@ -606,6 +606,9 @@ pub struct DisplayMessage {
     pub reply_to: Option<String>,
     pub reply_to_name: Option<String>,
     pub reply_preview: Option<String>,
+    /// The separator above this message when it starts a new local day:
+    /// "Today", "Yesterday", a date. "" otherwise.
+    pub day_label: String,
 }
 
 const GROUP_GAP_SECS: i64 = 300; // 5 minutes
@@ -634,6 +637,40 @@ fn parse_timestamp(ts: &str) -> Option<DateTime<Utc>> {
                 .ok()
                 .map(|ndt| ndt.and_utc())
         })
+}
+
+/// The label of a day separator, in local time: "Today", "Yesterday", the
+/// weekday with the date inside the last week, the date in this year, and
+/// the date with the year before that. "" when `ts` does not parse.
+pub fn day_label(ts: &str) -> String {
+    day_label_at(ts, Utc::now())
+}
+
+fn day_label_at(ts: &str, now: DateTime<Utc>) -> String {
+    let Some(dt) = parse_timestamp(ts) else {
+        return String::new();
+    };
+    let day = dt.with_timezone(&Local).date_naive();
+    let today = now.with_timezone(&Local).date_naive();
+    let days_ago = (today - day).num_days();
+    match days_ago {
+        0 => "Today".to_string(),
+        1 => "Yesterday".to_string(),
+        2..=6 => day.format("%A %-d %b").to_string(),
+        _ if day.year() == today.year() => day.format("%-d %b").to_string(),
+        _ => day.format("%-d %b %Y").to_string(),
+    }
+}
+
+/// True when `a` and `b` fall on different local days. An unparseable
+/// timestamp never starts a day.
+fn different_local_day(a: &str, b: &str) -> bool {
+    match (parse_timestamp(a), parse_timestamp(b)) {
+        (Some(x), Some(y)) => {
+            x.with_timezone(&Local).date_naive() != y.with_timezone(&Local).date_naive()
+        }
+        _ => false,
+    }
 }
 
 /// Format a timestamp for display per spec section 4.2.
@@ -810,6 +847,12 @@ pub fn prepare_messages_for_display(messages: &[ChatMessage]) -> Vec<DisplayMess
     let mut result = Vec::with_capacity(messages.len());
 
     for (i, msg) in messages.iter().enumerate() {
+        let starts_day = i == 0 || different_local_day(&messages[i - 1].timestamp, &msg.timestamp);
+        let day = if starts_day {
+            day_label(&msg.timestamp)
+        } else {
+            String::new()
+        };
         if msg.is_system {
             result.push(DisplayMessage {
                 message_id: msg.message_id.clone(),
@@ -831,11 +874,12 @@ pub fn prepare_messages_for_display(messages: &[ChatMessage]) -> Vec<DisplayMess
                 reply_to: None,
                 reply_to_name: None,
                 reply_preview: None,
+                day_label: day,
             });
             continue;
         }
 
-        let is_group_start = if msg.reply_to.is_some() || i == 0 {
+        let is_group_start = if msg.reply_to.is_some() || i == 0 || starts_day {
             true
         } else {
             let prev = &messages[i - 1];
@@ -878,6 +922,7 @@ pub fn prepare_messages_for_display(messages: &[ChatMessage]) -> Vec<DisplayMess
             is_deleted: msg.is_deleted,
             gif: msg.gif.clone(),
             images: msg.images.clone(),
+            day_label: day,
             reply_to: msg.reply_to.clone(),
             reply_to_name,
             reply_preview,
@@ -889,6 +934,81 @@ pub fn prepare_messages_for_display(messages: &[ChatMessage]) -> Vec<DisplayMess
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn day_labels_read_today_yesterday_weekday_then_dates() {
+        use chrono::TimeZone;
+        // Local midday, so the day does not shift with the zone.
+        let now_local = Local
+            .with_ymd_and_hms(2026, 11, 3, 12, 0, 0)
+            .single()
+            .expect("now");
+        let now = now_local.with_timezone(&Utc);
+        let at = |days_ago: i64| {
+            (now_local - chrono::Duration::days(days_ago))
+                .with_timezone(&Utc)
+                .to_rfc3339()
+        };
+        assert_eq!(day_label_at(&at(0), now), "Today");
+        assert_eq!(day_label_at(&at(1), now), "Yesterday");
+        assert_eq!(day_label_at(&at(2), now), "Sunday 1 Nov");
+        assert_eq!(day_label_at(&at(6), now), "Wednesday 28 Oct");
+        assert_eq!(day_label_at(&at(7), now), "27 Oct");
+        assert_eq!(day_label_at(&at(400), now), "29 Sep 2025");
+        assert_eq!(day_label_at("garbage", now), "");
+    }
+
+    #[test]
+    fn a_new_local_day_gets_a_separator_and_starts_a_group() {
+        use chrono::TimeZone;
+        let day1 = Local
+            .with_ymd_and_hms(2026, 11, 2, 23, 50, 0)
+            .single()
+            .expect("t");
+        let a = msg(
+            "a",
+            "u1",
+            "Alice",
+            &day1.with_timezone(&Utc).to_rfc3339(),
+            "late",
+        );
+        let b = msg(
+            "b",
+            "u1",
+            "Alice",
+            &(day1 + chrono::Duration::minutes(3))
+                .with_timezone(&Utc)
+                .to_rfc3339(),
+            "still late",
+        );
+        let c = msg(
+            "c",
+            "u1",
+            "Alice",
+            &(day1 + chrono::Duration::minutes(12))
+                .with_timezone(&Utc)
+                .to_rfc3339(),
+            "past midnight",
+        );
+        let rows = prepare_messages_for_display(&[a, b, c]);
+        assert!(
+            !rows[0].day_label.is_empty(),
+            "the first message starts its day"
+        );
+        assert_eq!(rows[1].day_label, "");
+        assert!(
+            rows[1].is_continuation,
+            "three minutes later, same day: grouped"
+        );
+        assert!(
+            !rows[2].day_label.is_empty(),
+            "midnight passed: a separator"
+        );
+        assert!(
+            rows[2].is_group_start,
+            "and a new group, even within five minutes"
+        );
+    }
+
     #[test]
     fn an_image_envelope_round_trips_and_caps_at_four() {
         let img = |n: u32| ImageData {
