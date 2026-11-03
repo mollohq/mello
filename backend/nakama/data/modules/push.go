@@ -22,6 +22,9 @@ const (
 	// NotifyFeedChanged says the crew feed has new content. The client loads
 	// the feed of the active crew again, at most once every 5 s.
 	NotifyFeedChanged = 116
+	// NotifyChatReaction carries one message's reactions after a change
+	// (chat_reactions.go).
+	NotifyChatReaction = 117
 )
 
 // Priority events are always pushed immediately to all subscribers.
