@@ -291,6 +291,32 @@ func TestOwnGameClip(t *testing.T) {
 	}
 }
 
+func TestOwnVoiceClip(t *testing.T) {
+	clips := []StoredClip{
+		{ClipID: "v1", ActorID: "alice", ClipType: clipTypeVoice},
+		{ClipID: "v0", ActorID: "alice"},
+		{ClipID: "g1", ActorID: "alice", ClipType: clipTypeGame},
+	}
+	for _, id := range []string{"v1", "v0"} {
+		if c, err := ownVoiceClip(clips, id, "alice"); err != nil || c.ClipID != id {
+			t.Fatalf("own voice clip %s: %+v %v", id, c, err)
+		}
+	}
+	for _, tc := range []struct {
+		clipID, user string
+		code         int
+	}{
+		{"v1", "bob", 7},
+		{"nope", "alice", 5},
+		{"g1", "alice", 3},
+		{"g1", "bob", 7},
+	} {
+		if _, err := ownVoiceClip(clips, tc.clipID, tc.user); errCode(err) != tc.code {
+			t.Errorf("%s by %s: got %v, want code %d", tc.clipID, tc.user, err, tc.code)
+		}
+	}
+}
+
 // testPresignClient signs for a dummy endpoint. Presigning makes no request.
 func testPresignClient() *s3.PresignClient {
 	return s3.NewPresignClient(newS3Client("http://127.0.0.1:9", "AKIDTEST", "secrettest"))

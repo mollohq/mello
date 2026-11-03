@@ -152,6 +152,23 @@ func existingClip(clips []StoredClip, clipID, actorID string) (found *StoredClip
 	return nil, taken
 }
 
+// ownVoiceClip finds the caller's voice clip in a crew's clips. The error is a
+// Nakama error: 5 when the clip is not there, 7 when it is another actor's,
+// 3 when it is not a voice clip. A clip from before clip_type is voice. Pure,
+// so the ownership rule is testable.
+func ownVoiceClip(clips []StoredClip, clipID, userID string) (*StoredClip, error) {
+	clip, taken := existingClip(clips, clipID, userID)
+	switch {
+	case clip == nil && taken:
+		return nil, runtime.NewError("not the clipper", 7)
+	case clip == nil:
+		return nil, runtime.NewError("clip not found", 5)
+	case clip.ClipType != "" && clip.ClipType != clipTypeVoice:
+		return nil, runtime.NewError("not a voice clip", 3)
+	}
+	return clip, nil
+}
+
 // AppendClip appends a clip to the durable clips doc, trims to the most-recent
 // cap, and retries on version conflict. When the doc already holds the
 // clip_id of the same actor, it appends nothing and returns that clip, so a
@@ -520,6 +537,15 @@ func ClipUploadURLRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 		return "", runtime.NewError("clip_type must be voice or game", 3)
 	}
 
+	// Only the clipper gets a PUT URL for the clip's key, after post_clip.
+	if !isCrewMember(ctx, nk, req.CrewID, userID) {
+		return "", runtime.NewError("not a crew member", 7)
+	}
+	doc, _ := readClipsDoc(ctx, nk, req.CrewID)
+	if _, err := ownVoiceClip(doc.Clips, req.ClipID, userID); err != nil {
+		return "", err
+	}
+
 	if !S3IsConfigured() {
 		logger.Warn("clip_upload_url: S3 not configured, returning empty URLs")
 		resp := ClipUploadURLResponse{}
@@ -589,17 +615,11 @@ func ClipUploadCompleteRPC(ctx context.Context, logger runtime.Logger, db *sql.D
 
 	for attempt := 0; attempt < 3; attempt++ {
 		doc, version := readClipsDoc(ctx, nk, req.CrewID)
-		found := false
-		for i := range doc.Clips {
-			if doc.Clips[i].ClipID == req.ClipID {
-				doc.Clips[i].MediaURL = mediaURL
-				found = true
-				break
-			}
+		clip, err := ownVoiceClip(doc.Clips, req.ClipID, userID)
+		if err != nil {
+			return "", err
 		}
-		if !found {
-			return "", runtime.NewError("clip not found", 5)
-		}
+		clip.MediaURL = mediaURL
 		doc.UpdatedAt = time.Now().UnixMilli()
 		if err := writeClipsDoc(ctx, nk, req.CrewID, doc, version); err == nil {
 			break

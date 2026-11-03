@@ -201,7 +201,10 @@ Upload flow:
 Client captures WAV → encodes to MP4/AAC locally
     │
     ▼
-Client calls `clip_upload_url` RPC (clip_id, crew_id)
+Client calls `clip_upload_url` RPC (clip_id, crew_id), after `post_clip`
+    │
+    ▼
+Backend checks: the caller is a crew member and the clipper of this voice clip
     │
     ▼
 Backend generates presigned PUT URL (15 min TTL) via AWS SDK
@@ -924,7 +927,6 @@ Estimates at 720p60. The perf scenario that measures them is not built yet
 | The hw seek | 1784 ms against 1000 ms at 1080p60 (section 15.9). Before the seek the MPEG-4 source makes one or two more reads, and the keyframe spans two 1 MiB ranges. A fix needs a seek that starts at once (or a demux of our own) and a smaller first range. |
 | Unread first frames on hw | In 2 replay lane runs the first frames of a play did not read. The cause is not known. |
 | R2 and the signed `Content-Length` | MinIO refuses a part of the wrong length. R2 is not checked. |
-| The voice `clip_upload_url` | It checks no crew membership and no clipper, so a signed-in user can overwrite any clip's MP4, a game clip's too. |
 | Gates | The hw lane floors, the real loopback row (`tone_player.cpp` is built and not run), the remote voice check of the journey (a tone burst from the second client within ±20 ms; the mic path removes a tone, so the burst needs a path past the noise suppression), the stream and replay together case (12-STREAMING.md §3.7, F8 and G7), the perf scenario (section 15.11), the QA harness checks. |
 | The upload budget | 1 Mbps and 25 % of the headroom are starting values. The G7 gate confirms or moves them. |
 | Auto highlights | A second iteration. A clip that the user did not choose needs a way to ask the user first (opt in, per user or per crew). Then: a trigger and a tag on `CaptureGameClip` and `post_clip`, the poster at the marker time, 45 ring segments (a marker at round end needs 35 s back), and the CS2 adapter (`telemetry/cs2_gsi.rs`) as the first marker source. |

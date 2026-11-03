@@ -128,7 +128,7 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `crew_timeline` | Yes | Raw paginated merge (ledger + recent clips + latest recap) for deep scroll. Cursor-based. |
 | `crew_clips` | Yes | Paginated access to durable clips. |
 | `crew_recaps` | Yes | Paginated access to durable recaps. |
-| `clip_upload_url` | Yes | Returns a presigned PUT URL for direct S3/R2 upload and the public `media_url`. |
+| `clip_upload_url` | Yes | Returns a presigned PUT URL for direct S3/R2 upload and the public `media_url`. Only the clipper, a crew member, after `post_clip`. |
 | `clip_upload_complete` | Yes | Updates the clip's `media_url` after successful upload. |
 | `admin_live_snapshot` | No (`http_key`, server-to-server only) | Returns live voice rooms and active streams (see §4.1). Rejects client sessions. Cached 15s, stale served on collect failure. |
 | `admin_capture_policy_get` | No (`http_key`, server-to-server only) | Returns the stored hook policy and its storage version (see §4.2). Rejects client sessions. |
