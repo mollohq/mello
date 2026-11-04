@@ -478,6 +478,10 @@ pub enum Command {
     /// F8: the last 30 s of the game, from the replay buffer, as an MP4 with
     /// a poster (CLIPS.md 15.4). Runs on the replay worker thread.
     CaptureGameClip,
+    /// macOS: the Settings section asks for the Screen Recording permission.
+    /// macOS shows its prompt the first time and opens System Settings after
+    /// that. Nothing elsewhere.
+    RequestGameClipPermission,
     /// The Settings section "Game clips" (CLIPS.md 15.10). Sent at
     /// startup, on each change and on reset. Off stops the replay and
     /// deletes its ring.

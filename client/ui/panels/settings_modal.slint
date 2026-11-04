@@ -1934,15 +1934,18 @@ component GamesTab inherits VerticalLayout {
     callback riot-connect-clicked();
     callback riot-disconnect-clicked();
 
-    // Game clips (CLIPS.md 15.10). Windows only until the macOS work.
+    // Game clips (CLIPS.md 15.10). Windows and macOS.
     in property <bool> game-clips-available: false;
     in-out property <bool> game-clips-enabled: true;
     in property <[AudioDeviceData]> game-clip-qualities: [];
     in property <string> game-clip-quality: "720p60";
     in-out property <string> game-clip-quality-name: "720p, 60 fps";
     in property <string> game-clip-key-label: "F8";
+    // macOS: no Screen Recording permission. The row asks for it.
+    in property <bool> game-clips-need-permission: false;
     callback game-clips-toggled(bool);
     callback game-clip-quality-selected(string);
+    callback game-clips-permission-clicked();
 
     // ACTIVITY SHARING
     VerticalLayout {
@@ -1974,6 +1977,84 @@ component GamesTab inherits VerticalLayout {
                     : "While you are in voice, m3llo keeps the last 30 seconds of the game you play. Set a key in Keybinds to save them as a clip.";
                 checked <=> root.game-clips-enabled;
                 toggled(v) => { root.game-clips-toggled(v); }
+            }
+
+            if root.game-clips-need-permission && root.game-clips-enabled: Rectangle {
+                HorizontalLayout {
+                    padding-top: 14px;
+                    padding-bottom: 14px;
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    spacing: 32px;
+
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 6px;
+                        alignment: center;
+
+                        Text {
+                            font-family: Theme.font-display;
+                            text: "Screen Recording";
+                            font-size: 15px;
+                            font-weight: Theme.weight-display;
+                            color: Theme.text-primary;
+                            letter-spacing: 0.3px;
+                        }
+
+                        Text {
+                            font-weight: Theme.weight-display;
+                            font-family: Theme.font-display;
+                            text: "macOS lets m3llo keep your game only with Screen Recording on. Turn on m3llo in System Settings, Privacy and Security, Screen and System Audio Recording.";
+                            font-size: 13px;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Rectangle {
+                            width: permission-btn-text.preferred-width + 28px;
+                            height: 32px;
+                            background: transparent;
+                            border-width: 1px;
+                            border-color: Theme.graphic-light;
+
+                            CutButtonShape {
+                                width: parent.width;
+                                height: parent.height;
+                                n: Theme.cut;
+                                fill: Theme.graphic-med;
+                            }
+                            CutButtonShape {
+                                width: parent.width;
+                                height: parent.height;
+                                n: Theme.cut;
+                                inset: Theme.keyline;
+                                fill: permission-btn-ta.has-hover ? Theme.surface-hover : Theme.surface;
+                            }
+
+                            permission-btn-text := Text {
+                                text: "ALLOW";
+                                font-family: Theme.font-label;
+                                font-size: 11px;
+                                font-weight: 700;
+                                letter-spacing: 0.5px;
+                                color: Theme.text-primary;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            permission-btn-ta := TouchArea {
+                                accessible-role: button;
+                                accessible-label: "ALLOW";
+                                mouse-cursor: pointer;
+                                clicked => { root.game-clips-permission-clicked(); }
+                            }
+                        }
+                    }
+                }
             }
 
             Rectangle {
@@ -2993,8 +3074,10 @@ export component SettingsModal inherits Rectangle {
     callback clip-key-captured(string, bool, bool, bool, bool);
 
     // Game clips (CLIPS.md 15.10): the Games section and the Keybinds
-    // row. Windows only until the macOS work.
+    // row. Windows and macOS.
     in property <bool> game-clips-available: false;
+    in property <bool> game-clips-need-permission: false;
+    callback game-clips-permission-clicked();
     in-out property <bool> game-clips-enabled: true;
     in property <[AudioDeviceData]> game-clip-qualities: [];
     in property <string> game-clip-quality: "720p60";
@@ -3698,8 +3781,10 @@ export component SettingsModal inherits Rectangle {
                             game-clip-quality: root.game-clip-quality;
                             game-clip-quality-name <=> root.game-clip-quality-name;
                             game-clip-key-label: root.game-clip-key-label;
+                            game-clips-need-permission: root.game-clips-need-permission;
                             game-clips-toggled(v) => { root.setting-changed-game-clips(v); }
                             game-clip-quality-selected(id) => { root.setting-changed-game-clip-quality(id); }
+                            game-clips-permission-clicked => { root.game-clips-permission-clicked(); }
                         }
 
                         keybinds-tab := KeybindsTab {
@@ -3851,6 +3936,7 @@ component SettingsPreview inherits Rectangle {
     in property <string> clip-warning: "";
     in property <bool> clip-listening: false;
     in property <string> game-clip-warning: "";
+    in property <bool> game-clips-permission: false;
 
     width: 1000px;
     height: 780px;
@@ -3867,6 +3953,7 @@ component SettingsPreview inherits Rectangle {
         clip-key-warning: root.clip-warning;
         clip-binding: root.clip-listening;
         game-clips-available: true;
+        game-clips-need-permission: root.game-clips-permission;
         game-clip-key-label: "F8";
         game-clip-key-warning: root.game-clip-warning;
         game-clip-qualities: [
@@ -3926,6 +4013,7 @@ export component PreviewGeneral inherits SettingsPreview { tab: 1; }
 export component PreviewAudio inherits SettingsPreview { tab: 2; }
 export component PreviewAudioVideo inherits SettingsPreview { tab: 2; scroll: 1400px; }
 export component PreviewGames inherits SettingsPreview { tab: 3; }
+export component PreviewGamesNoPermission inherits SettingsPreview { tab: 3; game-clips-permission: true; }
 export component PreviewAbout inherits SettingsPreview { tab: 4; }
 export component PreviewNotices inherits SettingsPreview { tab: 4; notices-open: true; }
 export component PreviewAboutLower inherits SettingsPreview { tab: 4; scroll: 700px; }

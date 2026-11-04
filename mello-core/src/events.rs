@@ -110,6 +110,10 @@ pub enum GameClipState {
     /// The buffer folder has under 2 GB free: no replay until the disk has
     /// space again (CLIPS.md 15.2).
     DiskLow,
+    /// macOS: m3llo has no Screen Recording permission. The replay never asks
+    /// for it while the user plays; the Settings section does
+    /// (`Command::RequestGameClipPermission`).
+    NoPermission,
 }
 
 /// The clip quality of the Settings section (CLIPS.md 15.10).

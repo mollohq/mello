@@ -37,6 +37,20 @@ bool RingFile::open(const std::filesystem::path& path, uint64_t size) {
     if (fd_ < 0) return false;
     // The open descriptor keeps the data. No name is left to clean up.
     ::unlink(path.c_str());
+#ifdef __APPLE__
+    // ftruncate makes a sparse file on APFS: a full disk would then fail a
+    // write while the game plays. F_PREALLOCATE takes the blocks now, so a
+    // full disk fails the start (CLIPS.md 15.2, the 2 GB rule).
+    fstore_t store{};
+    store.fst_flags = F_ALLOCATEALL;
+    store.fst_posmode = F_PEOFPOSMODE;
+    store.fst_offset = 0;
+    store.fst_length = static_cast<off_t>(size);
+    if (::fcntl(fd_, F_PREALLOCATE, &store) == -1) {
+        close();
+        return false;
+    }
+#endif
     if (::ftruncate(fd_, static_cast<off_t>(size)) != 0) {
         close();
         return false;

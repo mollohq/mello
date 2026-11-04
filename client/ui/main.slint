@@ -336,8 +336,10 @@ export component MainWindow inherits Window {
     in property <string> clip-key-label: "";
     in property <string> settings-clip-key-warning: "";
     in-out property <bool> settings-clip-binding: false;
-    /// Game clips (CLIPS.md 15.10): Windows only until the macOS work.
+    /// Game clips (CLIPS.md 15.10): Windows and macOS.
     in property <bool> game-clips-available: false;
+    in property <bool> game-clips-need-permission: false;
+    callback game-clips-permission-requested();
     in-out property <bool> settings-game-clips-enabled: true;
     in property <[AudioDeviceData]> settings-game-clip-qualities: [];
     in property <string> settings-game-clip-quality: "720p60";
@@ -1832,6 +1834,8 @@ export component MainWindow inherits Window {
         clip-key-warning: root.settings-clip-key-warning;
         clip-binding <=> root.settings-clip-binding;
         game-clips-available: root.game-clips-available;
+        game-clips-need-permission: root.game-clips-need-permission;
+        game-clips-permission-clicked => { root.game-clips-permission-requested(); }
         game-clips-enabled <=> root.settings-game-clips-enabled;
         game-clip-qualities: root.settings-game-clip-qualities;
         game-clip-quality: root.settings-game-clip-quality;

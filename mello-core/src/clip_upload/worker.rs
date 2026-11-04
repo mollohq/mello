@@ -546,7 +546,16 @@ fn set_low_priority() {
     }
 }
 
-#[cfg(not(windows))]
+/// macOS: the utility class, below the game and the voice threads.
+#[cfg(target_os = "macos")]
+fn set_low_priority() {
+    if unsafe { libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY, 0) } != 0
+    {
+        log::warn!("[clip-upload] could not lower the thread priority");
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn set_low_priority() {}
 
 #[cfg(test)]

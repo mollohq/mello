@@ -1213,6 +1213,9 @@ impl Client {
             Command::CaptureGameClip => {
                 self.handle_capture_game_clip();
             }
+            Command::RequestGameClipPermission => {
+                replay::request_screen_capture();
+            }
             Command::SetGameClips { enabled, quality } => {
                 self.handle_set_game_clips(enabled, quality);
             }
