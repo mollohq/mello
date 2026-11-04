@@ -79,6 +79,11 @@ public:
     virtual ~ClipPlayer() = default;
 
     virtual void set_native_frame_callback(video::ViewerPipeline::NativeFrameCallback cb) = 0;
+    /// macOS and Linux: each frame as RGBA on the present thread, at its
+    /// render time. They have no native presenter: the client shows the RGBA
+    /// as it shows a watched stream's. Windows does not call it (the native
+    /// presenter), so its viewer makes no CPU copy.
+    virtual void set_frame_callback(video::ViewerPipeline::FrameCallback cb) = 0;
     virtual void set_paused(bool paused) = 0;
     /// Plays from `position_us` (from the key frame before it).
     virtual void seek(int64_t position_us) = 0;

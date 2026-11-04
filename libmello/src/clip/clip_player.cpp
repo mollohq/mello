@@ -216,6 +216,11 @@ public:
         if (viewer_) viewer_->set_native_frame_callback(std::move(cb));
     }
 
+    void set_frame_callback(ViewerPipeline::FrameCallback cb) override {
+        std::lock_guard<std::mutex> lock(frame_cb_mutex_);
+        frame_cb_ = std::move(cb);
+    }
+
     void set_paused(bool paused) override {
         std::lock_guard<std::mutex> lock(clock_mutex_);
         if (paused == paused_) return;
@@ -416,7 +421,27 @@ private:
         config.height = height_.load();
         config.fps = 60;
         std::unique_ptr<video::Decoder> decoder = options_.make_decoder ? options_.make_decoder(device) : nullptr;
-        if (!viewer->start(device, config, options_.on_cpu_frame, std::move(decoder))) {
+#ifdef _WIN32
+        // The native presenter shows the clip: a CPU frame callback only for
+        // the tests, so the viewer makes no readback otherwise.
+        ViewerPipeline::FrameCallback on_frame = options_.on_cpu_frame;
+#else
+        // No native presenter: the frames go out as RGBA, to the callback
+        // that set_frame_callback set (the client), else the test's.
+        ViewerPipeline::FrameCallback on_frame = [this](const uint8_t* rgba, uint32_t w, uint32_t h, uint64_t ts) {
+            ViewerPipeline::FrameCallback cb;
+            {
+                std::lock_guard<std::mutex> lock(frame_cb_mutex_);
+                cb = frame_cb_;
+            }
+            if (cb) {
+                cb(rgba, w, h, ts);
+            } else if (options_.on_cpu_frame) {
+                options_.on_cpu_frame(rgba, w, h, ts);
+            }
+        };
+#endif
+        if (!viewer->start(device, config, on_frame, std::move(decoder))) {
             MELLO_LOG_ERROR(TAG, "no decoder for the clip (%ux%u)", config.width, config.height);
             return false;
         }
@@ -625,6 +650,8 @@ private:
     std::mutex viewer_mutex_;
     std::unique_ptr<ViewerPipeline> viewer_;
     ViewerPipeline::NativeFrameCallback native_cb_;
+    std::mutex frame_cb_mutex_;
+    ViewerPipeline::FrameCallback frame_cb_;  // frame_cb_mutex_
 
     mutable std::mutex clock_mutex_;
     bool has_audio_ = false;

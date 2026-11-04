@@ -1186,6 +1186,12 @@ MELLO_API MelloClipPlayer* mello_clip_player_start(MelloContext* ctx, const Mell
 MELLO_API void mello_clip_player_set_native_frame_callback(MelloClipPlayer* player,
                                                            MelloNativeFrameCallback callback,
                                                            void* user_data);
+/** macOS and Linux: each frame of the clip as RGBA, on the player's present
+ *  thread at the frame's render time. They have no native presenter, so the
+ *  caller shows the RGBA as a watched stream's. The callback must return
+ *  quickly. NULL: no frames. Windows uses the native frame callback. */
+MELLO_API void mello_clip_player_set_frame_callback(MelloClipPlayer* player, MelloFrameCallback callback,
+                                                    void* user_data);
 MELLO_API void mello_clip_player_set_paused(MelloClipPlayer* player, bool paused);
 /** Play from `position_ms` (from the key frame before it). */
 MELLO_API void mello_clip_player_seek(MelloClipPlayer* player, uint64_t position_ms);

@@ -5,8 +5,9 @@ import { VideoRect } from "../types.slint";
 
 // ============================================================
 //  The game clip player (CLIPS.md 15.9): the clip over the whole
-//  feed area, as the expanded stream view. The video is the DComp layer over
-//  the black media rectangle, so every control sits outside it. Escape
+//  feed area, as the expanded stream view. On Windows the video is the DComp
+//  layer over the black media rectangle, so every control sits outside it.
+//  On macOS and Linux it is the frame image in that rectangle. Escape
 //  closes the player, Space pauses and plays.
 // ============================================================
 
@@ -23,6 +24,9 @@ export global ClipPlayerUi {
     in-out property <bool> ended;
     /// Why the clip cannot play, or "".
     in-out property <string> error;
+    /// macOS and Linux: the frame on screen (the client's frame timer). On
+    /// Windows the native presenter shows the clip and this stays empty.
+    in-out property <image> frame;
     callback toggle-pause();
     callback seek-ms(int);
     callback close();
@@ -138,10 +142,18 @@ export component ExpandedClipPlayer inherits Rectangle {
                 }
             }
 
-            // The video: the DComp layer covers this rectangle.
+            // The video: the DComp layer covers this rectangle (Windows), or
+            // the frame image fills it (macOS, Linux).
             media := Rectangle {
                 vertical-stretch: 1;
                 background: #000000;
+
+                Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: ClipPlayerUi.frame;
+                    image-fit: contain;
+                }
 
                 if ClipPlayerUi.error != "": Text {
                     text: ClipPlayerUi.error;
@@ -238,5 +250,25 @@ export component ExpandedClipPlayer inherits Rectangle {
                 }
             }
         }
+    }
+}
+
+/// A render of the player on macOS: a frame in the media rectangle.
+export component Preview inherits Rectangle {
+    width: 1100px;
+    height: 720px;
+    background: Theme.bg-app;
+    init => {
+        ClipPlayerUi.clipper-name = "b0bben";
+        ClipPlayerUi.clipper-initials = "B";
+        ClipPlayerUi.clipper-hue-index = 2;
+        ClipPlayerUi.game-name = "Hearthstone";
+        ClipPlayerUi.position-ms = 7000;
+        ClipPlayerUi.duration-ms = 31000;
+        ClipPlayerUi.frame = @image-url("../previews/fixtures/stream-sample-1.png");
+    }
+    ExpandedClipPlayer {
+        width: parent.width;
+        height: parent.height;
     }
 }

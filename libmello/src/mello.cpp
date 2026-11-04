@@ -2182,6 +2182,18 @@ void mello_clip_player_set_native_frame_callback(MelloClipPlayer* player, MelloN
     } catch (...) {}
 }
 
+void mello_clip_player_set_frame_callback(MelloClipPlayer* player, MelloFrameCallback callback, void* user_data) {
+    if (!player) return;
+    try {
+        if (!callback) {
+            player->player->set_frame_callback({});
+            return;
+        }
+        player->player->set_frame_callback([callback, user_data](const uint8_t* rgba, uint32_t w, uint32_t h,
+                                                                 uint64_t ts) { callback(user_data, rgba, w, h, ts); });
+    } catch (...) {}
+}
+
 void mello_clip_player_set_paused(MelloClipPlayer* player, bool paused) {
     if (player) player->player->set_paused(paused);
 }
