@@ -914,8 +914,15 @@ fn looks_like_a_game(p: &RawGameProcess) -> bool {
 }
 
 /// The executable of a macOS app bundle: `<Name>.app/Contents/MacOS/<exe>`.
+/// It compares path components, not text, so the separator does not matter.
 fn in_app_bundle(path: &str) -> bool {
-    path.to_ascii_lowercase().contains(".app/contents/macos/")
+    let parts: Vec<String> = std::path::Path::new(path)
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase())
+        .collect();
+    parts.windows(4).any(|w| {
+        w[0].len() > ".app".len() && w[0].ends_with(".app") && w[1] == "contents" && w[2] == "macos"
+    })
 }
 
 /// The directories whose files say "engine": the executable's own, and for a
