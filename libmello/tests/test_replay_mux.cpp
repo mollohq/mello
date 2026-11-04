@@ -1,19 +1,23 @@
 // The game clip MP4 (CLIPS.md 15.4, 15.5 and 15.13): H.264 passthrough
-// from the replay ring, AAC from the clip mix, the moov box first, the poster.
+// from the replay ring, Opus from the clip mix, the moov box first, the poster.
+// The MP4 reads back through m3llo's own demux (mp4_read.hpp), so the mux
+// tests run on every platform. The replay session tests are Windows only
+// until the macOS replay.
 // The video is a fixture that libmello's own recording encoder made once
 // (160x96, 30 fps, an IDR every 30 frames with SPS and PPS, no B-frames, an
 // AUD before each access unit). No GPL encoder: m3llo is Apache 2.0
 // (14-VIDEO-PIPELINE.md 6.7). ReplayFixture.DISABLED_MakeTheH264Fixture
 // makes it again:
 //   mello_tests --gtest_also_run_disabled_tests --gtest_filter=ReplayFixture.*
-#ifdef _WIN32
 #include <gtest/gtest.h>
 #include "replay/h264_nal.hpp"
 #include "replay/mp4_read.hpp"
 #include "replay/replay_audio_mix.hpp"
 #include "replay/replay_mux.hpp"
-#include "replay/replay_session.hpp"
 #include "replay/replay_video_ring.hpp"
+
+#ifdef _WIN32
+#include "replay/replay_session.hpp"
 #include "video/capture_process.hpp"
 #include "video/encoder_factory.hpp"
 #include "video/graphics_device.hpp"
@@ -27,10 +31,9 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
-#include <mfapi.h>
-#include <mfidl.h>
-#include <mfreadwrite.h>
 #include <wrl/client.h>
+using Microsoft::WRL::ComPtr;
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -45,7 +48,6 @@
 #include <vector>
 
 using namespace mello::replay;
-using Microsoft::WRL::ComPtr;
 namespace fs = std::filesystem;
 
 namespace {
@@ -93,79 +95,36 @@ void pad_to(std::vector<uint8_t>& unit, size_t bytes) {
     unit.push_back(0x80);
 }
 
+// The video samples of an MP4 as the demux reads them. Times in 100 ns.
 struct Mp4Video {
-    std::vector<LONGLONG> times;
-    std::vector<LONGLONG> durations;
+    std::vector<int64_t> times;
+    std::vector<int64_t> durations;
     std::vector<bool> clean_points;
 };
 
-struct MfScope {
-    MfScope() {
-        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-        MFStartup(MF_VERSION);
-    }
-    ~MfScope() {
-        MFShutdown();
-        CoUninitialize();
-    }
-};
-
-// The H.264 samples of an MP4 as they are stored, with no decode.
 Mp4Video read_video(const fs::path& mp4) {
-    MfScope mf;
     Mp4Video v;
-    ComPtr<IMFSourceReader> reader;
-    if (FAILED(MFCreateSourceReaderFromURL(mp4.wstring().c_str(), nullptr, &reader))) return v;
-    const DWORD video = static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM);
-    reader->SetStreamSelection(static_cast<DWORD>(MF_SOURCE_READER_ALL_STREAMS), FALSE);
-    reader->SetStreamSelection(video, TRUE);
-    for (;;) {
-        DWORD flags = 0;
-        LONGLONG time = 0;
-        ComPtr<IMFSample> sample;
-        if (FAILED(reader->ReadSample(video, 0, nullptr, &flags, &time, &sample))) break;
-        if (flags & MF_SOURCE_READERF_ENDOFSTREAM) break;
-        if (!sample) continue;
-        LONGLONG duration = 0;
-        sample->GetSampleDuration(&duration);
-        v.times.push_back(time);
-        v.durations.push_back(duration);
-        v.clean_points.push_back(MFGetAttributeUINT32(sample.Get(), MFSampleExtension_CleanPoint, FALSE) != 0);
+    read_mp4_video(
+        mp4,
+        [&](const Mp4VideoUnit& u) {
+            v.times.push_back(u.time_us * 10);
+            v.clean_points.push_back(u.keyframe);
+            return true;
+        },
+        nullptr, nullptr);
+    for (size_t i = 0; i < v.times.size(); ++i) {
+        v.durations.push_back(i + 1 < v.times.size() ? v.times[i + 1] - v.times[i] : 0);
     }
     return v;
 }
 
-// The audio of an MP4, decoded to 48 kHz stereo int16.
+// The sound of an MP4, decoded to 48 kHz stereo int16 from the start of play.
 std::vector<int16_t> read_audio(const fs::path& mp4) {
-    MfScope mf;
     std::vector<int16_t> pcm;
-    ComPtr<IMFSourceReader> reader;
-    if (FAILED(MFCreateSourceReaderFromURL(mp4.wstring().c_str(), nullptr, &reader))) return pcm;
-    const DWORD audio = static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM);
-    ComPtr<IMFMediaType> type;
-    MFCreateMediaType(&type);
-    type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
-    type->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM);
-    type->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
-    type->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, 48000);
-    type->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, 2);
-    if (FAILED(reader->SetCurrentMediaType(audio, nullptr, type.Get()))) return pcm;
-    for (;;) {
-        DWORD flags = 0;
-        ComPtr<IMFSample> sample;
-        if (FAILED(reader->ReadSample(audio, 0, nullptr, &flags, nullptr, &sample))) break;
-        if (flags & MF_SOURCE_READERF_ENDOFSTREAM) break;
-        if (!sample) continue;
-        ComPtr<IMFMediaBuffer> buffer;
-        sample->ConvertToContiguousBuffer(&buffer);
-        BYTE* data = nullptr;
-        DWORD length = 0;
-        buffer->Lock(&data, nullptr, &length);
-        const size_t at = pcm.size();
-        pcm.resize(at + length / 2);
-        std::memcpy(pcm.data() + at, data, length);
-        buffer->Unlock();
-    }
+    read_mp4_audio(mp4, [&](const int16_t* s, size_t frames, int64_t) {
+        pcm.insert(pcm.end(), s, s + frames * 2);
+        return true;
+    });
     return pcm;
 }
 
@@ -305,6 +264,8 @@ TEST(ReplayMux, TheAudioIsOnTheVideoTimeline) {
     EXPECT_LE(std::abs(off_ms), 1.0) << "the click is " << off_ms << " ms off";
 }
 
+#ifdef _WIN32
+// Windows: the poster still decodes through Media Foundation.
 TEST(ReplayMux, APosterFromTheMp4IsAJpeg) {
     TempDir dir;
     const auto units = fixture_units();
@@ -337,6 +298,8 @@ TEST(ReplayMux, APosterFromTheMp4IsAJpeg) {
     EXPECT_GT(fs::file_size(jpeg), 500u);
     EXPECT_LT(fs::file_size(jpeg), 1024u * 1024u) << "under 1 MB (12-STREAMING.md 3.7, G1)";
 }
+
+#endif  // _WIN32
 
 // CLIPS.md 15.4 and 15.13 (ReplayMuxTime): a 30 s clip at the default
 // quality (720p60 at 5 Mbps: about 10 KB a frame) muxes in under 3 s. The
@@ -398,6 +361,7 @@ TEST(ReplayMuxTime, ThirtySecondsAtTheDefaultQualityMuxInUnderThreeSeconds) {
                 static_cast<double>(result.bytes) / 1e6, seconds);
 }
 
+#ifdef _WIN32
 // Makes the fixture of the tests above with the recording encoder of this
 // machine: 60 frames of a moving pattern, an IDR every 30 frames, each access
 // unit after an AUD. Run on request only (see the top of this file).

@@ -8,6 +8,7 @@ add_executable(mello_tests
     test_replay_load.cpp
     test_replay_mix.cpp
     test_replay_mux.cpp
+    test_mp4.cpp
     test_replay_ring.cpp
     test_noise_suppressor.cpp
     test_echo_canceller.cpp

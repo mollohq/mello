@@ -253,8 +253,9 @@ set(MELLO_SOURCES
     src/audio/ort_loader.cpp
     src/audio/vad.cpp
     src/clip/clip_player_stub.cpp
-    src/replay/mp4_faststart.cpp
+    src/replay/mp4_demux.cpp
     src/replay/mp4_read.cpp
+    src/replay/mp4_write.cpp
     src/replay/replay_audio_mix.cpp
     src/replay/replay_audio_ring.cpp
     src/replay/replay_video_ring.cpp
@@ -286,7 +287,7 @@ if(WIN32)
         src/audio/clip_encoder_wmf.cpp
         src/audio/mic_permission_stub.cpp
         src/clip/clip_player_win.cpp
-        src/replay/replay_mux_wmf.cpp
+        src/replay/replay_poster_win.cpp
         src/replay/replay_session.cpp
     )
 elseif(IOS)
