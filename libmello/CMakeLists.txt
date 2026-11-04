@@ -252,11 +252,12 @@ set(MELLO_SOURCES
     src/audio/echo_suppressor.cpp
     src/audio/ort_loader.cpp
     src/audio/vad.cpp
-    src/clip/clip_player_stub.cpp
+    src/clip/clip_player.cpp
     src/replay/mp4_demux.cpp
     src/replay/mp4_read.cpp
     src/replay/mp4_write.cpp
     src/replay/replay_audio_mix.cpp
+    src/replay/replay_poster.cpp
     src/replay/replay_audio_ring.cpp
     src/replay/replay_video_ring.cpp
     src/transport/peer_connection.cpp
@@ -286,7 +287,6 @@ if(WIN32)
         src/audio/device_enumerator_wasapi.cpp
         src/audio/clip_encoder_wmf.cpp
         src/audio/mic_permission_stub.cpp
-        src/clip/clip_player_win.cpp
         src/replay/replay_poster_win.cpp
         src/replay/replay_session.cpp
     )
@@ -311,6 +311,7 @@ elseif(APPLE)
         src/audio/audio_backend_coreaudio.cpp
         src/audio/device_enumerator_coreaudio.cpp
         src/audio/clip_encoder_audiotoolbox.cpp
+        src/replay/replay_poster_mac.mm
         src/audio/mic_permission_macos.mm
     )
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -543,6 +544,7 @@ elseif(APPLE)
         "-framework CoreMedia"
         "-framework CoreVideo"
         "-framework CoreGraphics"
+        "-framework ImageIO"
         "-framework ScreenCaptureKit"
         "-framework AppKit"
         "-framework Accelerate"

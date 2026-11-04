@@ -264,8 +264,9 @@ TEST(ReplayMux, TheAudioIsOnTheVideoTimeline) {
     EXPECT_LE(std::abs(off_ms), 1.0) << "the click is " << off_ms << " ms off";
 }
 
-#ifdef _WIN32
-// Windows: the poster still decodes through Media Foundation.
+// The poster decodes through the viewer's decoder. Linux has no JPEG writer:
+// it records no game clips.
+#ifndef __linux__
 TEST(ReplayMux, APosterFromTheMp4IsAJpeg) {
     TempDir dir;
     const auto units = fixture_units();
@@ -299,7 +300,7 @@ TEST(ReplayMux, APosterFromTheMp4IsAJpeg) {
     EXPECT_LT(fs::file_size(jpeg), 1024u * 1024u) << "under 1 MB (12-STREAMING.md 3.7, G1)";
 }
 
-#endif  // _WIN32
+#endif  // __linux__
 
 // CLIPS.md 15.4 and 15.13 (ReplayMuxTime): a 30 s clip at the default
 // quality (720p60 at 5 Mbps: about 10 KB a frame) muxes in under 3 s. The

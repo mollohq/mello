@@ -454,7 +454,7 @@ MELLO_API void mello_replay_stop(MelloContext* ctx);
 
 MELLO_API MelloReplayState mello_replay_state(MelloContext* ctx);
 
-/** Write the last `seconds` of the game as an MP4 (H.264, AAC with the game
+/** Write the last `seconds` of the game as an MP4 (H.264, Opus with the game
  *  audio and the voice of the clip buffer) at `mp4_path` and a JPEG poster at
  *  `poster_path`. Blocks for about a second: call it on a worker thread, not
  *  on the command loop. `out` may be NULL. */
@@ -1150,7 +1150,8 @@ MELLO_API void mello_stream_set_native_frame_callback(
  * ============================================================================
  * An MP4 that plays from its first bytes: the video through the stream
  * viewer's decoder and the native frame callback, the sound in the voice
- * output, on the sound's clock. Windows only for now. */
+ * output, on the sound's clock. m3llo's own MP4 demux and libopus, the same
+ * on every platform. */
 
 typedef struct MelloClipPlayer MelloClipPlayer;
 
@@ -1159,8 +1160,8 @@ typedef struct MelloClipPlayer MelloClipPlayer;
 
 /** Read up to `len` bytes of the clip at `offset` into `buf`. Returns the
  *  bytes read (0 at the end of the clip), MELLO_CLIP_READ_WAIT, or -1 on an
- *  error. Called on Media Foundation threads, never on the caller's: it must
- *  not block for long. */
+ *  error. Called on the player's demux thread, never on the caller's: it
+ *  must not block for long. */
 typedef int64_t (*MelloClipReadCallback)(void* user_data, uint64_t offset, uint8_t* buf, uint32_t len);
 
 typedef struct MelloClipPlayerConfig {
@@ -1180,7 +1181,7 @@ typedef struct MelloClipPlayerState {
     bool     failed;     /**< the clip cannot play */
 } MelloClipPlayerState;
 
-/** Start playing. Returns NULL when there is no player on this platform. */
+/** Start playing. Returns NULL without a read callback or a length. */
 MELLO_API MelloClipPlayer* mello_clip_player_start(MelloContext* ctx, const MelloClipPlayerConfig* config);
 MELLO_API void mello_clip_player_set_native_frame_callback(MelloClipPlayer* player,
                                                            MelloNativeFrameCallback callback,
