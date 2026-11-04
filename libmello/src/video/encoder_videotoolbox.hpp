@@ -25,7 +25,7 @@ public:
 
     static bool is_available();
 
-    // Accessed by the C compress callback — must be public. One encoded
+    // Accessed by the C compress callback, so it must be public. One encoded
     // frame: its Annex B bytes, the keyframe flag, its presentation time.
     struct Output {
         std::vector<uint8_t> data;

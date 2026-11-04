@@ -342,7 +342,7 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
         return false;
     }
 #elif defined(__APPLE__) || defined(__linux__)
-    // iOS: No preprocessor needed — VT accepts BGRA CVPixelBuffer directly.
+    // iOS: no preprocessor. VT accepts a BGRA CVPixelBuffer directly.
     // Linux: the encoder takes the capture's CPU picture and converts and
     // scales it itself (encoder.hpp).
     uint32_t cap_w = capture_->width()  & ~1u;
