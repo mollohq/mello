@@ -694,7 +694,7 @@ TEST(ReplaySession, DISABLED_RecordsTheGameOfMelloReplayPid) {
 
     TempDir dir;
     ReplayConfig config;
-    config.hwnd = hwnd;
+    config.window = hwnd;
     config.pid = pid;
     config.dir = dir.path();
     std::string error;
