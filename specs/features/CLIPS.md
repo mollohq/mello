@@ -71,7 +71,7 @@ This is the hero clip type. A friend hits a clutch play, you tap clip, and you h
 The user's own game: the last 30 seconds of the game video, the game audio,
 the crew voice and the user's mic, in one MP4. A replay buffer records while
 the user plays and is in voice, also without a stream. Clip type `game`.
-Built on Windows. Section 15 has the whole design.
+Built on Windows and macOS. Section 15 has the whole design.
 
 ---
 
@@ -592,7 +592,8 @@ Subscription flow. Permanent cloud retention. Crew boost. Retention expiry notif
 
 ## 15. Game Clips (F8)
 
-Built on Windows. macOS and the other open items are in section 15.14.
+Built on Windows and macOS. The platform parts are in sections 15.12 and
+15.12a, the open items in section 15.14.
 
 ### 15.1 What F8 Does
 
@@ -628,7 +629,8 @@ time. It records when all of these are true:
 | Game sensing reports a game | The primary game: the foreground game, else a fullscreen game, else the oldest game |
 | The OS temp folder has 2 GB free | Checked every 10 s. The replay's own ring files count as free (`RING_ALLOWANCE`, 128 MB), so a start at just over 2 GB does not stop itself. |
 | A hardware encoder exists | `EncoderFactory`. No software encoder (14-VIDEO-PIPELINE.md §6.7). |
-| WGC window capture delivers frames of the game | Section 15.3. The exclusive-fullscreen check does not turn the replay off: WGC window captured CS2 in exclusive fullscreen. |
+| The window capture delivers frames of the game: WGC on Windows, ScreenCaptureKit on macOS | Section 15.3. The exclusive-fullscreen check does not turn the replay off: WGC window captured CS2 in exclusive fullscreen. |
+| macOS: m3llo has the Screen Recording permission | `CGPreflightScreenCaptureAccess` before each start. Without it the state is `NoPermission`: the replay never asks while the user plays, the Settings section asks (section 15.10). |
 
 | Event | Action |
 |---|---|
@@ -668,6 +670,12 @@ replay moves to it.
   the whole monitor, with notifications and other windows. The hook only
   when a stream of the same game already uses it. The replay never injects
   the hook.
+- **macOS.** ScreenCaptureKit on the game window only
+  (`CaptureSourceDesc::window_only`): a window that ScreenCaptureKit does
+  not list gives no capture, never the display. The game window is the
+  largest normal window of the game's pid. ScreenCaptureKit delivers the
+  frames at the clip quality's height in pixels, so VideoToolbox gets them at
+  its own size (section 15.12a).
 - **The client area.** WGC window frames are cut to the client area, so a
   windowed game has no title bar in a clip (14-VIDEO-PIPELINE.md §4.4).
 - **The border.** Windows 11 hides the WGC border. Windows 10 always shows
@@ -682,7 +690,7 @@ mux puts all sources on that clock.
 | Source | Time of a sample |
 |---|---|
 | Video | The capture time of the frame |
-| Game audio | The arrival time at `GetBuffer` minus the duration of the packet, as in the stream host |
+| Game audio | Windows: the arrival time at `GetBuffer` minus the duration of the packet, as in the stream host. macOS: the process tap's input time (section 15.12a). |
 | Crew mix | The render time plus the output latency: the time the user heard it. m3llo's session volume travels with it. |
 | Mic | Its capture time. The voice ring keeps the mic apart from the crew mix, each with its own time anchors (section 4.1). |
 
@@ -718,8 +726,8 @@ F8 ─▶ client gate ─▶ Command::CaptureGameClip ─▶ the replay worker
 
 - Video: H.264 passthrough, no decode and no encode. Sample durations come
   from the capture times.
-- Audio: one stereo AAC-LC track at 160 kbps. Game audio and voice go on a
-  48 kHz timeline from T0. The voice is mono, center.
+- Audio: one stereo Opus track at 160 kbps, 20 ms packets. Game audio and
+  voice go on a 48 kHz timeline from T0. The voice is mono, center.
 - Drift: each source gets a linear resample ratio from its own time anchors.
 - Gaps (a minimized game, a dropped chunk) become silence at their own
   place. The audio after a gap does not move.
@@ -734,9 +742,10 @@ F8 ─▶ client gate ─▶ Command::CaptureGameClip ─▶ the replay worker
 
 | Item | Rule |
 |---|---|
-| Muxer | `IMFSinkWriter`: H.264 input type equal to output type (passthrough), the AAC encoder MFT. No new dependency. |
-| moov first | `mp4_faststart` after `Finalize` moves the moov box before mdat and moves the chunk offsets with it, so playback starts before the download ends. `MF_MPEG4SINK_MOOV_BEFORE_MDAT` wrote chunk offsets that point before the media data, so it is not used. |
-| Poster | The first captured frame after the press: a copy to a staging texture on the capture thread (a submit, no wait), then the map and a JPEG (WIC) on the mux worker. A minimized game delivers no frame: the poster is then the clip's last IDR, decoded once. `MelloReplayClip::poster_live` says which. |
+| Muxer | m3llo's own writer (`replay/mp4_write.cpp`), the same on every platform. H.264 passes through: the units as 4-byte length prefixes, each at its capture time (90 kHz), the SPS and PPS of the first IDR in `avcC` and in band. The sound is Opus in ISOBMFF (libopus, `OPUS_APPLICATION_AUDIO`, VBR at 160 kbps): the `Opus` sample entry and its `dOps` box, the encoder's pre-skip as the edit list's media time, a `roll` group of 4 packets (80 ms) for a seek. Brands `isom`, `iso2`, `avc1`, `mp41`. No new dependency: libopus is in libmello already. |
+| moov first | The writer knows every sample size before it writes (the ring index, the Opus packets in RAM), so it writes `ftyp`, `moov`, `mdat` in that order at once. Chunks of 0.5 s, video and sound in turn. The file goes to a part file and is renamed at the end. |
+| Sound in other players | Tested on 2026-11-04 with `<video src>`: Chrome 152 and 157, the macOS 27 WebKit engine, iOS 27 and iOS 18.6 Safari (simulators), and `AVPlayer` on macOS. WebKit answers "" to `canPlayType` for Opus in MP4 and refuses it in MSE, and iOS 18.6 Web Audio does not decode it. So a web page plays a clip with `<video src>` only: it never checks `canPlayType`, never uses MSE or `decodeAudioData`. |
+| Poster | The first captured frame after the press: on Windows a copy to a staging texture on the capture thread (a submit, no wait), then the map and a JPEG (WIC) on the mux worker; on macOS the capture's CVPixelBuffer, retained, and a JPEG (ImageIO). A minimized game delivers no frame: the poster is then the clip's last IDR, decoded once through the viewer's decoder (`replay_poster.cpp`). `MelloReplayClip::poster_live` says which. |
 | Files | The MP4 and the poster are in `mello_clips` of the OS temp folder. They stay as the clipper's copy. |
 
 ### 15.6 The Feed Card
@@ -830,7 +839,7 @@ clips too.
 Playback streams the MP4 from its first bytes. It never downloads the whole
 file first. The MP4 is progressive with the moov box first, so the first
 range gives the index and the first frames. The same URL plays as is in a
-browser `<video>` and in `AVPlayer`. There is no HLS: a single rendition
+browser `<video>` and in `AVPlayer` (section 15.5, sound in other players). There is no HLS: a single rendition
 needs no playlist, and m3llo has no server transcode.
 
 **The player in the client.** `ExpandedClipPlayer`
@@ -853,19 +862,32 @@ no stream is watched, and a watched stream closes the clip. Commands:
 | Retries | 3. Connect timeout 10 s, request timeout 30 s. |
 | Local file | The clipper plays the local file with no fetch (`LocalClip`). |
 
-**The player in libmello** (`libmello/src/clip/`, 03-LIBMELLO.md §3 and §7):
+**The player in libmello** (`libmello/src/clip/clip_player.cpp`, 03-LIBMELLO.md
+§3 and §7), the same on every platform:
 
-- `ClipByteStream` is an `IMFByteStream` over the read callback. It reports
-  `MFBYTESTREAM_IS_SEEKABLE`, its length and the content type `video/mp4`.
-  `BeginRead` returns at once and reads on Media Foundation's work queue, so
-  the source gives the first sample after the first range.
+- m3llo's own MP4 demux (`replay/mp4_demux.cpp`) reads the moov box over the
+  read callback and gives each track's samples with their file offsets. It
+  checks every table against the box and the file size: a clip comes from
+  another user. Codecs: H.264 (`avc1`, `avc3`) and Opus. A file with
+  another sound codec plays without sound.
+- The demux thread reads the samples in file order, video and sound in
+  turn. A read that waits for bytes asks again every 15 ms.
+- The sound: libopus to 48 kHz stereo into `ClipAudioStream`, the samples
+  before the edit's media time (the pre-skip) dropped.
 - The sound is the clock. A video frame is released on it, through the
-  stream viewer's decoder and presenter (14-VIDEO-PIPELINE.md §8.4).
+  stream viewer's decoder (14-VIDEO-PIPELINE.md §8.4). Windows shows it
+  with the native presenter. macOS has no native presenter: the frames go
+  out as RGBA (`mello_clip_player_set_frame_callback`) into the frame slot
+  of a watched stream, and the client's frame timer shows them in the clip
+  view (`ClipPlayerUi.frame`).
 - Buffering: with sound, the state says buffering only when the sound
   stalls (`reports_buffering`). A read that waits while the sound plays on
   is a read ahead. Without sound, a read that waits is a stall. In a stall
   the picture holds and the sound pauses.
-- A seek plays from the keyframe before the position.
+- A seek plays the video from the keyframe before the position, and the
+  sound from 80 ms before it (the `roll` group), with the samples before
+  the position decoded and dropped. The demux knows the byte offsets, so a
+  seek reads only the ranges it needs.
 
 Measured with the stream gate's replay lane (a 20 Mbps link with 50 ms delay,
 an empty cache):
@@ -878,12 +900,18 @@ an empty cache):
 
 ### 15.10 Settings
 
-Settings, Games, GAME CLIPS. Hidden on macOS.
+Settings, Games, GAME CLIPS. Windows and macOS.
 
 | Control | Values | Default |
 |---|---|---|
 | Game clips (F8) | On, off | On |
 | Clip quality | 1080p60 (8000 kbps), 720p60 (5000 kbps), 720p30 (3000 kbps) | 720p60 |
+
+macOS: without the Screen Recording permission the section shows a
+"Screen Recording" row with ALLOW (`Command::RequestGameClipPermission`).
+macOS shows its prompt the first time and opens System Settings, Privacy and
+Security, Screen and System Audio Recording after that. The row goes when the
+replay records.
 
 KEYBINDS has the Game clip row (section 15.2). The app picks the ring folder
 (the OS temp folder). It is not a setting. There is no switch for game clips
@@ -896,11 +924,11 @@ Estimates at 720p60. The perf scenario that measures them is not built yet
 
 | Resource | Estimate |
 |---|---|
-| GPU | One capture copy and one BGRA to NV12 convert per frame (0.1 to 0.3 ms), one hardware encode on the encoder engine |
-| CPU | Under 2 % of one core. The threads wait on events. The game audio is PCM, with no encode. |
+| GPU | Windows: one capture copy and one BGRA to NV12 convert per frame (0.1 to 0.3 ms). macOS: ScreenCaptureKit scales to the encode size. One hardware encode on the encoder engine. |
+| CPU | Under 2 % of one core. The threads wait on events. The game audio is PCM in the ring; the Opus encode runs at the capture (30 s in under 0.2 s). |
 | Process RAM | The ring index, a 2 MB write queue, the encoder buffers. At most 10 MB more than without the replay. |
 | Disk | About 72 MB of ring files, fixed after the start. About 0.8 MB/s of writes. |
-| Install size | No new binary. Media Foundation and WIC are OS parts. |
+| Install size | No new binary. The MP4 writer and demux are m3llo's own; libopus is in libmello already. WIC (Windows) and ImageIO (macOS) are OS parts. |
 
 ### 15.12 Windows Parts
 
@@ -911,21 +939,35 @@ Estimates at 720p60. The perf scenario that measures them is not built yet
 | Exclusive fullscreen | WGC window captured CS2 in exclusive fullscreen. A game that WGC cannot see delivers no frames and gets no clips. |
 | Consent | No borderless consent dialog shows: m3llo is signed. The replay asks for borderless access at its first WGC start, as the stream does. |
 
+### 15.12a macOS Parts
+
+| Part | Rule |
+|---|---|
+| Capture | ScreenCaptureKit, one `SCStream` on the game window (`initWithDesktopIndependentWindow`), behind `CaptureManager` (14-VIDEO-PIPELINE.md §4.8). Window only: a window that ScreenCaptureKit does not list gives no capture, never the display. The frames come at the clip quality's height in pixels (the window's points times its scale). Six frames in the capture's pool. A minimized game, or one on a hidden Space, gives blank or suspended frames: Waiting. A windowed game has its title bar in the clip (section 15.14). |
+| Game audio | A Core Audio process tap (macOS 14.2) of the game's pid and of each descendant that has opened audio, made again when that set changes, shared with a stream of the same game (12-STREAMING.md §3.7, F7). Each packet has the tap's input time on the steady clock (`mach_absolute_time` is libc++'s steady clock on Apple). Measured on 2026-11-04 with a fake game in its own app bundle, another app and a tone from m3llo: the tap holds the game's sound at its full level and nothing of the other two. ScreenCaptureKit audio, on a window filter or on a display filter of the game's app, held the whole mix of the Mac, m3llo's own sound too (`excludesCurrentProcessAudio` on), so it is not used. Needs `NSAudioCaptureUsageDescription`. The real games of the plan are not measured yet (section 15.14). |
+| Encoder | VideoToolbox, hardware only (`kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder`), the recording intent: High at auto level, the GOP in frames (`keyframe_interval` = fps), no reordering. A Mac without a hardware H.264 encoder has no game clips. |
+| Mux and poster | m3llo's own writer, as on Windows (section 15.5). The poster is the capture's CVPixelBuffer, retained, as an ImageIO JPEG. |
+| Player | m3llo's own player, as on Windows (section 15.9). The VideoToolbox decoder takes one access unit as one sample (an AUD or an SEI alone is not a picture). The frames reach the clip view as RGBA through the client's frame timer. |
+| Stream host | The macOS stream host takes its capture from a `CaptureManager` too and encodes on its own thread, so a replay of the streamed game follows the stream's capture (F1, F2) and sheds first under overload (F3). A stream of a game takes the game's sound from the shared process tap (F7). |
+| Permission | Screen Recording, checked before each start and never asked while the user plays (section 15.10). The process tap asks for the audio capture permission at its first start. |
+| Key | F8, on the CGEventTap listener with its own held state. On a Mac keyboard F8 is the play and pause key unless "Use F1, F2, etc. keys as standard function keys" is on, or the user holds fn. |
+| Disk | The 2 GB rule reads `statvfs`. The ring files are preallocated (`F_PREALLOCATE`), so a full disk fails the start. The upload thread runs at the utility class. |
+
 ### 15.13 Tests
 
 | Level | Tests |
 |---|---|
-| Unit (`check.sh`) | The game clip key and KEYBINDS rules (`hotkeys.rs`), the client flow tests (`flow_tests.rs`: the key, the toasts, the settings, the card), the replay worker rules (`replay.rs`), the upload worker against a local stub, the queue and the pace (`clip_upload/`), the upload budget (`upload_budget.rs`), the range reader, the Go tests (`game_clips_test.go`, `crew_feed_test.go`) |
-| libmello ctest (`check-full.sh`) | `ReplayVideoRing`, `ReplayAudioRing`, `ReplayMux`, `ReplayMuxTime`, `ReplayMix`, `ReplayAvClock`, `ReplayGaps`, `ReplayLoad`, `ReplaySession`, `CaptureManager`, `SharedGameAudio`, `EncoderIntent`, `WindowCrop`, `ClipPlayer`, `ClipAudioStream` |
-| Replay lane | `scripts/replay-gate.sh` (`stream-gate replay`, `tools/stream-gate/src/replay.rs`). The reference clip goes through the replay, with presses at 35, 47, 60 and 62 s. Gates in `benchmarks/baselines/replay/gates.json`: the first frame is T0 within one GOP, no frame is missing, a length of 30 to 31 s, PSNR, SSIM and VMAF floors, the game audio markers within ±20 ms of their frames. `--playback` adds the streamed playback row (`playback.rs`, `http_shim.rs`): the first frame within 1 s, no buffering, every frame in order, a seek to 20 s within 1 s. The QA harness runs the lane, not `check.sh`. TESTING.md has the commands. |
+| Unit (`check.sh`) | The game clip key and KEYBINDS rules (`hotkeys.rs`), the client flow tests (`flow_tests.rs`: the key, the toasts, the settings, the card, the Screen Recording row; Windows and macOS), the replay worker rules (`replay.rs`, the free space on Windows and macOS), the game sensing rule for a fullscreen app bundle (`game_sensing.rs`), the upload worker against a local stub, the queue and the pace (`clip_upload/`), the upload budget (`upload_budget.rs`), the range reader, the Go tests (`game_clips_test.go`, `crew_feed_test.go`) |
+| libmello ctest (`check-full.sh`) | `ReplayVideoRing`, `ReplayAudioRing`, `ReplayMux`, `ReplayMuxTime`, `ReplayMix`, `ReplayAvClock`, `ReplayGaps`, `ReplayLoad`, `ReplaySession`, `CaptureManager`, `SharedGameAudio`, `EncoderIntent`, `WindowCrop` (Windows), `ClipPlayer`, `ClipAudioStream`, `Mp4Write`, `Mp4Demux` (the box tree, Opus in ISOBMFF, a file from ffmpeg, cut and damaged files), `ProcessEnum`. On macOS too, except `WindowCrop`: `ReplaySession` and `ClipPlayer` with the reference clip and a fake decoder, `SharedGameAudio.OneProcessTapFeedsTwoConsumers`, `EncoderIntent.VideoToolboxRecordingHasAOneSecondGopAndNoBFrames`. By hand: `VideoPipelineMac.DISABLED_TheHostEncodesTheDisplayOnItsCaptureManager` (real display capture), `mello_sck_audio_probe` (the game audio choices). |
+| Replay lane | `scripts/replay-gate.sh` (`stream-gate replay`, `tools/stream-gate/src/replay.rs`). The reference clip goes through the replay, with presses at 35, 47, 60 and 62 s. Gates in `benchmarks/baselines/replay/gates.json`: the first frame is T0 within one GOP, no frame is missing, a length of 30 to 31 s, PSNR, SSIM and VMAF floors, the game audio markers within ±20 ms of their frames. `--playback` adds the streamed playback row (`playback.rs`, `http_shim.rs`): the first frame within 1 s, no buffering, every frame in order, a seek to 20 s within 1 s. `--lane mac` runs it on macOS (VideoToolbox, the vmaf CLI from PATH at the pinned version). The QA harness runs the lane, not `check.sh`. TESTING.md has the commands. |
 | Journey | `qa/journeys/feed-game-clip.ts` (FEED-12). An `e2e-game` build gives a fake game (`mello-core/src/e2e_game.rs`) whose replay records the reference clip. bob joins voice and presses F8 through `POST /game-clip-key` on the state port. bob's card shows the local poster. alice waits for the upload, plays the MP4 from local S3, pauses, seeks and closes the player. |
 
 ### 15.14 Not Built Yet
 
 | Item | State |
 |---|---|
-| macOS | ScreenCaptureKit window capture with app audio, VideoToolbox, `AVAssetWriter`. Until then the Settings section is hidden and F8 does nothing on macOS. |
-| The hw seek | 1784 ms against 1000 ms at 1080p60 (section 15.9). Before the seek the MPEG-4 source makes one or two more reads, and the keyframe spans two 1 MiB ranges. A fix needs a seek that starts at once (or a demux of our own) and a smaller first range. |
+| macOS | Built (section 15.12a). Not built or not measured: the real games (Hearthstone, World of Warcraft, a native Steam game; this Mac's only game needs Rosetta), the client area crop of a windowed game (the title bar is in the clip), a native presenter (the clip frames go through the CPU, as a watched stream's), "fn F8" in KEYBINDS when the function keys are media keys, Intel Macs, a base M-chip Mac (one encode engine for a stream and a replay), the desktop stream's audio without m3llo's own sound (a global tap that leaves out m3llo). |
+| The hw seek | 1784 ms against 1000 ms at 1080p60 with the Media Foundation player (section 15.9), before m3llo's own demux. The demux reads only the ranges of the seek; the hw lane measures it again. |
 | Unread first frames on hw | In 2 replay lane runs the first frames of a play did not read. The cause is not known. |
 | R2 and the signed `Content-Length` | MinIO refuses a part of the wrong length. R2 is not checked. |
 | Gates | The hw lane floors, the real loopback row (`tone_player.cpp` is built and not run), the remote voice check of the journey (a tone burst from the second client within ±20 ms; the mic path removes a tone, so the burst needs a path past the noise suppression), the stream and replay together case (12-STREAMING.md §3.7, F8 and G7), the perf scenario (section 15.11), the QA harness checks. |

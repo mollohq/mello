@@ -14,6 +14,8 @@
 #                         OpenH264 encode and decode
 #   --lane hw             the 1080p60 clip and clip quality (8000 kbps), the
 #                         machine's encoder and decoder
+#   --lane mac            macOS: the hw lane's clip and quality on
+#                         VideoToolbox, floors of its own
 #   --lane hw --loopback  adds the real loopback row: mello_tone_player plays
 #                         1 kHz bursts ON THE SPEAKERS and the replay records
 #                         them through process loopback. Build the player
@@ -45,6 +47,7 @@
 # Usage:
 #   ./scripts/replay-gate.sh                          # CPU lane
 #   ./scripts/replay-gate.sh --lane hw                # hardware lane
+#   ./scripts/replay-gate.sh --lane mac               # macOS (VideoToolbox)
 #   ./scripts/replay-gate.sh --no-vmaf                # PSNR and SSIM only
 #   ./scripts/replay-gate.sh --repeat 3 --write-baseline   # set the floors
 #   ./scripts/replay-gate.sh --playback-only          # the streamed playback row

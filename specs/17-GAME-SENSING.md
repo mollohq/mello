@@ -2,7 +2,7 @@
 
 > **Component:** Game Detection, Game Catalogue, Game Presence
 > **Version:** 0.3
-> **Status:** Implemented on Windows. The macOS paths compile and pass CI, but have never run on a Mac. These are process enumeration, ICNS icon extraction and launcher locations.
+> **Status:** Implemented on Windows. On macOS (2026-11-04) the process enumeration reports every regular app and the Steam library scan found its game on a Mac; no game has run there yet. ICNS icon extraction and the other launcher locations have not run on a Mac.
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)
 > **Related:** [02-MELLO-CORE.md](./02-MELLO-CORE.md), [03-LIBMELLO.md](./03-LIBMELLO.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md), [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md), [18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md), [22-GAME-UI-SURFACES.md](./22-GAME-UI-SURFACES.md)
 
@@ -704,7 +704,17 @@ session and close it on quit.
 
 ### 8.3 Not verified
 
-- macOS: no part of the macOS sensing path has run on a Mac.
+- macOS: `process_enum_macos.mm` reports every regular app (an app bundle with
+  Dock presence) with its executable path, its window state (fullscreen:
+  a normal window that covers a display; minimized: hidden, or every window
+  off screen) and its launch time; mello-core's catalogue and library decide,
+  as on Windows. A fullscreen process inside an app bundle is not a
+  provisional game by itself: macOS apps go fullscreen in a Space of their
+  own. It needs engine files in `Contents/MacOS`, `Contents/Frameworks` or
+  `Contents/Resources` (`UnityPlayer.dylib` and the others of
+  `ENGINE_MARKER_FILES`). The Steam library scan found Brawlhalla on a Mac;
+  it did not run (an Intel build, no Rosetta). ICNS icons and the other
+  launchers have not run on a Mac.
 - The executable names marked "Not verified" in section 3.2.
 
 ---

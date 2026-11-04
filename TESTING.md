@@ -483,6 +483,7 @@ except the HTTP shim of the streamed playback row (below).
 ./scripts/replay-gate.sh                                # CPU lane: 720p60 clip quality, OpenH264
 ./scripts/replay-gate.sh --lane hw                      # 1080p60 clip quality, the machine's encoder
 ./scripts/replay-gate.sh --lane hw --loopback           # adds the real loopback row: tones ON THE SPEAKERS
+./scripts/replay-gate.sh --lane mac                     # macOS: 1080p60 on VideoToolbox (vmaf 3.0.0 from PATH)
 ./scripts/replay-gate.sh --lane cpu --repeat 3 --write-baseline   # set the lane's floors
 ```
 

@@ -88,7 +88,7 @@ pub struct ReplayLane {
     pub vmaf_subsample: usize,
 }
 
-pub const LANES: [ReplayLane; 2] = [
+pub const LANES: [ReplayLane; 3] = [
     ReplayLane {
         name: "cpu",
         clip: "720p60",
@@ -98,6 +98,15 @@ pub const LANES: [ReplayLane; 2] = [
     },
     ReplayLane {
         name: "hw",
+        clip: "1080p60",
+        quality: GameClipQuality::P1080Fps60,
+        soft: false,
+        vmaf_subsample: 2,
+    },
+    // macOS: VideoToolbox encode and decode, the hw lane's clip and quality,
+    // floors of its own. macOS has no software encoder, so no cpu lane.
+    ReplayLane {
+        name: "mac",
         clip: "1080p60",
         quality: GameClipQuality::P1080Fps60,
         soft: false,

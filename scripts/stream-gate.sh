@@ -111,10 +111,28 @@ case "$(uname -s)" in
             fi
         fi
         ;;
+    Darwin)
+        # macOS runs the replay lane (--lane mac): the reference source, the
+        # game clip replay and its read-back. The stream lanes need the SFU and
+        # the OpenH264 DLL of the Windows path.
+        if [ "${1:-}" != "replay" ]; then
+            printf 'stream-gate: on macOS only the replay lane runs (scripts/replay-gate.sh --lane mac)\n' >&2
+            exit 2
+        fi
+        # The vmaf CLI of the pinned version from PATH (Homebrew's vmaf),
+        # else PSNR and SSIM only.
+        if [ -z "${STREAM_GATE_VMAF:-}" ] && command -v vmaf >/dev/null 2>&1; then
+            if vmaf --version 2>&1 | grep -q "^$VMAF_VERSION"; then
+                export STREAM_GATE_VMAF="$(command -v vmaf)"
+            else
+                printf 'stream-gate: WARNING: vmaf on PATH is not %s; PSNR and SSIM only\n' "$VMAF_VERSION" >&2
+            fi
+        fi
+        ;;
     *)
-        # The reference source is Windows only (D3D11). Other platforms can
+        # The reference source is Windows and macOS only. Other platforms can
         # run the unit tests of tools/stream-gate, not the gate.
-        printf 'stream-gate: the gate runs on Windows only (the reference source is D3D11)\n' >&2
+        printf 'stream-gate: the gate runs on Windows and macOS only\n' >&2
         exit 2
         ;;
 esac

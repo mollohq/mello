@@ -463,7 +463,7 @@ Nothing in the product selects it.
 | Clock | `mello_clock_now_us()` is the clock of the due times and of the viewer frame callback (`ts`), so a harness in the same process measures glass-to-glass. |
 | Game audio (stage 7) | `mello_test_set_reference_audio(ctx, path)`: raw 48 kHz stereo int16, one clip loop long. The source then has a second thread: 10 ms chunk j is captured at start + j × 10 ms (frame 0 at start, the video's clock) and handed over 10 ms later, when it is complete, as a capture device does, through `CaptureSource::set_timed_audio_callback` with that capture time. `provides_timed_audio()` is true, so `mello_stream_start_audio` opens no loopback device. The audio loops with the clip. |
 
-### 4.8 CaptureManager (Windows host)
+### 4.8 CaptureManager (Windows and macOS hosts)
 
 `capture_manager.{hpp,cpp}`. One capture of one target, given to every
 consumer that encodes it. A stream host makes a manager with one consumer, its
@@ -483,7 +483,7 @@ game (the row "A replay beside a stream").
 | Audio | A consumer sets its own `AudioCallback` and `TimedAudioCallback`. The manager sets its own callback on the source only while a consumer has one, so a source with no listener makes no audio. A setter waits for an audio call in flight to that consumer. |
 | Queries | `width`, `height`, `backend_name`, `get_cursor`, `cursor_mode`, `state`, `failed`, `target_exited`, `method_history`, `provides_timed_audio` go to the source: every consumer sees one value. `source()` gives the source for the reference clip's timing (`mello_stream_reference_info`). |
 | Threads and locks | `add_consumer`, `start`, `remove_consumer` and the audio setters run one at a time under `op_mutex_`, never from inside a callback of the same manager. Lock order: `op_mutex_`, a lock inside the source, then the list mutex. The delivery paths take a source lock (the reference source calls its audio callback under its own mutex), then the list mutex. Nothing calls into the source under the list mutex. |
-| macOS | Not yet: the macOS host encodes inside the ScreenCaptureKit callback, which breaks the frame rule above. The macOS work adds an encode thread and moves `SCKCapture` behind the manager. |
+| macOS | The macOS host and the game clip replay make their managers too (`MELLO_HOST_MANAGER`), each on a Metal device of its own. `CapturedFrame::texture` is a `CVPixelBufferRef`, valid during the call: a consumer that keeps it retains it. The stream host retains each frame into its two-deep encode queue and encodes on its own thread; it never encodes inside the ScreenCaptureKit callback. `SCKCapture` keeps six frames in its pool (two consumers and a poster). Its `frames_show_only_target` is false for the display fallback of Window mode, and its state comes from the frame status (blank or suspended: Waiting). iOS hosts nothing; Linux keeps its own capture. |
 | Tests | `CaptureManager.*` (`tests/test_capture_manager.cpp`): a fake source that delivers on the test's threads, no GPU. |
 
 ## 5. Color Conversion
@@ -818,7 +818,7 @@ If `EncoderFactory` exhausts all hardware candidates without success, it returns
 `EncoderConfig::intent` (`EncoderIntent::Stream` or `Recording`) tells the
 encoder what the video is for. A stream follows the network at the lowest
 latency. A recording goes to the replay ring (CLIPS.md §15.4) and is read back
-later. `EncoderFactory` passes the intent to NVENC and AMF.
+later. `EncoderFactory` passes the intent to NVENC, AMF and VideoToolbox.
 
 | Setting | Stream | Recording |
 |---|---|---|
@@ -827,13 +827,14 @@ later. `EncoderFactory` passes the intent to NVENC and AMF.
 | Rate control | VBR, maximum 1.25 × target, VBV 0.5 s of the maximum rate | VBR, maximum 1.25 × target, VBV 1 s of the maximum rate (`compute_vbv_bits`) |
 | NVENC tuning | P4 ULL, P1 ULL, P1 LL | P4 high quality, P1 high quality, P1 LL (`NvencEncoder::tuning_attempts`) |
 | AMF usage | Ultra low latency, low latency mode on | High quality, else transcoding; low latency mode off (`AmfEncoder::intent_settings`) |
+| VideoToolbox | High 5.1, real time | High at auto level, real time, no speed over quality. The GOP stays in frames: a `MaxKeyFrameIntervalDuration` of 1 s put the IDR one frame early. Both intents ask for a hardware session (`RequireHardwareAcceleratedVideoEncoder`, §6.7). |
 | B-frames and lookahead | Off | Off. The high quality tuning turns them on, so the encoder turns them off again: the ring segments and the MP4 passthrough need every frame in decode order. |
 | SPS and PPS | At each IDR | At each IDR |
 | Bitrate | Preset, bitrate controller | Per clip quality: 8000, 5000 and 3000 kbps (`GameClipQuality::encoding`). No bitrate controller. |
 | Cost tiers | Yes | The replay sheds frames first (12-STREAMING.md §3.7, F3) |
 
 Tests: one per encoder for the tuning, the VBV and the GOP of each intent
-(`test_video_pipeline.cpp`).
+(`test_video_pipeline.cpp`; VideoToolbox: `test_encoder_videotoolbox.cpp`).
 
 ---
 
@@ -942,7 +943,10 @@ interleaved to NV12 and uploaded into the slot's NV12 texture with
 ### 7.6 VideoToolbox Decoder (macOS)
 
 Unchanged by stage 3 except the slot argument, which it ignores: the ring
-retains each `CVPixelBuffer` the decoder hands out.
+retains each `CVPixelBuffer` the decoder hands out. One access unit is one
+sample: every slice and SEI of the picture with 4-byte lengths. The
+parameter sets are in the format description; an AUD or a filler NAL alone
+is not a picture and VideoToolbox refuses it (`kVTVideoDecoderBadDataErr`).
 
 ---
 
@@ -1009,9 +1013,10 @@ The decode thread reads its frames from a `transport::FrameSource`
 (`video_receive_timeline.hpp`): `poll`, `on_decoded`, `on_decode_error`,
 `wait`, `wake`, `stats`. The receive timeline is the source of a stream. The
 game clip player (CLIPS.md §15.9) gives `ClipFrameSource`
-(`clip/clip_player_win.cpp`), which releases demuxed H.264 on the clock of the
+(`clip/clip_player.cpp`), which releases demuxed H.264 on the clock of the
 clip's sound. `TimelineFrame` and `TimelineDecision` carry no WebRTC type, so
-both sources return them.
+both sources return them. The clip player is the same on every platform
+(`clip/clip_player.cpp`, m3llo's own MP4 demux).
 
 `ViewerPipeline::flush()` frees the ready slots that are not on screen. A
 seek and a pause call it. A decode that started before the flush drops its
