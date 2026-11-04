@@ -15,10 +15,9 @@ using mello::video::enumerate_game_processes;
 using mello::video::enumerate_visible_windows;
 
 TEST(ProcessEnum, EnumeratesProcesses) {
-#if !defined(_WIN32) && !defined(__linux__)
-    // process_enum.cpp enumerates on Windows and Linux; the other branch
-    // returns an empty vector, so this can never pass elsewhere.
-    GTEST_SKIP() << "process enumeration is Windows and Linux only";
+#if !defined(_WIN32) && !defined(__linux__) && !defined(__APPLE__)
+    // The other branch returns an empty vector, so this can never pass there.
+    GTEST_SKIP() << "process enumeration is Windows, Linux and macOS only";
 #else
     auto procs = enumerate_game_processes();
     ASSERT_FALSE(procs.empty());
@@ -32,10 +31,9 @@ TEST(ProcessEnum, EnumeratesProcesses) {
 
 TEST(ProcessEnum, WindowedProcessesCarryPathAndTitle) {
 #ifndef _WIN32
-    // These are the Windows rules. process_enum_macos.mm does not follow them
-    // yet: it never sets a window title, it sets a path for every known app,
-    // and its exe is the app name. The test then fails on any Mac with a known
-    // app open (Steam on the CI runner). Spec 17 section 8.3.
+    // These are the Windows rules. On macOS every regular app has a path
+    // (its bundle executable), with a window or not, and the window title
+    // needs the Screen Recording permission.
     GTEST_SKIP() << "the windowless and path rules are Windows-only";
 #else
     auto procs = enumerate_game_processes();
@@ -77,8 +75,8 @@ TEST(ProcessEnum, AtMostOneForegroundProcess) {
 // when Mello launches reports the hours it actually ran rather than the minutes
 // we happened to watch. A wrong value here silently corrupts every duration.
 TEST(ProcessEnum, ProcessesCarryACreationTime) {
-#if !defined(_WIN32) && !defined(__linux__)
-    GTEST_SKIP() << "process enumeration is Windows and Linux only";
+#if !defined(_WIN32) && !defined(__linux__) && !defined(__APPLE__)
+    GTEST_SKIP() << "process enumeration is Windows, Linux and macOS only";
 #else
     auto procs = enumerate_game_processes();
     ASSERT_FALSE(procs.empty());
@@ -98,7 +96,8 @@ TEST(ProcessEnum, ProcessesCarryACreationTime) {
         EXPECT_GT(p.started_at_ms, 946684800000LL) << p.exe;  // > year 2000
         EXPECT_LE(p.started_at_ms, now_ms + 1000) << p.exe;   // not in the future
     }
-    // This process is ours, so at least one creation time must be readable.
+    // This process is ours (Windows, Linux), or every app has a launch date
+    // (macOS), so at least one creation time must be readable.
     EXPECT_GT(with_time, 0);
 #endif
 }

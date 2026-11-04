@@ -6,6 +6,9 @@
 #import <AppKit/AppKit.h>
 #import <CoreGraphics/CoreGraphics.h>
 #include <libproc.h>
+#include <unistd.h>
+
+#include <unordered_map>
 
 namespace mello::video {
 
@@ -47,59 +50,99 @@ std::vector<MonitorInfo> enumerate_monitors() {
 }
 
 // Known game list for macOS
-struct KnownGame {
-    const char* name;
-    const char* bundle_prefix; // CFBundleIdentifier prefix match
+namespace {
+
+/// The windows of each process at layer 0 (normal windows), from the window
+/// server: on screen or not, and whether one covers its display. Needs no
+/// permission: the bounds and the owner are public, the titles are not.
+struct ProcessWindows {
+    bool any = false;
+    bool on_screen = false;
+    bool covers_display = false;
+    std::string title;
+    double largest_area = 0;
 };
 
-static const KnownGame KNOWN_GAMES_MAC[] = {
-    {"Minecraft",         "com.mojang.minecraft"},
-    {"Steam",             "com.valvesoftware.steam"},
-    {"League of Legends", "com.riotgames.LeagueofLegends"},
-    {"Roblox",            "com.roblox.RobloxPlayer"},
-    {"World of Warcraft", "com.blizzard.worldofwarcraft"},
-    {"Diablo IV",         "com.blizzard.DiabloIV"},
-};
+std::unordered_map<pid_t, ProcessWindows> windows_by_pid() {
+    std::unordered_map<pid_t, ProcessWindows> out;
+    CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionAll | kCGWindowListExcludeDesktopElements,
+                                                 kCGNullWindowID);
+    if (!list) return out;
+    NSArray* windows = CFBridgingRelease(list);
+    NSArray<NSScreen*>* screens = [NSScreen screens];
+    const CGFloat main_height = screens.count > 0 ? screens[0].frame.size.height : 0;
+    for (NSDictionary* w in windows) {
+        if ([w[(id)kCGWindowLayer] intValue] != 0) continue;
+        const pid_t pid = [w[(id)kCGWindowOwnerPID] intValue];
+        CGRect bounds{};
+        if (!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)w[(id)kCGWindowBounds], &bounds)) continue;
+        if (bounds.size.width < 64 || bounds.size.height < 64) continue;
+        ProcessWindows& pw = out[pid];
+        pw.any = true;
+        const bool on = [w[(id)kCGWindowIsOnscreen] boolValue];
+        if (!on) continue;
+        pw.on_screen = true;
+        const double area = bounds.size.width * bounds.size.height;
+        if (area > pw.largest_area) {
+            pw.largest_area = area;
+            NSString* name = w[(id)kCGWindowName];
+            pw.title = name ? name.UTF8String : "";
+        }
+        // The window server's bounds are top-left based; the screens' frames
+        // are bottom-left based on the main screen.
+        for (NSScreen* screen in screens) {
+            const NSRect f = screen.frame;
+            const CGRect top_left = CGRectMake(f.origin.x, main_height - f.origin.y - f.size.height, f.size.width,
+                                               f.size.height);
+            if (CGRectContainsRect(bounds, CGRectInset(top_left, 1, 1))) pw.covers_display = true;
+        }
+    }
+    return out;
+}
 
+}  // namespace
+
+// Every regular application: the game catalogue in mello-core decides which
+// of them is a game (spec 17 section 2.1), as on Windows. A process with no
+// app bundle (a command line tool) has no Dock presence and is not one.
 std::vector<GameProcess> enumerate_game_processes() {
     @autoreleasepool {
-        // NSRunningApplication property access (activationPolicy, bundleIdentifier, etc.)
-        // requires the main thread — AppKit lazily resolves them via Launch Services.
         __block std::vector<GameProcess> result;
 
         auto do_enumerate = ^{
             @autoreleasepool {
                 NSArray<NSRunningApplication*>* apps = [[NSWorkspace sharedWorkspace] runningApplications];
                 if (!apps) return;
+                const auto windows = windows_by_pid();
+                const pid_t self = getpid();
 
                 for (NSRunningApplication* app in apps) {
                     if (app.activationPolicy != NSApplicationActivationPolicyRegular) continue;
+                    if (app.processIdentifier == self || app.terminated) continue;
+                    NSURL* exe = app.executableURL;
+                    if (!exe) continue;
 
-                    NSString* bundleId = app.bundleIdentifier;
-                    if (!bundleId) continue;
-
-                    for (const auto& game : KNOWN_GAMES_MAC) {
-                        if ([bundleId hasPrefix:[NSString stringWithUTF8String:game.bundle_prefix]]) {
-                            GameProcess gp;
-                            gp.pid  = (uint32_t)app.processIdentifier;
-                            gp.name = game.name;
-                            gp.exe  = app.localizedName ? [app.localizedName UTF8String] : game.name;
-                            gp.is_fullscreen = false;
-                            gp.is_foreground = app.isActive;
-                            // launchDate is when the *game* started, which is
-                            // what sessions must be dated from. Nil for some
-                            // system-launched apps; 0 then, same as Windows.
-                            if (NSDate* launched = app.launchDate) {
-                                gp.started_at_ms =
-                                    (int64_t)([launched timeIntervalSince1970] * 1000.0);
-                            }
-                            if (NSURL* url = app.executableURL) {
-                                gp.path = [[url path] UTF8String];
-                            }
-                            result.push_back(std::move(gp));
-                            break;
-                        }
+                    GameProcess gp;
+                    gp.pid  = (uint32_t)app.processIdentifier;
+                    gp.name = app.localizedName ? [app.localizedName UTF8String] : "";
+                    gp.exe  = exe.lastPathComponent ? [exe.lastPathComponent UTF8String] : "";
+                    gp.path = exe.path ? [exe.path UTF8String] : "";
+                    gp.is_foreground = app.isActive;
+                    const auto it = windows.find(app.processIdentifier);
+                    if (it != windows.end()) {
+                        gp.window_title  = it->second.title;
+                        gp.is_fullscreen = it->second.covers_display;
+                        // Hidden, or every window is off screen (minimized,
+                        // or on another Space).
+                        gp.is_minimized = app.hidden || (it->second.any && !it->second.on_screen);
+                    } else {
+                        gp.is_fullscreen = false;
+                        gp.is_minimized  = app.hidden;
                     }
+                    if (NSDate* launched = app.launchDate) {
+                        gp.started_at_ms = (int64_t)([launched timeIntervalSince1970] * 1000.0);
+                    }
+                    result.push_back(std::move(gp));
                 }
             }
         };
@@ -110,7 +153,7 @@ std::vector<GameProcess> enumerate_game_processes() {
             dispatch_sync(dispatch_get_main_queue(), do_enumerate);
         }
 
-        MELLO_LOG_DEBUG(TAG, "Enumerated %zu game processes", result.size());
+        MELLO_LOG_DEBUG(TAG, "Enumerated %zu application processes", result.size());
         return result;
     }
 }
