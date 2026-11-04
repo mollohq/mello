@@ -67,6 +67,7 @@ std::vector<std::vector<uint8_t>> fixture_units() {
     return units;
 }
 
+constexpr double kPi = 3.14159265358979323846;
 constexpr uint64_t kT0 = 50'000'000;
 constexpr uint64_t kFrameUs = 33'333;
 
@@ -111,14 +112,14 @@ std::vector<int16_t> two_tones() {
     std::vector<int16_t> s(2 * 96000);
     for (size_t i = 24000; i < 96000; ++i) {
         const double t = static_cast<double>(i) / 48000.0;
-        s[2 * i] = static_cast<int16_t>(12000 * std::sin(2 * M_PI * 440 * t));
-        s[2 * i + 1] = static_cast<int16_t>(12000 * std::sin(2 * M_PI * 660 * t));
+        s[2 * i] = static_cast<int16_t>(12000 * std::sin(2 * kPi * 440 * t));
+        s[2 * i + 1] = static_cast<int16_t>(12000 * std::sin(2 * kPi * 660 * t));
     }
     return s;
 }
 
 double goertzel(const std::vector<int16_t>& stereo, int channel, double hz, size_t from, size_t n) {
-    const double k = 2 * std::cos(2 * M_PI * hz / 48000.0);
+    const double k = 2 * std::cos(2 * kPi * hz / 48000.0);
     double s1 = 0, s2 = 0;
     for (size_t i = from; i < from + n && 2 * i + 1 < stereo.size(); ++i) {
         const double s = stereo[2 * i + channel] / 32768.0 + k * s1 - s2;
@@ -442,8 +443,8 @@ TEST(Mp4Write, DISABLED_WriteAClipForOtherPlayers) {
     for (size_t i = 0; i < frames; ++i) {
         if (i % 48000 >= 9600) continue;
         const double t = static_cast<double>(i) / 48000.0;
-        c.in.audio[2 * i] = static_cast<int16_t>(13000 * std::sin(2 * M_PI * 440 * t));
-        c.in.audio[2 * i + 1] = static_cast<int16_t>(13000 * std::sin(2 * M_PI * 660 * t));
+        c.in.audio[2 * i] = static_cast<int16_t>(13000 * std::sin(2 * kPi * 440 * t));
+        c.in.audio[2 * i + 1] = static_cast<int16_t>(13000 * std::sin(2 * kPi * 660 * t));
     }
     ClipMuxResult result;
     ASSERT_TRUE(write(c, out_path, &result));
