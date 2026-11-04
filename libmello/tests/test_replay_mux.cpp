@@ -446,6 +446,7 @@ TEST(ReplayFixture, DISABLED_MakeTheH264Fixture) {
 #if defined(_WIN32) || defined(__APPLE__)
 #include "replay/replay_session.hpp"
 #include "video/capture_reference.hpp"
+#include "video/video_pipeline.hpp"
 
 namespace {
 
@@ -600,9 +601,7 @@ TEST(ReplaySession, TheReferenceGameAudioIsInTheClipAndReadsBack) {
             << "the reference audio is at its capture times";
     }
 }
-#endif  // _WIN32 || __APPLE__
 
-#ifdef _WIN32
 
 // CLIPS.md 15.3; 14-VIDEO-PIPELINE.md 4.8: a stream of the same game starts, and the
 // replay moves onto the stream's capture and keeps recording while the
@@ -666,13 +665,14 @@ TEST(ReplaySession, FollowsAStreamOfTheSameGameAndComesBack) {
     EXPECT_TRUE(v.clean_points.front());
     EXPECT_EQ(clip.width, 320u) << "one picture size over the switches";
     EXPECT_GE(v.times.size(), 150u) << "about 60 frames a second, a short gap at each switch";
-    LONGLONG longest_gap = 0;
-    for (const LONGLONG d : v.durations) longest_gap = (std::max)(longest_gap, d);
+    int64_t longest_gap = 0;
+    for (const int64_t d : v.durations) longest_gap = (std::max)(longest_gap, d);
     std::printf("[ ReplaySession ] follow and back: %u frames in %.2f s, longest frame %.0f ms\n",
                 static_cast<unsigned>(v.times.size()), static_cast<double>(clip.duration_us) / 1e6,
                 static_cast<double>(longest_gap) / 1e4);
 }
 
+#ifdef _WIN32
 // On request only: the replay on a running game, as the client starts it.
 //   set MELLO_REPLAY_PID=<pid>
 //   mello_tests --gtest_also_run_disabled_tests --gtest_filter=ReplaySession.DISABLED_*
@@ -711,6 +711,7 @@ TEST(ReplaySession, DISABLED_RecordsTheGameOfMelloReplayPid) {
                 static_cast<unsigned long long>(stats.frames_encoded), clip.has_game_audio);
     EXPECT_TRUE(ok);
 }
+#endif  // _WIN32
 
 // 12-STREAMING.md 3.7, F3: the stream that the replay follows is overloaded
 // twice. The replay drops to 30 fps, then pauses, while the stream keeps its
@@ -768,8 +769,8 @@ TEST(ReplaySession, UnderOverloadTheReplayShedsBeforeTheStream) {
     session->stop();
     const auto v = read_video(mp4);
     ASSERT_FALSE(v.times.empty());
-    LONGLONG longest = 0;
-    for (const LONGLONG d : v.durations) longest = (std::max)(longest, d);
+    int64_t longest = 0;
+    for (const int64_t d : v.durations) longest = (std::max)(longest, d);
     EXPECT_GE(longest, 5'000'000) << "the last frame lasts over the pause (at least 0.5 s)";
 }
-#endif // _WIN32
+#endif  // _WIN32 || __APPLE__

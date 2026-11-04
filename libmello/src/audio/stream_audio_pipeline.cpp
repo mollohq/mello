@@ -1,5 +1,6 @@
 #include "stream_audio_pipeline.hpp"
 #include "stream_audio_link.hpp"
+#include "shared_game_audio.hpp"
 #include "../transport/rtp_av_sync_extension.hpp"
 #include "../util/log.hpp"
 #include <algorithm>
@@ -44,11 +45,9 @@ void StreamAudioHostPipeline::set_link(std::shared_ptr<StreamAudioLink> link) {
     link_ = std::move(link);
 }
 
-#ifdef _WIN32
 void StreamAudioHostPipeline::set_shared_game_audio(std::shared_ptr<SharedGameAudio> shared) {
     shared_audio_ = std::move(shared);
 }
-#endif
 
 bool StreamAudioHostPipeline::start(PacketCallback callback, uint32_t capture_pid,
                                     bool external_source) {
@@ -64,10 +63,10 @@ bool StreamAudioHostPipeline::start(PacketCallback callback, uint32_t capture_pi
     }
 #endif
 
-#ifdef _WIN32
     // F7: the game's audio capture is shared with the game clip replay.
     const bool use_shared =
         !external_source && capture_pid != 0 && shared_audio_ && shared_audio_->pid() == capture_pid;
+#ifdef _WIN32
     if (!external_source && !use_shared) {
         // Windows opens its own loopback device. macOS has none:
         // ScreenCaptureKit delivers game audio on the video stream, and
@@ -87,9 +86,6 @@ bool StreamAudioHostPipeline::start(PacketCallback callback, uint32_t capture_pi
             return false;
         }
     }
-#else
-    (void)capture_pid;
-    (void)external_source;
 #endif
 
     if (!encoder_.initialize(
@@ -121,14 +117,15 @@ bool StreamAudioHostPipeline::start(PacketCallback callback, uint32_t capture_pi
     frame_index_ = 0;
     warned_sample_rate_ = false;
 
-#ifdef _WIN32
     if (use_shared) {
         // The same thread and the same samples as an own capture: the
         // shared capture's thread calls on_pcm.
         shared_consumer_ = shared_audio_->add([this](const int16_t* samples, size_t count, int64_t capture_us) {
             on_pcm(samples, count, capture_us > 0 ? std::optional<int64_t>(capture_us) : std::nullopt);
         });
-    } else if (capture_ && !capture_->start([this](const int16_t* samples, size_t count) {
+    }
+#ifdef _WIN32
+    else if (capture_ && !capture_->start([this](const int16_t* samples, size_t count) {
                    on_pcm(samples, count, std::nullopt);
                })) {
         MELLO_LOG_ERROR("stream_audio", "loopback capture start failed");
@@ -142,8 +139,12 @@ bool StreamAudioHostPipeline::start(PacketCallback callback, uint32_t capture_pi
                    : use_shared    ? "the game's shared capture"
                                    : "own capture");
 #else
+    // macOS: ScreenCaptureKit's audio (fed by mello.cpp) only without the
+    // shared process tap. That audio is the whole mix of the Mac.
     MELLO_LOG_INFO("stream_audio", "host pipeline started (%s, in-band FEC on)",
-                   external_source ? "external source" : "own capture");
+                   external_source ? "external source"
+                   : use_shared    ? "the game's shared capture"
+                                   : "ScreenCaptureKit audio");
 #endif
     return true;
 }
@@ -154,13 +155,13 @@ void StreamAudioHostPipeline::stop() {
         capture_->stop();
         capture_.reset();
     }
+#endif
     // Waits for a call that runs now. The shared capture goes on for its
     // other consumers.
     if (shared_audio_ && shared_consumer_ != 0) {
         shared_audio_->remove(shared_consumer_);
         shared_consumer_ = 0;
     }
-#endif
     // Under the lock: on macOS the ScreenCaptureKit audio queue can still be
     // inside feed_float_pcm while the caller stops the stream.
     std::lock_guard<std::mutex> lock(pcm_mutex_);

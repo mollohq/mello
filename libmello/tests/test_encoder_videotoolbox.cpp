@@ -7,10 +7,15 @@
 #include "replay/h264_nal.hpp"
 #include "video/encoder_videotoolbox.hpp"
 #include "video/graphics_device.hpp"
+#include "video/video_pipeline.hpp"
 
+#include <CoreFoundation/CoreFoundation.h>
 #include <CoreVideo/CoreVideo.h>
 
+#include <atomic>
+#include <cstdio>
 #include <cstring>
+#include <thread>
 #include <vector>
 
 using namespace mello::video;
@@ -99,5 +104,50 @@ TEST(EncoderIntent, VideoToolboxRecordingHasAOneSecondGopAndNoBFrames) {
     EXPECT_EQ(keyframes[0], 0);
     EXPECT_EQ(keyframes[1], 60) << "a 1 s GOP at 60 fps";
     EXPECT_EQ(keyframes[2], 120);
+}
+
+// The macOS stream host on its capture manager, with real ScreenCaptureKit
+// capture of the main display. ScreenCaptureKit's source calls into the main
+// queue, so the host runs on a worker thread while the main thread runs its
+// run loop, as in the client. Needs the Screen Recording permission. Run on
+// request only:
+//   mello_tests --gtest_also_run_disabled_tests --gtest_filter=VideoPipelineMac.*
+TEST(VideoPipelineMac, DISABLED_TheHostEncodesTheDisplayOnItsCaptureManager) {
+    std::atomic<bool> done{false};
+    std::atomic<int> packets{0}, keyframes{0};
+    bool started = false, had_manager = false;
+    uint64_t captured = 0;
+    std::thread worker([&] {
+        VideoPipeline host;
+        CaptureSourceDesc desc{};
+        desc.mode = CaptureMode::Monitor;
+        desc.monitor_index = 0;
+        PipelineConfig pc{};
+        pc.height = 720;
+        pc.fps = 60;
+        pc.bitrate_kbps = 4000;
+        started = host.start_host(desc, pc, [&](const uint8_t*, size_t, bool key, uint64_t) {
+            ++packets;
+            if (key) ++keyframes;
+        });
+        had_manager = host.capture_manager() != nullptr;
+        if (started) {
+            host.request_keyframe();
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+            VideoPipeline::HostTelemetry t;
+            host.get_host_telemetry(t);
+            captured = t.frames_captured;
+            host.stop_host();
+        }
+        done = true;
+    });
+    while (!done.load()) CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
+    worker.join();
+    ASSERT_TRUE(started) << "the host did not start (Screen Recording permission?)";
+    EXPECT_TRUE(had_manager) << "the macOS host takes its capture from a capture manager";
+    EXPECT_GT(packets.load(), 10) << "frames from the encode thread";
+    EXPECT_GE(keyframes.load(), 1);
+    std::printf("[ VideoPipelineMac ] %d packets, %d keyframes, %llu frames captured in 2 s\n", packets.load(),
+                keyframes.load(), static_cast<unsigned long long>(captured));
 }
 #endif

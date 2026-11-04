@@ -341,7 +341,6 @@ bool SCKCapture::start(uint32_t target_fps, FrameCallback callback) {
     uint32_t w = width_, h = height_;
     FrameCallback vcb = callback_;
     const bool want_audio = capture_audio_;
-    const bool want_window_only = window_only_;
     SCKCapture* self_ptr = this;
     std::atomic<bool>* running_ptr = &running_;
     void* filt = filter_;
@@ -356,9 +355,10 @@ bool SCKCapture::start(uint32_t target_fps, FrameCallback callback) {
             config.minimumFrameInterval = CMTimeMake(1, target_fps);
             config.pixelFormat = kCVPixelFormatType_32BGRA;
             config.showsCursor = NO;
-            // A consumer that encodes on its own thread holds up to two
-            // frames (the replay), and the poster holds one: room for them.
-            config.queueDepth  = want_window_only ? 6 : 3;
+            // Each consumer that encodes on its own thread holds up to two
+            // frames (the stream host, a game clip replay that follows it),
+            // and the replay's poster one: room for them.
+            config.queueDepth  = 6;
 
             // Always on for a stream: SCStream fixes capturesAudio at creation,
             // but mello_stream_start_audio() runs after the host stream is
