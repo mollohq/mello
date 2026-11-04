@@ -890,13 +890,14 @@ no stream is watched, and a watched stream closes the clip. Commands:
   seek reads only the ranges it needs.
 
 Measured with the stream gate's replay lane (a 20 Mbps link with 50 ms delay,
-an empty cache):
+an empty cache). The cpu lane numbers are from the Media Foundation player,
+before m3llo's own demux.
 
-| Metric | cpu lane (720p60) | hw lane (1080p60) | Target |
-|---|---|---|---|
-| First frame from the start call | 528 ms | 607 and 611 ms | 1000 ms |
-| Buffering after the first frame | 0 ms | 0 ms | 0 |
-| Seek to 20 s | 944 ms | 1784 ms | 1000 ms |
+| Metric | cpu lane (720p60) | hw lane (1080p60) | mac lane (1080p60) | Target |
+|---|---|---|---|---|
+| First frame from the start call | 528 ms | 598 ms | 487 ms | 1000 ms |
+| Buffering after the first frame | 0 ms | 0 ms | 0 ms | 0 |
+| Seek to 20 s | 944 ms | 493 ms | 533 ms | 1000 ms |
 
 ### 15.10 Settings
 
@@ -967,7 +968,7 @@ Estimates at 720p60. The perf scenario that measures them is not built yet
 | Item | State |
 |---|---|
 | macOS | Built (section 15.12a). Not built or not measured: the real games (Hearthstone, World of Warcraft, a native Steam game; this Mac's only game needs Rosetta), the client area crop of a windowed game (the title bar is in the clip), a native presenter (the clip frames go through the CPU, as a watched stream's), "fn F8" in KEYBINDS when the function keys are media keys, Intel Macs, a base M-chip Mac (one encode engine for a stream and a replay), the desktop stream's audio without m3llo's own sound (a global tap that leaves out m3llo). |
-| The hw seek | 1784 ms against 1000 ms at 1080p60 with the Media Foundation player (section 15.9), before m3llo's own demux. The demux reads only the ranges of the seek; the hw lane measures it again. |
+| The replay sheds on the hw lane | On 2026-11-04, on the Windows test PC (RTX 3080 Ti), the replay sheds to 30 fps after NVENC's cost tiers 1 and 2, on `main` and on this branch, so the press rows miss half their frames. The GPU stays at its idle clock (P8) during the run. The cause is not known. |
 | Unread first frames on hw | In 2 replay lane runs the first frames of a play did not read. The cause is not known. |
 | R2 and the signed `Content-Length` | MinIO refuses a part of the wrong length. R2 is not checked. |
 | Gates | The hw lane floors, the real loopback row (`tone_player.cpp` is built and not run), the remote voice check of the journey (a tone burst from the second client within ±20 ms; the mic path removes a tone, so the burst needs a path past the noise suppression), the stream and replay together case (12-STREAMING.md §3.7, F8 and G7), the perf scenario (section 15.11), the QA harness checks. |
