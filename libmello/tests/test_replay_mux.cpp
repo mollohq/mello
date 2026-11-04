@@ -268,6 +268,11 @@ TEST(ReplayMux, TheAudioIsOnTheVideoTimeline) {
 // it records no game clips.
 #ifndef __linux__
 TEST(ReplayMux, APosterFromTheMp4IsAJpeg) {
+#ifdef _WIN32
+    // The decode is NVDEC, AMF or OpenH264 through the viewer. The Windows CI
+    // runner is a service: in session 0 the CUDA interop of NVDEC fails.
+    if (std::getenv("CI")) GTEST_SKIP() << "hardware decode skipped under CI on Windows";
+#endif
     TempDir dir;
     const auto units = fixture_units();
     ReplayVideoRing ring;

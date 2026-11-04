@@ -17,7 +17,10 @@
 //   fake-sound no window, a tone (`--hz`): the child, or another app (660 Hz).
 //
 //   mello_sck_audio_probe --role probe --self-test --seconds 8
-//      starts the fake game and the other app, records, prints JSON.
+//      [--game-exe FakeGame.app/Contents/MacOS/fakegame]
+//      starts the fake game and the other app, records, prints JSON. With
+//      `--game-exe` the fake game runs from its own app bundle, as a game
+//      does (ScreenCaptureKit groups the sound by application).
 //   mello_sck_audio_probe --role probe --pid <game pid> --seconds 600
 //      records a real game (the levels of the four tones then say only
 //      that m3llo and the test tones stay out; the game's own level is
@@ -121,6 +124,7 @@ struct Recording {
     std::mutex mutex;
     std::vector<float> pcm;
     double rate = 48000;
+    std::atomic<uint64_t> callbacks{0};
     uint64_t buffers = 0;
     double pts_offset_ms_sum = 0;  // delivery time minus the sample time
     double pts_offset_ms_min = 1e9;
@@ -160,8 +164,9 @@ void report(Recording& r) {
     double rms = 0;
     for (float v : r.pcm) rms += v * v;
     rms = r.pcm.empty() ? 0 : std::sqrt(rms / r.pcm.size());
-    std::printf("  \"%s\": {\"status\": \"%s\", \"seconds\": %.2f, \"rate\": %.0f, \"buffers\": %llu, \"rms\": %.4f, ",
-                r.name.c_str(), r.status.c_str(), n / r.rate, r.rate, static_cast<unsigned long long>(r.buffers), rms);
+    std::printf("  \"%s\": {\"status\": \"%s\", \"seconds\": %.2f, \"rate\": %.0f, \"buffers\": %llu, \"callbacks\": %llu, \"rms\": %.4f, ",
+                r.name.c_str(), r.status.c_str(), n / r.rate, r.rate, static_cast<unsigned long long>(r.buffers),
+                static_cast<unsigned long long>(r.callbacks.load()), rms);
     std::printf("\"tone_game_440\": %.4f, \"tone_child_1000\": %.4f, \"tone_other_app_660\": %.4f, \"tone_m3llo_880\": %.4f",
                 goertzel(r.pcm, 0, 440, r.rate), goertzel(r.pcm, 0, 1000, r.rate), goertzel(r.pcm, 0, 660, r.rate),
                 goertzel(r.pcm, 0, 880, r.rate));
@@ -187,10 +192,19 @@ void report(Recording& r) {
         (CMAudioFormatDescriptionRef)CMSampleBufferGetFormatDescription(buffer));
     if (!asbd || !(asbd->mFormatFlags & kAudioFormatFlagIsFloat)) return;
     self.recording->rate = asbd->mSampleRate;
-    AudioBufferList list;
+    self.recording->callbacks++;
+    // Planar stereo: room for two buffers in the list.
+    struct {
+        AudioBufferList list;
+        AudioBuffer second;
+    } storage{};
+    AudioBufferList& list = storage.list;
     CMBlockBufferRef block = nullptr;
-    if (CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(buffer, nullptr, &list, sizeof(list), nullptr, nullptr, 0,
-                                                                &block) != noErr) {
+    const OSStatus st = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+        buffer, nullptr, &list, sizeof(storage), nullptr, nullptr, kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
+        &block);
+    if (st != noErr) {
+        self.recording->status = "audio buffer list: " + std::to_string(st);
         return;
     }
     const size_t frames = CMSampleBufferGetNumSamples(buffer);
@@ -340,10 +354,14 @@ static int fake_game(const char* self, double hz) {
         play_tone(&tone);
         // A helper process of the game with its own sound.
         static pid_t child = spawn_self(self, {"--role", "fake-sound", "--hz", "1000"});
-        signal(SIGTERM, [](int) {
+        signal(SIGTERM, SIG_IGN);
+        static dispatch_source_t term =
+            dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGTERM, 0, dispatch_get_main_queue());
+        dispatch_source_set_event_handler(term, ^{
             if (child > 0) kill(child, SIGTERM);
             _exit(0);
         });
+        dispatch_resume(term);
         [app run];
     }
     return 0;
@@ -358,13 +376,30 @@ static NSRunningApplication* wait_for_app(pid_t pid) {
     return nil;
 }
 
-static int probe(const char* self, pid_t pid, double seconds, bool self_test) {
+static pid_t g_game = 0;
+static pid_t g_other = 0;
+
+static void stop_fakes() {
+    // The game's helper is the game's child: the game takes it down.
+    if (g_game > 0) kill(g_game, SIGTERM);
+    if (g_other > 0) kill(g_other, SIGTERM);
+}
+
+static int probe(const char* self, const char* game_exe, pid_t pid, double seconds, bool self_test) {
+    // ScreenCaptureKit needs the CoreGraphics session of an application.
+    [NSApplication sharedApplication];
     pid_t game = pid;
-    pid_t other = 0;
     if (self_test) {
-        game = spawn_self(self, {"--role", "fake-game", "--hz", "440"});
-        other = spawn_self(self, {"--role", "fake-sound", "--hz", "660"});
-        [NSThread sleepForTimeInterval:2.0];  // the window and the sounds start
+        // The fake game from its own app bundle when `--game-exe` names one:
+        // ScreenCaptureKit groups the sound by application.
+        g_game = game = spawn_self(game_exe ? game_exe : self, {"--role", "fake-game", "--hz", "440"});
+        g_other = spawn_self(self, {"--role", "fake-sound", "--hz", "660"});
+        atexit(stop_fakes);
+        signal(SIGABRT, [](int) {
+            stop_fakes();
+            _exit(134);
+        });
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:2.0]];
     }
     static Tone own;
     own.hz = 880;
@@ -417,7 +452,9 @@ static int probe(const char* self, pid_t pid, double seconds, bool self_test) {
     AudioDeviceIOProcID proc = nullptr;
     start_tap(game, &c, &tap, &agg, &proc);
 
-    [NSThread sleepForTimeInterval:seconds];
+    // The main run loop runs while the captures record: ScreenCaptureKit
+    // delivers nothing to a process whose main thread sleeps.
+    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:seconds]];
 
     if (sa) [sa stopCaptureWithCompletionHandler:^(NSError*){}];
     if (sb) [sb stopCaptureWithCompletionHandler:^(NSError*){}];
@@ -427,10 +464,7 @@ static int probe(const char* self, pid_t pid, double seconds, bool self_test) {
     }
     if (agg) AudioHardwareDestroyAggregateDevice(agg);
     if (tap) AudioHardwareDestroyProcessTap(tap);
-    if (self_test) {
-        kill(game, SIGTERM);
-        kill(other, SIGTERM);
-    }
+    stop_fakes();
 
     std::printf("{\n  \"game_pid\": %d, \"window\": %s, \"seconds\": %.1f,\n", game, window ? "true" : "false", seconds);
     report(a);
@@ -448,6 +482,7 @@ int main(int argc, char** argv) {
     double seconds = 8;
     pid_t pid = 0;
     bool self_test = false;
+    const char* game_exe = nullptr;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--role" && i + 1 < argc) role = argv[++i];
@@ -455,6 +490,7 @@ int main(int argc, char** argv) {
         else if (a == "--seconds" && i + 1 < argc) seconds = std::atof(argv[++i]);
         else if (a == "--pid" && i + 1 < argc) pid = static_cast<pid_t>(std::atoi(argv[++i]));
         else if (a == "--self-test") self_test = true;
+        else if (a == "--game-exe" && i + 1 < argc) game_exe = argv[++i];
     }
     if (role == "fake-sound") return fake_sound(hz);
     if (role == "fake-game") return fake_game(argv[0], hz);
@@ -462,5 +498,5 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "usage: %s --role probe (--self-test | --pid <game pid>) [--seconds N]\n", argv[0]);
         return 2;
     }
-    return probe(argv[0], pid, seconds, self_test);
+    return probe(argv[0], game_exe, pid, seconds, self_test);
 }
