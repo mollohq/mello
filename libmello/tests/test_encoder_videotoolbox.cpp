@@ -84,8 +84,11 @@ TEST(EncoderIntent, VideoToolboxRecordingHasAOneSecondGopAndNoBFrames) {
     VTEncoder encoder;
     if (!encoder.initialize(GraphicsDevice{}, config)) GTEST_SKIP() << "no hardware H.264 encoder";
 
+    // The recording keeps frames in flight: each unit is an earlier frame's,
+    // at its own presentation time (the capture time it was given).
     std::vector<int> keyframes;
-    size_t b_frames = 0, frames = 0;
+    std::vector<uint64_t> times;
+    size_t b_frames = 0;
     for (uint32_t n = 0; n < 150; ++n) {
         CVPixelBufferRef pb = make_frame(config.width, config.height, n);
         ASSERT_NE(pb, nullptr);
@@ -93,17 +96,22 @@ TEST(EncoderIntent, VideoToolboxRecordingHasAOneSecondGopAndNoBFrames) {
         ASSERT_TRUE(encoder.encode(pb, 1'000'000ull + n * 16'667ull, packet)) << "frame " << n;
         CVPixelBufferRelease(pb);
         if (packet.data.empty()) continue;
-        ++frames;
-        if (packet.is_keyframe) keyframes.push_back(static_cast<int>(n));
+        ASSERT_GE(packet.timestamp_us, 1'000'000ull) << "a unit carries its frame's time";
+        const int index = static_cast<int>((packet.timestamp_us - 1'000'000ull + 8'000) / 16'667ull);
+        times.push_back(packet.timestamp_us);
+        if (packet.is_keyframe) keyframes.push_back(index);
         if (slice_type(packet.data) == 1) ++b_frames;
     }
     encoder.shutdown();
-    EXPECT_EQ(frames, 150u) << "one access unit per frame, in order";
+    EXPECT_GE(times.size(), 120u) << "the units come out while frames go in";
+    for (size_t i = 1; i < times.size(); ++i) {
+        EXPECT_GT(times[i], times[i - 1]) << "decode order is presentation order (unit " << i << ")";
+    }
     EXPECT_EQ(b_frames, 0u) << "no B-frames";
-    ASSERT_GE(keyframes.size(), 3u);
+    ASSERT_GE(keyframes.size(), 2u);
     EXPECT_EQ(keyframes[0], 0);
     EXPECT_EQ(keyframes[1], 60) << "a 1 s GOP at 60 fps";
-    EXPECT_EQ(keyframes[2], 120);
+    if (keyframes.size() > 2) EXPECT_EQ(keyframes[2], 120);
 }
 
 // The macOS stream host on its capture manager, with real ScreenCaptureKit

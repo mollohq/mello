@@ -46,7 +46,11 @@ public:
         return preprocessor_->convert(frame.texture, nullptr).texture;
     }
     void release(void*) override {}
-    bool encode(video::Encoder& encoder, void* frame, uint64_t, video::EncodedPacket& out) override {
+    bool encode(video::Encoder& encoder, void* frame, uint64_t capture_us, video::EncodedPacket& out,
+                uint64_t* unit_us) override {
+        // NVENC and AMF give the unit of this frame (their timestamp is the
+        // encode's end, not a capture time).
+        if (unit_us) *unit_us = capture_us;
         return encoder.encode(static_cast<ID3D11Texture2D*>(frame), out);
     }
 

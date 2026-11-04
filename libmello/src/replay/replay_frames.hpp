@@ -33,9 +33,10 @@ public:
     virtual void* take(const video::CapturedFrame& frame) = 0;
     /// Any thread: the end of a frame from `take`, encoded or not.
     virtual void release(void* frame) = 0;
-    /// Encode thread.
+    /// Encode thread. `unit_us`: the capture time of the unit in `out`, which
+    /// is an earlier frame's when the encoder keeps frames in flight.
     virtual bool encode(video::Encoder& encoder, void* frame, uint64_t capture_us,
-                        video::EncodedPacket& out) = 0;
+                        video::EncodedPacket& out, uint64_t* unit_us) = 0;
 
     /// Capture thread: keep this frame for the poster (12-STREAMING.md 3.7,
     /// F6: a copy that is submitted, no wait).

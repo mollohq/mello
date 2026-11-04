@@ -227,11 +227,11 @@ private:
     // F3: 30 fps, then a pause, under overload. Kept over a switch.
     ReplayLoad load_;
 
-    // Encode thread only: the rate the encoder runs at now, the frames since
-    // the last keyframe (a 1 s GOP at any rate), and the window of the
-    // replay's own overload check.
+    // Encode thread only: the rate the encoder runs at now, the capture time
+    // of the last keyframe asked for or seen (a 1 s GOP at any rate), and the
+    // window of the replay's own overload check.
     uint32_t applied_fps_ = 0;
-    uint32_t frames_since_key_ = 0;
+    uint64_t last_key_us_ = 0;
     double encode_ms_mean_ = 0.0;
     uint64_t window_offered_ = 0;
     uint64_t window_drops_ = 0;

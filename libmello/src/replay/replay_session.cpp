@@ -147,7 +147,7 @@ bool ReplaySession::open_capture(std::shared_ptr<video::CaptureManager> manager,
     encode_fps_ = fps;
     // The encode thread's own state, before it starts.
     applied_fps_ = fps;
-    frames_since_key_ = 0;
+    last_key_us_ = 0;
     encode_ms_mean_ = 0.0;
     window_offered_ = frames_offered_.load(std::memory_order_relaxed);
     window_drops_ = queue_drops_.load(std::memory_order_relaxed);
@@ -391,16 +391,25 @@ void ReplaySession::encode_loop() {
             encoder_->set_framerate(wanted);
             applied_fps_ = wanted;
         }
-        // A 1 s GOP at any rate: the encoder's GOP is in frames of the full
-        // rate, so at 30 fps an IDR comes every 30 frames from here.
+        // A 1 s GOP at any rate, in capture time: the encoder's GOP is in
+        // frames of the full rate, so at 30 fps an IDR comes every 30 frames
+        // from here. The time counts at the submit: an encoder with frames in
+        // flight (VideoToolbox's recording) gives its units later, and a
+        // count of the units it gave would put the IDR that many frames late.
+        const uint64_t half_frame_us = 500'000 / std::max<uint32_t>(applied_fps_, 1);
+        const bool gop_due = last_key_us_ == 0 || job.capture_us + half_frame_us >= last_key_us_ + 1'000'000;
         if (keyframe_wanted_.exchange(false, std::memory_order_relaxed) ||
-            video_ring_.take_keyframe_request() || frames_since_key_ >= applied_fps_) {
+            video_ring_.take_keyframe_request() || gop_due) {
             encoder_->request_keyframe();
+            last_key_us_ = job.capture_us;
         }
         const auto t0 = std::chrono::steady_clock::now();
         video::EncodedPacket packet{};
         ReplayFrames* frames = frames_.get();  // set before this thread starts, cleared after it ends
-        const bool encode_ok = frames->encode(*encoder_, job.frame, job.capture_us, packet);
+        // An encoder with frames in flight (VideoToolbox's recording) gives
+        // an earlier frame's unit: the frames path says its capture time.
+        uint64_t unit_us = job.capture_us;
+        const bool encode_ok = frames->encode(*encoder_, job.frame, job.capture_us, packet, &unit_us);
         frames->release(job.frame);
         if (!encode_ok) {
             // F5: a replay fault turns the replay off. It never touches the
@@ -414,9 +423,10 @@ void ReplaySession::encode_loop() {
         // About 1 s of history, as the stream's mean (video_pipeline.cpp).
         encode_ms_mean_ += (encode_ms - encode_ms_mean_) / 60.0;
         if (packet.data.empty()) continue;
-        frames_since_key_ = packet.is_keyframe ? 1 : frames_since_key_ + 1;
+        // An IDR the encoder made itself (its own GOP) starts the second too.
+        if (packet.is_keyframe && unit_us > last_key_us_) last_key_us_ = unit_us;
         const uint64_t encoded = frames_encoded_.fetch_add(1, std::memory_order_relaxed) + 1;
-        video_ring_.push(std::move(packet.data), job.capture_us, packet.is_keyframe);
+        video_ring_.push(std::move(packet.data), unit_us, packet.is_keyframe);
         if (encoded % 60 == 0) check_own_load();
     }
 }

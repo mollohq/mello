@@ -39,8 +39,13 @@ public:
     void release(void* frame) override {
         if (frame) CVPixelBufferRelease(static_cast<CVPixelBufferRef>(frame));
     }
-    bool encode(video::Encoder& encoder, void* frame, uint64_t capture_us, video::EncodedPacket& out) override {
-        return encoder.encode(frame, capture_us, out);
+    bool encode(video::Encoder& encoder, void* frame, uint64_t capture_us, video::EncodedPacket& out,
+                uint64_t* unit_us) override {
+        // VideoToolbox's recording keeps frames in flight: the unit is an
+        // earlier frame's, at its own presentation time (the capture time).
+        const bool ok = encoder.encode(frame, capture_us, out);
+        if (unit_us) *unit_us = out.timestamp_us != 0 ? out.timestamp_us : capture_us;
+        return ok;
     }
 
     void keep_poster(const video::CapturedFrame& frame) override {
