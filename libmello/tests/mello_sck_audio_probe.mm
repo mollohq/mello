@@ -334,7 +334,13 @@ static int fake_sound(double hz) {
     static Tone tone;
     tone.hz = hz;
     if (!play_tone(&tone)) return 1;
-    for (;;) pause();
+    // A tone must never outlive its parent (the probe or the fake game),
+    // however that parent ends: it watches the parent and ends with it.
+    const pid_t parent = getppid();
+    for (;;) {
+        sleep(1);
+        if (getppid() != parent) return 0;
+    }
 }
 
 static int fake_game(const char* self, double hz) {
