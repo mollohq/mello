@@ -440,6 +440,12 @@ TEST(ReplayFixture, DISABLED_MakeTheH264Fixture) {
     ASSERT_TRUE(f.good());
     std::printf("[ ReplayFixture ] %s: %zu bytes\n", file.string().c_str(), out.size());
 }
+#endif  // _WIN32
+
+// The replay session: Windows and macOS.
+#if defined(_WIN32) || defined(__APPLE__)
+#include "replay/replay_session.hpp"
+#include "video/capture_reference.hpp"
 
 namespace {
 
@@ -468,8 +474,8 @@ mello::video::CaptureSourceDesc write_reference_clip(const fs::path& yuv) {
 
 // The whole replay on this PC's encoder: a reference clip through the
 // capture manager, the recording encoder and the rings, then a capture.
-// Needs a D3D11 device with a video processor and an encoder, so it skips
-// under CI like the other pipeline tests.
+// Needs a graphics device and a hardware encoder, so it skips under CI like
+// the other pipeline tests.
 TEST(ReplaySession, AClipOfTheReferenceSourceHasItsFramesAndALivePoster) {
     if (std::getenv("CI")) GTEST_SKIP() << "hardware-dependent test skipped under CI";
     TempDir dir;
@@ -594,6 +600,9 @@ TEST(ReplaySession, TheReferenceGameAudioIsInTheClipAndReadsBack) {
             << "the reference audio is at its capture times";
     }
 }
+#endif  // _WIN32 || __APPLE__
+
+#ifdef _WIN32
 
 // CLIPS.md 15.3; 14-VIDEO-PIPELINE.md 4.8: a stream of the same game starts, and the
 // replay moves onto the stream's capture and keeps recording while the

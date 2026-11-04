@@ -1,9 +1,13 @@
 #include "context.hpp"
+#include "audio/shared_game_audio.hpp"
 #include "util/log.hpp"
 
-#ifdef _WIN32
-#include "audio/shared_game_audio.hpp"
+#if defined(_WIN32) || (defined(__APPLE__) && !defined(MELLO_IOS))
+#define MELLO_HAS_REPLAY 1
 #include "replay/replay_session.hpp"
+#endif
+
+#ifdef _WIN32
 #include <Windows.h>
 
 static bool s_seh_init_ok = false;
@@ -44,7 +48,6 @@ bool Context::initialize_inner() {
     return true;
 }
 
-#ifdef _WIN32
 std::shared_ptr<audio::SharedGameAudio> Context::game_audio(uint32_t pid) {
     if (pid == 0) return nullptr;
     std::lock_guard<std::mutex> lock(game_audio_mutex_);
@@ -60,10 +63,9 @@ std::shared_ptr<audio::SharedGameAudio> Context::game_audio(uint32_t pid) {
     if (opened) game_audio_[pid] = opened;
     return opened;
 }
-#endif
 
 void Context::shutdown() {
-#ifdef _WIN32
+#ifdef MELLO_HAS_REPLAY
     // Before the audio: the replay reads the clip buffer of the voice.
     if (auto replay = exchange_replay(nullptr)) replay->stop();
 #endif

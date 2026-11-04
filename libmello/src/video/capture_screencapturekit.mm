@@ -1,4 +1,5 @@
 #include "capture_screencapturekit.hpp"
+#include "capture_reference.hpp"
 
 #ifdef __APPLE__
 
@@ -34,6 +35,12 @@ static constexpr const char* TAG = "video/capture-sck";
     if (!self.running || !self.running->load()) return;
 
     if (type == SCStreamOutputTypeScreen && self.videoCallback) {
+        CFArrayRef attachments = CMSampleBufferGetSampleAttachmentsArray(buffer, false);
+        if (attachments && CFArrayGetCount(attachments) > 0 && self.owner) {
+            NSDictionary* info = (__bridge NSDictionary*)CFArrayGetValueAtIndex(attachments, 0);
+            NSNumber* status = info[SCStreamFrameInfoStatus];
+            if (status) self.owner->note_frame_status(status.intValue);
+        }
         CVPixelBufferRef pixelBuffer = CMSampleBufferGetImageBuffer(buffer);
         if (!pixelBuffer) return;
         CMTime pts = CMSampleBufferGetPresentationTimeStamp(buffer);
@@ -145,6 +152,11 @@ bool SCKCapture::initialize(const GraphicsDevice& device, const CaptureSourceDes
     void* hwnd = desc.hwnd;
     uint32_t pid = desc.pid;
     uint32_t monitor_idx = desc.monitor_index;
+    const bool window_only = desc.window_only;
+    const uint32_t output_height = desc.output_height;
+    window_only_ = desc.window_only;
+    capture_audio_ = desc.capture_audio;
+    __block bool display_fallback = false;
 
     MELLO_LOG_INFO(TAG, "[init:1] mode=%d hwnd=%p pid=%u monitor=%u",
         (int)mode, hwnd, pid, monitor_idx);
@@ -202,7 +214,14 @@ bool SCKCapture::initialize(const GraphicsDevice& device, const CaptureSourceDes
                         }
                     }
 
+                    if (!target && window_only) {
+                        // A game clip records the game window or nothing
+                        // (CLIPS.md 15.3).
+                        MELLO_LOG_WARN(TAG, "Window %u not in SCK list: no capture (window only)", target_wid);
+                        return;
+                    }
                     if (!target) {
+                        display_fallback = true;
                         MELLO_LOG_WARN(TAG, "Window %u not in SCK list, falling back to primary display", target_wid);
                         if (content.displays.count == 0) return;
                         SCDisplay* display = content.displays[0];
@@ -242,13 +261,29 @@ bool SCKCapture::initialize(const GraphicsDevice& device, const CaptureSourceDes
                     break;
                 }
                 case CaptureMode::Reference:
-                    // The reference source is Windows only; the factory
+                    // The reference source has its own class; the factory
                     // never builds an SCKCapture for it.
-                    MELLO_LOG_ERROR(TAG, "Reference clip capture is not available on macOS");
+                    MELLO_LOG_ERROR(TAG, "Reference clip capture is not an SCKCapture");
+                    return;
+                case CaptureMode::PipeWire:
+                    MELLO_LOG_ERROR(TAG, "PipeWire capture is Linux only");
                     return;
             }
 
             if (!filter) return;
+            // The output size in pixels at the source's aspect, when the
+            // caller asks for one (the game clip quality): the window's points
+            // times its scale, fitted to the height. ScreenCaptureKit scales
+            // on the GPU, so the encoder gets frames at its own size.
+            if (output_height > 0 && w > 0 && h > 0) {
+                const float scale = [SCShareableContent infoForFilter:filter].pointPixelScale;
+                const double pw = w * (scale > 0 ? scale : 1.0f);
+                const double ph = h * (scale > 0 ? scale : 1.0f);
+                const double out_h = std::min<double>(ph, output_height);
+                w = (uint32_t)(pw * out_h / ph) & ~1u;
+                h = (uint32_t)out_h & ~1u;
+                MELLO_LOG_INFO(TAG, "[init:5] output %ux%u (scale %.1f, %.0fx%.0f pixels)", w, h, scale, pw, ph);
+            }
             retained_filter = (__bridge_retained void*)filter;
             MELLO_LOG_INFO(TAG, "[init:5] filter created %ux%u", w, h);
             ok = true;
@@ -259,9 +294,27 @@ bool SCKCapture::initialize(const GraphicsDevice& device, const CaptureSourceDes
 
     width_  = w;
     height_ = h;
+    display_fallback_ = display_fallback;
     filter_ = retained_filter;
     MELLO_LOG_INFO(TAG, "[init:6] initialize done %ux%u", width_, height_);
     return true;
+}
+
+void SCKCapture::note_frame_status(int status) {
+    frame_status_.store(status, std::memory_order_relaxed);
+}
+
+CaptureState SCKCapture::state() const {
+    const int status = frame_status_.load(std::memory_order_relaxed);
+    if (status < 0) return CaptureState::WaitingForGame;
+    switch ((SCFrameStatus)status) {
+        case SCFrameStatusBlank:
+        case SCFrameStatusSuspended:
+        case SCFrameStatusStopped:
+            return CaptureState::WaitingMinimized;
+        default:
+            return CaptureState::Capturing;
+    }
 }
 
 void SCKCapture::set_audio_callback(AudioCallback cb) {
@@ -287,6 +340,8 @@ bool SCKCapture::start(uint32_t target_fps, FrameCallback callback) {
 
     uint32_t w = width_, h = height_;
     FrameCallback vcb = callback_;
+    const bool want_audio = capture_audio_;
+    const bool want_window_only = window_only_;
     SCKCapture* self_ptr = this;
     std::atomic<bool>* running_ptr = &running_;
     void* filt = filter_;
@@ -301,13 +356,16 @@ bool SCKCapture::start(uint32_t target_fps, FrameCallback callback) {
             config.minimumFrameInterval = CMTimeMake(1, target_fps);
             config.pixelFormat = kCVPixelFormatType_32BGRA;
             config.showsCursor = NO;
-            config.queueDepth  = 3;
+            // A consumer that encodes on its own thread holds up to two
+            // frames (the replay), and the poster holds one: room for them.
+            config.queueDepth  = want_window_only ? 6 : 3;
 
-            // Always on: SCStream fixes capturesAudio at creation, but
-            // mello_stream_start_audio() runs after the host stream is already
-            // up. Enabling it later is impossible, so enable it always and let
-            // the audio callback decide whether the samples go anywhere.
-            config.capturesAudio = YES;
+            // Always on for a stream: SCStream fixes capturesAudio at creation,
+            // but mello_stream_start_audio() runs after the host stream is
+            // already up. Enabling it later is impossible, so enable it always
+            // and let the audio callback decide whether the samples go
+            // anywhere. The game clip replay takes its sound elsewhere.
+            config.capturesAudio = want_audio ? YES : NO;
             config.excludesCurrentProcessAudio = YES;
             config.channelCount = 2;
             config.sampleRate = 48000;
@@ -334,7 +392,9 @@ bool SCKCapture::start(uint32_t target_fps, FrameCallback callback) {
             }
 
             dispatch_queue_t aq = dispatch_queue_create("mello.capture.audio", DISPATCH_QUEUE_SERIAL);
-            [stream addStreamOutput:(id<SCStreamOutput>)del type:SCStreamOutputTypeAudio sampleHandlerQueue:aq error:&err];
+            if (want_audio) {
+                [stream addStreamOutput:(id<SCStreamOutput>)del type:SCStreamOutputTypeAudio sampleHandlerQueue:aq error:&err];
+            }
             if (err) {
                 MELLO_LOG_WARN(TAG, "addStreamOutput(audio) failed: %s — continuing without game audio",
                     [[err localizedDescription] UTF8String]);
@@ -425,8 +485,8 @@ bool SCKCapture::get_cursor(CursorData& out) {
 
 // Factory function — creates the appropriate capture source for macOS
 std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc& desc) {
-    // The reference clip source (streaming quality gate) is Windows only.
-    if (desc.mode == CaptureMode::Reference) return nullptr;
+    // The reference clip (the stream gate, the game clip replay's tests).
+    if (desc.mode == CaptureMode::Reference) return std::make_unique<ReferenceCapture>();
     return std::make_unique<SCKCapture>();
 }
 

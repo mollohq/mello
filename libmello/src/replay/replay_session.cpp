@@ -1,13 +1,12 @@
-#ifdef _WIN32
 #include "replay_session.hpp"
 #include "replay_audio_mix.hpp"
+#include "replay_frames.hpp"
 #include "replay_mux.hpp"
 #include "../audio/audio_pipeline.hpp"
 #include "../audio/shared_game_audio.hpp"
 #include "../util/log.hpp"
 #include "../video/encoder_factory.hpp"
 #include "../video/video_pipeline.hpp"
-#include "../video/video_preprocessor.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -61,13 +60,11 @@ bool ReplaySession::start_impl(const ReplayConfig& config, std::string* error) {
         game_key_ = config_.source->mode == video::CaptureMode::Reference ? kReferenceKey
                                                                           : config_.pid;
     } else {
-        if (!config_.hwnd) {
+        if (!config_.window) {
             set_error(error, "no game window");
             return false;
         }
-        DWORD pid = 0;
-        GetWindowThreadProcessId(static_cast<HWND>(config_.hwnd), &pid);
-        game_key_ = config_.pid != 0 ? config_.pid : static_cast<uint32_t>(pid);
+        game_key_ = config_.pid != 0 ? config_.pid : window_owner_pid(config_.window);
     }
 
     std::shared_ptr<video::CaptureManager> own = make_own_capture(error);
@@ -96,20 +93,20 @@ bool ReplaySession::start_impl(const ReplayConfig& config, std::string* error) {
         return false;
     }
 
-    // The game audio: process loopback of the game's process tree, the one
-    // capture of the game that a stream shares (F7). Never endpoint loopback:
-    // it records the crew voice and every other app twice (CLIPS.md 15.12).
+    // The game audio: process loopback (Windows) or a process tap (macOS) of
+    // the game's process tree, the one capture of the game that a stream
+    // shares (F7). Never the whole mix: it records the crew voice and every
+    // other app twice (CLIPS.md 15.12).
     if (config_.pid != 0) {
         game_audio_ = config_.game_audio && config_.game_audio->pid() == config_.pid
                           ? config_.game_audio
                           : audio::SharedGameAudio::open(config_.pid);
         if (game_audio_) {
-            game_audio_consumer_ =
-                game_audio_->add([this](const int16_t* s, size_t n) { on_game_audio(s, n); });
+            game_audio_consumer_ = game_audio_->add(
+                [this](const int16_t* s, size_t n, int64_t capture_us) { on_game_audio(s, n, capture_us); });
             has_game_audio_ = game_audio_consumer_ != 0;
         } else {
-            MELLO_LOG_WARN(TAG, "no process loopback for pid %u: clips have no game audio",
-                           config_.pid);
+            MELLO_LOG_WARN(TAG, "no game audio capture for pid %u: clips have no game audio", config_.pid);
         }
     }
 
@@ -121,37 +118,17 @@ bool ReplaySession::start_impl(const ReplayConfig& config, std::string* error) {
 }
 
 std::shared_ptr<video::CaptureManager> ReplaySession::make_own_capture(std::string* error) const {
-    // WGC on the game window, and nothing else. No resolve_capture_target: it
-    // would turn a window that cannot carry a stream into its process and
-    // run the whole ladder, monitor capture included (CLIPS.md 15.3).
-    video::CaptureSourceDesc desc{};
-    if (config_.source) {
-        desc = *config_.source;
-    } else {
-        desc.mode = video::CaptureMode::Window;
-        desc.hwnd = config_.hwnd;
-    }
-    video::GraphicsDevice device = video::create_d3d11_device();
-    if (!device.handle) {
-        set_error(error, "no graphics device");
-        return nullptr;
-    }
-    auto manager = video::CaptureManager::create_from(device, video::create_capture_source(desc), desc);
-    if (!manager) set_error(error, "the game window cannot be captured");
-    return manager;
+    // The game window, and nothing else (CLIPS.md 15.3), or the test source.
+    if (config_.source) return make_source_capture(*config_.source, error);
+    return make_window_capture(config_.window, config_.height, error);
 }
 
 bool ReplaySession::open_capture(std::shared_ptr<video::CaptureManager> manager, bool own,
                                  uint32_t fps, std::string* error) {
-    // The preprocessor and the encoder live on the manager's device: the
-    // capture's textures are on it (zero copy, 14-VIDEO-PIPELINE.md 2.2).
-    preprocessor_ = std::make_unique<video::VideoPreprocessor>();
-    if (!preprocessor_->initialize(manager->device(), manager->width(), manager->height(), enc_w_,
-                                   enc_h_)) {
-        set_error(error, "no video processor");
-        preprocessor_.reset();
-        return false;
-    }
+    // The frames path and the encoder live on the manager's device: the
+    // capture's frames are on it (zero copy, 14-VIDEO-PIPELINE.md 2.2).
+    std::shared_ptr<ReplayFrames> frames = make_replay_frames(*manager, enc_w_, enc_h_, error);
+    if (!frames) return false;
 
     // The recording encoder: a 1 s GOP, the quality tuning (14-VIDEO-PIPELINE.md 6.8).
     video::EncoderConfig enc{};
@@ -164,9 +141,9 @@ bool ReplaySession::open_capture(std::shared_ptr<video::CaptureManager> manager,
     encoder_ = video::create_best_encoder(manager->device(), enc);
     if (!encoder_) {
         set_error(error, "no hardware encoder");
-        preprocessor_.reset();
         return false;
     }
+    std::atomic_store(&frames_, std::move(frames));
     encode_fps_ = fps;
     // The encode thread's own state, before it starts.
     applied_fps_ = fps;
@@ -231,20 +208,20 @@ bool ReplaySession::close_capture() {
     running_.store(false, std::memory_order_release);
     queue_cv_.notify_all();
     if (encode_thread_.joinable()) encode_thread_.join();
+    const std::shared_ptr<ReplayFrames> frames = std::atomic_load(&frames_);
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
+        for (size_t i = 0; i < queue_count_; ++i) {
+            if (frames) frames->release(queue_[(queue_head_ + i) % kQueueCap].frame);
+        }
         queue_count_ = 0;
     }
     if (encoder_) {
         encoder_->shutdown();
         encoder_.reset();
     }
-    preprocessor_.reset();
-    {
-        std::lock_guard<std::mutex> lock(poster_mutex_);
-        poster_staging_.Reset();
-        poster_ready_ = false;
-    }
+    // A capture that writes its poster now keeps its own reference.
+    std::atomic_store(&frames_, std::shared_ptr<ReplayFrames>());
     std::atomic_store(&manager_, std::shared_ptr<video::CaptureManager>());
     return true;
 }
@@ -278,8 +255,8 @@ void ReplaySession::leave_stream() {
     following_.store(false, std::memory_order_release);
     if (!close_capture()) return;
     if (stopped_.load(std::memory_order_acquire)) return;
-    // Back to WGC window. The stream's capture, the hook too, stops with the
-    // stream (14-VIDEO-PIPELINE.md 4.8).
+    // Back to the own window capture. The stream's capture, the hook too,
+    // stops with the stream (14-VIDEO-PIPELINE.md 4.8).
     std::string error;
     std::shared_ptr<video::CaptureManager> own = make_own_capture(&error);
     if (!own || !open_capture(std::move(own), true, config_.fps, &error)) {
@@ -337,8 +314,13 @@ void ReplaySession::on_frame(const video::CapturedFrame& frame) {
     }
     monitor_frames_.store(false, std::memory_order_relaxed);
 
+    // The capture thread is the only caller while the replay is attached:
+    // the frames path does not change under it.
+    ReplayFrames* frames = frames_.get();
+    if (!frames) return;
+
     // The poster takes the first frame after the press, whatever the rate.
-    if (poster_wanted_.exchange(false, std::memory_order_acq_rel)) copy_poster_frame(frame.texture);
+    if (poster_wanted_.exchange(false, std::memory_order_acq_rel)) frames->keep_poster(frame);
 
     // F3: after 60 s with no overload, one level back up. Out of a pause the
     // next frame starts a new segment.
@@ -359,21 +341,24 @@ void ReplaySession::on_frame(const video::CapturedFrame& frame) {
         keyframe_wanted_.store(true, std::memory_order_relaxed);
     }
 
-    const auto result = preprocessor_->convert(frame.texture, nullptr);
-    if (!result.texture) return;
+    void* taken = frames->take(frame);
+    if (!taken) return;
 
+    void* dropped = nullptr;
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         if (queue_count_ == kQueueCap) {
             // Newest wins. The dropped frame was never encoded, so no later
             // frame refers to it: the clip shows the frame before it longer.
+            dropped = queue_[queue_head_].frame;
             queue_head_ = (queue_head_ + 1) % kQueueCap;
             --queue_count_;
             queue_drops_.fetch_add(1, std::memory_order_relaxed);
         }
-        queue_[(queue_head_ + queue_count_) % kQueueCap] = Job{result.texture, frame.capture_us};
+        queue_[(queue_head_ + queue_count_) % kQueueCap] = Job{taken, frame.capture_us};
         ++queue_count_;
     }
+    if (dropped) frames->release(dropped);
     frames_offered_.fetch_add(1, std::memory_order_relaxed);
     queue_cv_.notify_one();
 }
@@ -414,7 +399,10 @@ void ReplaySession::encode_loop() {
         }
         const auto t0 = std::chrono::steady_clock::now();
         video::EncodedPacket packet{};
-        if (!encoder_->encode(job.texture, packet)) {
+        ReplayFrames* frames = frames_.get();  // set before this thread starts, cleared after it ends
+        const bool encode_ok = frames->encode(*encoder_, job.frame, job.capture_us, packet);
+        frames->release(job.frame);
+        if (!encode_ok) {
             // F5: a replay fault turns the replay off. It never touches the
             // capture that a stream may share.
             MELLO_LOG_ERROR(TAG, "encode failed: the replay is off");
@@ -459,13 +447,15 @@ void ReplaySession::check_own_load() {
     }
 }
 
-void ReplaySession::on_game_audio(const int16_t* samples, size_t count) {
-    // 48 kHz stereo. The time of the first frame: the arrival less the length
-    // of the packet, as the stream's game audio has it (CLIPS.md 15.4).
+void ReplaySession::on_game_audio(const int16_t* samples, size_t count, int64_t capture_us) {
+    // 48 kHz stereo. The time of the first frame: the capture's own time when
+    // it has one (a process tap), else the arrival less the length of the
+    // packet, as the stream's game audio has it (CLIPS.md 15.4).
     const size_t frames = count / ReplayAudioRing::kChannels;
     if (frames == 0) return;
-    const uint64_t capture_us = now_us() - frames * 1'000'000 / ReplayAudioRing::kRate;
-    audio_ring_.push(samples, frames, capture_us);
+    const uint64_t at = capture_us > 0 ? static_cast<uint64_t>(capture_us)
+                                       : now_us() - frames * 1'000'000 / ReplayAudioRing::kRate;
+    audio_ring_.push(samples, frames, at);
 }
 
 void ReplaySession::on_timed_audio(const float* samples, uint32_t frames, uint32_t channels,
@@ -490,63 +480,6 @@ bool ReplaySession::reference_info(video::ReferenceInfo& out) const {
     return true;
 }
 
-void ReplaySession::copy_poster_frame(ID3D11Texture2D* texture) {
-    if (!texture) return;
-    D3D11_TEXTURE2D_DESC desc{};
-    texture->GetDesc(&desc);
-    if (desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM && desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) {
-        return;  // HDR or another format: the poster comes from the MP4
-    }
-    Microsoft::WRL::ComPtr<ID3D11Device> device;
-    texture->GetDevice(&device);
-    D3D11_TEXTURE2D_DESC staging_desc{};
-    staging_desc.Width = desc.Width;
-    staging_desc.Height = desc.Height;
-    staging_desc.MipLevels = 1;
-    staging_desc.ArraySize = 1;
-    staging_desc.Format = desc.Format;
-    staging_desc.SampleDesc.Count = 1;
-    staging_desc.Usage = D3D11_USAGE_STAGING;
-    staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> staging;
-    if (FAILED(device->CreateTexture2D(&staging_desc, nullptr, &staging))) return;
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
-    device->GetImmediateContext(&context);
-    // A submit, no wait (12-STREAMING.md 3.7, F6). The map on the capture's caller waits.
-    context->CopyResource(staging.Get(), texture);
-    {
-        std::lock_guard<std::mutex> lock(poster_mutex_);
-        poster_staging_ = staging;
-        poster_ready_ = true;
-    }
-    poster_cv_.notify_all();
-}
-
-bool ReplaySession::write_live_poster(const std::filesystem::path& poster,
-                                      std::chrono::milliseconds wait) {
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> staging;
-    {
-        std::unique_lock<std::mutex> lock(poster_mutex_);
-        if (!poster_cv_.wait_for(lock, wait, [this] { return poster_ready_; })) return false;
-        staging = poster_staging_;
-        poster_staging_.Reset();
-        poster_ready_ = false;
-    }
-    if (!staging) return false;
-    D3D11_TEXTURE2D_DESC desc{};
-    staging->GetDesc(&desc);
-    Microsoft::WRL::ComPtr<ID3D11Device> device;
-    staging->GetDevice(&device);
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
-    device->GetImmediateContext(&context);
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) return false;
-    const bool ok = write_poster_jpeg(static_cast<const uint8_t*>(mapped.pData), desc.Width,
-                                      desc.Height, mapped.RowPitch, poster);
-    context->Unmap(staging.Get(), 0);
-    return ok;
-}
-
 bool ReplaySession::capture(float seconds, audio::AudioPipeline* voice,
                             const std::filesystem::path& mp4, const std::filesystem::path& poster,
                             ReplayClip* out) {
@@ -557,17 +490,15 @@ bool ReplaySession::capture(float seconds, audio::AudioPipeline* voice,
 
     ReplayVideoRing::Window video;
     ReplayAudioRing::Window game;
+    std::shared_ptr<ReplayFrames> frames;
     {
         std::lock_guard<std::mutex> control(control_mutex_);
         if (!manager_ || !running_.load(std::memory_order_acquire)) {
             MELLO_LOG_WARN(TAG, "capture: the replay is not running");
             return false;
         }
-        {
-            std::lock_guard<std::mutex> lock(poster_mutex_);
-            poster_ready_ = false;
-            poster_staging_.Reset();
-        }
+        frames = std::atomic_load(&frames_);
+        if (frames) frames->drop_poster();
         poster_wanted_.store(true, std::memory_order_release);
         video_ring_.flush();
         audio_ring_.flush();
@@ -635,7 +566,7 @@ bool ReplaySession::capture(float seconds, audio::AudioPipeline* voice,
     if (!ok) return false;
 
     // 5. The poster: the frame after the press, else the last IDR of the clip.
-    bool live = write_live_poster(poster, kPosterWait);
+    bool live = frames && frames->write_poster(poster, kPosterWait);
     if (!live && !write_poster_from_mp4(mp4, last_idr_us, poster)) {
         MELLO_LOG_WARN(TAG, "capture: no poster");
     }
@@ -669,4 +600,3 @@ ReplaySession::Stats ReplaySession::stats() const {
 }
 
 }  // namespace mello::replay
-#endif

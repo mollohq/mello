@@ -1,6 +1,4 @@
-#ifdef _WIN32
 #include "shared_game_audio.hpp"
-#include "capture_wasapi_loopback.hpp"
 #include "../util/log.hpp"
 #include <algorithm>
 
@@ -15,22 +13,8 @@ SharedGameAudio::SharedGameAudio(Key, uint32_t pid) : pid_(pid) {}
 std::shared_ptr<SharedGameAudio> SharedGameAudio::open(uint32_t pid) {
     if (pid == 0) return nullptr;
     auto shared = std::make_shared<SharedGameAudio>(Key{}, pid);
-    auto capture = std::make_unique<WasapiLoopbackCapture>();
-    // initialize_scoped falls back to endpoint loopback when process loopback
-    // fails; that fallback is refused here.
-    if (!capture->initialize_scoped(LoopbackScope::IncludeProcessTree, pid) ||
-        capture->scope() != LoopbackScope::IncludeProcessTree) {
-        MELLO_LOG_WARN(TAG, "no process loopback for pid %u", pid);
-        return nullptr;
-    }
-    SharedGameAudio* raw = shared.get();
-    if (!capture->start([raw](const int16_t* s, size_t n) { raw->deliver(s, n); })) {
-        MELLO_LOG_WARN(TAG, "process loopback for pid %u did not start", pid);
-        return nullptr;
-    }
-    shared->capture_ = std::move(capture);
-    MELLO_LOG_INFO(TAG, "process loopback for pid %u started (%u Hz, %u ch)", pid,
-                   shared->capture_->sample_rate(), shared->capture_->channels());
+    shared->capture_ = open_game_audio_capture(pid, shared.get());
+    if (!shared->capture_) return nullptr;
     return shared;
 }
 
@@ -41,9 +25,8 @@ std::shared_ptr<SharedGameAudio> SharedGameAudio::for_test(uint32_t pid) {
 SharedGameAudio::~SharedGameAudio() {
     // The capture thread stops before the consumer list goes.
     if (capture_) {
-        capture_->stop();
         capture_.reset();
-        MELLO_LOG_INFO(TAG, "process loopback for pid %u stopped", pid_);
+        MELLO_LOG_INFO(TAG, "game audio capture for pid %u stopped", pid_);
     }
 }
 
@@ -62,10 +45,16 @@ void SharedGameAudio::remove(ConsumerId id) {
                      consumers_.end());
 }
 
-void SharedGameAudio::deliver(const int16_t* samples, size_t count) {
+void SharedGameAudio::deliver(const int16_t* samples, size_t count, int64_t capture_us) {
     std::lock_guard<std::mutex> lock(mutex_);
-    for (const auto& consumer : consumers_) consumer.second(samples, count);
+    for (const auto& consumer : consumers_) consumer.second(samples, count, capture_us);
 }
 
-}  // namespace mello::audio
+#if !defined(_WIN32) && !(defined(__APPLE__) && !defined(MELLO_IOS))
+std::unique_ptr<GameAudioCapture> open_game_audio_capture(uint32_t pid, SharedGameAudio*) {
+    MELLO_LOG_WARN(TAG, "no game audio capture for pid %u on this platform", pid);
+    return nullptr;
+}
 #endif
+
+}  // namespace mello::audio

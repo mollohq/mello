@@ -58,6 +58,17 @@ struct CaptureSourceDesc {
     bool allow_hook = false;
     /// Reference mode only: the clip to play.
     ReferenceClip reference{};
+    /// Window mode only (macOS): no capture at all when the window is not
+    /// there. Without it ScreenCaptureKit falls back to the main display,
+    /// which a game clip must never record (CLIPS.md 15.3).
+    bool window_only = false;
+    /// ScreenCaptureKit only: the stream's own audio (12-STREAMING.md 9.2).
+    /// The game clip replay takes the game's sound from a process tap.
+    bool capture_audio = true;
+    /// ScreenCaptureKit only: deliver frames this high, in pixels, at the
+    /// source's aspect (the window's pixels, not its points). 0: the source
+    /// size in points, as a stream has it. The clip quality's height.
+    uint32_t output_height = 0;
     /// PipeWire mode only: the portal's PipeWire socket (the capture keeps a
     /// duplicate, the caller keeps its own) and the stream's node id.
     int      pipewire_fd = -1;

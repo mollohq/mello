@@ -192,6 +192,9 @@ mello_discover_tests(mello_procenum_tests)
 # gate are Windows only (D3D11). The loopback needs the Cisco OpenH264 DLL,
 # which scripts/stream-gate.sh fetches into third_party/openh264; it is
 # copied next to the tests when present, else the loopback skips.
+if(APPLE AND NOT IOS)
+    target_sources(mello_tests PRIVATE test_capture_manager.cpp test_encoder_videotoolbox.cpp)
+endif()
 if(WIN32 AND NOT IOS)
     target_sources(mello_tests PRIVATE test_capture_reference.cpp test_capture_manager.cpp)
     set(_oh264_dll "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/openh264/openh264-2.6.0-win64.dll")

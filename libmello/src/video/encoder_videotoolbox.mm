@@ -120,20 +120,29 @@ bool VTEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& co
 
     @autoreleasepool {
         VTCompressionSessionRef sess = nullptr;
+        const bool recording = config.intent == EncoderIntent::Recording;
+
+        // Hardware only (14-VIDEO-PIPELINE.md 6.7): VideoToolbox would pick
+        // a software encoder where the media engine cannot take the session.
+        const void* spec_keys[] = {kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder};
+        const void* spec_values[] = {kCFBooleanTrue};
+        CFDictionaryRef spec = CFDictionaryCreate(kCFAllocatorDefault, spec_keys, spec_values, 1,
+            &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
 
         OSStatus status = VTCompressionSessionCreate(
             kCFAllocatorDefault,
             (int32_t)width_, (int32_t)height_,
             kCMVideoCodecType_H264,
-            nullptr, // encoderSpecification
+            spec,
             nullptr, // sourceImageBufferAttributes (accepts any CVPixelBuffer)
             kCFAllocatorDefault,
             compress_callback,
             this,
             &sess);
 
+        CFRelease(spec);
         if (status != noErr) {
-            MELLO_LOG_ERROR(TAG, "VTCompressionSessionCreate failed: %d", (int)status);
+            MELLO_LOG_ERROR(TAG, "VTCompressionSessionCreate failed: %d (no hardware H.264 encoder?)", (int)status);
             return false;
         }
 
@@ -141,17 +150,20 @@ bool VTEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& co
         VTSessionSetProperty(sess, kVTCompressionPropertyKey_RealTime, kCFBooleanTrue);
         VTSessionSetProperty(sess, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
 
+        // The recording intent (14-VIDEO-PIPELINE.md 6.8): High at the level
+        // the size needs. The stream keeps High 5.1.
         status = VTSessionSetProperty(sess, kVTCompressionPropertyKey_ProfileLevel,
-            kVTProfileLevel_H264_High_5_1);
+            recording ? kVTProfileLevel_H264_High_AutoLevel : kVTProfileLevel_H264_High_5_1);
         if (status != noErr) {
             MELLO_LOG_ERROR(TAG,
-                "VideoToolbox: required H264 profile=High level=5.1 rejected: %d",
-                (int)status);
+                "VideoToolbox: required H264 profile=High (%s) rejected: %d",
+                recording ? "auto level" : "level 5.1", (int)status);
             VTCompressionSessionInvalidate(sess);
             CFRelease(sess);
             return false;
         }
-        MELLO_LOG_INFO(TAG, "VideoToolbox: accepted H264 profile=High level=5.1");
+        MELLO_LOG_INFO(TAG, "VideoToolbox: accepted H264 profile=High %s, intent %s",
+            recording ? "auto level" : "level 5.1", recording ? "recording" : "stream");
 
         // Bitrate: VBR with max = avg * 1.25 (matches spec §6.1)
         int avg_bps = (int)bitrate_ * 1000;
@@ -176,6 +188,13 @@ bool VTEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& co
         CFNumberRef kfi_ref = CFNumberCreate(nullptr, kCFNumberIntType, &kfi);
         VTSessionSetProperty(sess, kVTCompressionPropertyKey_MaxKeyFrameInterval, kfi_ref);
         CFRelease(kfi_ref);
+        if (recording) {
+            // The GOP stays in frames (keyframe_interval = fps): the replay
+            // forces an IDR each second of frames at its current rate. A
+            // MaxKeyFrameIntervalDuration of 1 s put the IDR one frame early
+            // (measured: frames 59 and 118 at 60 fps).
+            VTSessionSetProperty(sess, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, kCFBooleanFalse);
+        }
 
         // FPS hint
         float expected_fps = (float)fps_;

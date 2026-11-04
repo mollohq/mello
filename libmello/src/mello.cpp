@@ -8,10 +8,15 @@
 #include "video/decoder_factory.hpp"
 #include "video/process_enum.hpp"
 #include "video/window_thumbnail.hpp"
+#if defined(_WIN32) || (defined(__APPLE__) && !defined(MELLO_IOS))
+// The game clip replay (CLIPS.md 15): Windows and macOS.
+#define MELLO_HAS_REPLAY 1
+#include "replay/replay_frames.hpp"
+#include "replay/replay_session.hpp"
+#endif
 #ifdef _WIN32
 #include "video/hook_launcher.hpp"
 #include "video/graphics_device.hpp"
-#include "replay/replay_session.hpp"
 #include "video/capture_process.hpp"
 #endif
 #include "replay/mp4_read.hpp"
@@ -708,17 +713,17 @@ MelloResult mello_clip_encode(const char* wav_path, const char* mp4_path, int bi
 
 MelloResult mello_replay_start(MelloContext* ctx, const MelloReplayConfig* config) {
     if (!ctx || !config) return MELLO_ERROR_INVALID_PARAM;
-#ifdef _WIN32
+#ifdef MELLO_HAS_REPLAY
     try {
         auto* c = ctx_cast(ctx);
         // One replay at a time (CLIPS.md 15.2).
         if (auto old = c->exchange_replay(nullptr)) old->stop();
         mello::replay::ReplayConfig rc;
-        rc.hwnd = config->hwnd;
+        rc.window = config->hwnd;
         rc.pid = config->pid;
         // The game's main window, as the stream's process capture finds it.
-        if (!rc.hwnd && rc.pid != 0) rc.hwnd = mello::video::find_main_window(rc.pid);
-        if (!rc.hwnd) {
+        if (!rc.window && rc.pid != 0) rc.window = mello::replay::game_main_window(rc.pid);
+        if (!rc.window) {
             c->set_error("the game has no window");
             return MELLO_ERROR_FAILED;
         }
@@ -752,7 +757,7 @@ MelloResult mello_replay_start(MelloContext* ctx, const MelloReplayConfig* confi
 
 void mello_replay_stop(MelloContext* ctx) {
     if (!ctx) return;
-#ifdef _WIN32
+#ifdef MELLO_HAS_REPLAY
     try {
         if (auto old = ctx_cast(ctx)->exchange_replay(nullptr)) old->stop();
     } catch (...) {
@@ -762,7 +767,7 @@ void mello_replay_stop(MelloContext* ctx) {
 
 MelloResult mello_test_replay_start_reference(MelloContext* ctx, const MelloReplayConfig* config) {
     if (!ctx || !config) return MELLO_ERROR_INVALID_PARAM;
-#ifdef _WIN32
+#ifdef MELLO_HAS_REPLAY
     try {
         auto* c = ctx_cast(ctx);
         if (auto old = c->exchange_replay(nullptr)) old->stop();
@@ -804,7 +809,7 @@ MelloResult mello_test_replay_start_reference(MelloContext* ctx, const MelloRepl
 
 bool mello_test_replay_reference_info(MelloContext* ctx, MelloReferenceInfo* out) {
     if (!ctx || !out) return false;
-#ifdef _WIN32
+#ifdef MELLO_HAS_REPLAY
     const auto session = ctx_cast(ctx)->replay();
     mello::video::ReferenceInfo info;
     if (!session || !session->reference_info(info)) return false;
@@ -823,7 +828,7 @@ bool mello_test_replay_reference_info(MelloContext* ctx, MelloReferenceInfo* out
 
 MelloReplayState mello_replay_state(MelloContext* ctx) {
     if (!ctx) return MELLO_REPLAY_OFF;
-#ifdef _WIN32
+#ifdef MELLO_HAS_REPLAY
     const auto session = ctx_cast(ctx)->replay();
     if (!session) return MELLO_REPLAY_OFF;
     switch (session->state()) {
@@ -839,7 +844,7 @@ MelloReplayState mello_replay_state(MelloContext* ctx) {
 MelloResult mello_replay_capture(MelloContext* ctx, float seconds, const char* mp4_path,
                                  const char* poster_path, MelloReplayClip* out) {
     if (!ctx || seconds <= 0.0f || !mp4_path || !poster_path) return MELLO_ERROR_INVALID_PARAM;
-#ifdef _WIN32
+#ifdef MELLO_HAS_REPLAY
     try {
         auto* c = ctx_cast(ctx);
         const auto session = c->replay();

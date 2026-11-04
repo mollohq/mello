@@ -125,8 +125,8 @@ bool StreamAudioHostPipeline::start(PacketCallback callback, uint32_t capture_pi
     if (use_shared) {
         // The same thread and the same samples as an own capture: the
         // shared capture's thread calls on_pcm.
-        shared_consumer_ = shared_audio_->add([this](const int16_t* samples, size_t count) {
-            on_pcm(samples, count, std::nullopt);
+        shared_consumer_ = shared_audio_->add([this](const int16_t* samples, size_t count, int64_t capture_us) {
+            on_pcm(samples, count, capture_us > 0 ? std::optional<int64_t>(capture_us) : std::nullopt);
         });
     } else if (capture_ && !capture_->start([this](const int16_t* samples, size_t count) {
                    on_pcm(samples, count, std::nullopt);

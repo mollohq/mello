@@ -96,7 +96,11 @@ void push_frame(FakeState& s, uintptr_t id, uint64_t capture_us) {
         std::lock_guard<std::mutex> lock(s.frame_mutex);
         cb = s.frame_cb;
     }
+#ifdef _WIN32
     if (cb) cb(reinterpret_cast<ID3D11Texture2D*>(id), capture_us);
+#else
+    if (cb) cb(reinterpret_cast<void*>(id), capture_us);
+#endif
 }
 
 const float kSamples[4] = {0.1f, -0.1f, 0.2f, -0.2f};

@@ -17,6 +17,9 @@ class ReplaySession;
 namespace audio {
 class SharedGameAudio;
 }
+namespace video {
+class CaptureManager;
+}
 
 class Context {
 public:
@@ -65,7 +68,6 @@ public:
         return next;
     }
 
-#ifdef _WIN32
     /// The capture of the running stream host, so a replay of the same game
     /// that starts later joins it (14-VIDEO-PIPELINE.md 4.8). `key` is the
     /// game (ReplaySession::game_key). Weak: the stream owns its capture.
@@ -84,11 +86,11 @@ public:
     }
 
     /// The game audio of `pid`, shared by the stream host and the game clip
-    /// replay: one process loopback per game (12-STREAMING.md 3.7, F7). While
-    /// one holder lives, a second call returns the same capture. Null when
-    /// Windows has no process loopback. Any thread.
+    /// replay: one capture per game, process loopback on Windows and a
+    /// process tap on macOS (12-STREAMING.md 3.7, F7). While one holder
+    /// lives, a second call returns the same capture. Null when the platform
+    /// has none. Any thread.
     std::shared_ptr<audio::SharedGameAudio> game_audio(uint32_t pid);
-#endif
 
     void set_error(const std::string& error);
     const char* get_error() const;
@@ -108,11 +110,9 @@ private:
     std::shared_ptr<audio::StreamAudioLink> stream_audio_link_ =
         std::make_shared<audio::StreamAudioLink>();
     std::shared_ptr<replay::ReplaySession> replay_;
-#ifdef _WIN32
     StreamCapture stream_capture_;
     std::map<uint32_t, std::weak_ptr<audio::SharedGameAudio>> game_audio_;  // game_audio_mutex_
     std::mutex game_audio_mutex_;
-#endif
     mutable std::mutex replay_mutex_;  // replay_ and stream_capture_
 };
 

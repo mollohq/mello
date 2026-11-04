@@ -1,5 +1,4 @@
 #pragma once
-#ifdef _WIN32
 #include "replay_audio_ring.hpp"
 #include "replay_load.hpp"
 #include "replay_video_ring.hpp"
@@ -7,8 +6,6 @@
 #include "../video/capture_reference.hpp"
 #include "../video/capture_source.hpp"
 #include "../video/encoder.hpp"
-#include <d3d11.h>
-#include <wrl/client.h>
 #include <array>
 #include <atomic>
 #include <condition_variable>
@@ -26,18 +23,18 @@ class AudioPipeline;
 class SharedGameAudio;
 }  // namespace mello::audio
 
-namespace mello::video {
-class VideoPreprocessor;
-}
-
 namespace mello::replay {
 
+class ReplayFrames;
+
 struct ReplayConfig {
-    /// The game window: the replay captures it with WGC window capture, and
-    /// nothing else (CLIPS.md 15.3: no monitor or desktop capture).
-    void* hwnd = nullptr;
-    /// The game process: its audio, through WASAPI process loopback of its
-    /// process tree. 0: no game audio.
+    /// The game window (an HWND on Windows, a CGWindowID on macOS): the
+    /// replay captures it, and nothing else (CLIPS.md 15.3: no monitor or
+    /// desktop capture). WGC window capture on Windows, ScreenCaptureKit on
+    /// macOS (replay_frames.hpp).
+    void* window = nullptr;
+    /// The game process: its audio, through process loopback (Windows) or a
+    /// process tap (macOS) of its process tree. 0: no game audio.
     uint32_t pid = 0;
     /// The game audio capture of `pid` that the stream host shares (F7, the
     /// context's registry). Null: the replay opens one for itself.
@@ -72,11 +69,11 @@ struct ReplayClip {
 };
 
 /// The game clip replay buffer (CLIPS.md 15.3 and 15.4): a consumer of a
-/// CaptureManager with its own preprocessor and recording encoder, the video
+/// CaptureManager with its own frames path and recording encoder, the video
 /// and game audio rings, and the capture of a clip into an MP4 and a poster.
 ///
-/// Alone, the replay has its own capture manager on the game window (WGC
-/// window). While the user streams the same game, it is a second consumer of
+/// Alone, the replay has its own capture manager on the game window. While
+/// the user streams the same game, it is a second consumer of
 /// the stream's capture manager, so the game has one capture (CLIPS.md 15.3):
 ///  - The stream starts exactly as without the replay (F2). Then
 ///    `follow_stream` stops the replay's own capture and attaches the replay
@@ -85,16 +82,16 @@ struct ReplayClip {
 ///    frames of a monitor method (WGC monitor, DXGI) and waits (CLIPS.md 15.3).
 ///  - It records at the stream's rate, never above it (F1).
 ///  - Before the stream stops, `leave_stream` puts the replay back on its own
-///    WGC window capture. The stream's capture, the hook too, then stops with
+///    window capture. The stream's capture, the hook too, then stops with
 ///    the stream (14-VIDEO-PIPELINE.md 4.8).
-/// The encode size stays the same over a switch: the preprocessor fits each
+/// The encode size stays the same over a switch: the frames path fits each
 /// source into it, so a clip has one picture size. Each switch starts a new
 /// segment with an IDR.
 ///
 /// Threads:
-///  - The capture thread calls the frame callback: decimate, convert into the
-///    NV12 ring, enqueue (2 deep, newest wins), and the poster copy (a
-///    submit, no wait, 12-STREAMING.md 3.7, F6).
+///  - The capture thread calls the frame callback: decimate, take the frame
+///    for the encoder (ReplayFrames), enqueue (2 deep, newest wins), and the
+///    poster copy (a submit, no wait, 12-STREAMING.md 3.7, F6).
 ///  - The encode thread encodes and hands each access unit to the video ring.
 ///  - The loopback thread hands the game audio to the audio ring.
 ///  - `capture` runs on the caller's worker thread, never the command loop.
@@ -183,43 +180,42 @@ public:
 
 private:
     struct Job {
-        ID3D11Texture2D* texture = nullptr;  // an NV12 ring slot
+        void* frame = nullptr;  // from ReplayFrames::take
         uint64_t capture_us = 0;
     };
     static constexpr size_t kQueueCap = 2;
 
     bool start_impl(const ReplayConfig& config, std::string* error);
-    /// The replay's own capture: WGC on the game window (or the test source).
+    /// The replay's own capture: the game window (or the test source).
     std::shared_ptr<video::CaptureManager> make_own_capture(std::string* error) const;
-    /// control_mutex_ held. Builds the preprocessor and the encoder on
+    /// control_mutex_ held. Builds the frames path and the encoder on
     /// `manager`'s device at `fps`, starts the encode thread and attaches to
     /// `manager`. Starts the manager when `own`.
     bool open_capture(std::shared_ptr<video::CaptureManager> manager, bool own, uint32_t fps,
                       std::string* error);
     /// control_mutex_ held. Detaches from the manager, stops the encode
-    /// thread and frees the preprocessor and the encoder. False when the
+    /// thread and frees the frames path and the encoder. False when the
     /// capture thread did not leave in time: the session is then abandoned.
     bool close_capture();
     void on_frame(const video::CapturedFrame& frame);
     void encode_loop();
     /// Encode thread, every 60 frames: the replay's own overload (F3).
     void check_own_load();
-    void on_game_audio(const int16_t* samples, size_t count);
+    void on_game_audio(const int16_t* samples, size_t count, int64_t capture_us);
     /// The reference source's audio, at its capture times. The source's
     /// audio thread only.
     void on_timed_audio(const float* samples, uint32_t frames, uint32_t channels, uint32_t rate,
                         int64_t capture_us);
     std::vector<int16_t> timed_pcm_;  // on_timed_audio's thread
-    /// The capture thread copies the frame for the poster (12-STREAMING.md 3.7, F6).
-    void copy_poster_frame(ID3D11Texture2D* texture);
-    bool write_live_poster(const std::filesystem::path& poster, std::chrono::milliseconds wait);
 
     ReplayConfig config_;
     uint32_t game_key_ = 0;
     // The capture the replay is attached to (control_mutex_ for writes).
     std::shared_ptr<video::CaptureManager> manager_;
     video::CaptureManager::ConsumerId consumer_id_ = 0;
-    std::unique_ptr<video::VideoPreprocessor> preprocessor_;
+    // The frames path of the manager: shared, so a capture that writes its
+    // poster keeps the path it pinned while a switch makes a new one.
+    std::shared_ptr<ReplayFrames> frames_;
     std::unique_ptr<video::Encoder> encoder_;
     uint32_t enc_w_ = 0;  // fixed at start
     uint32_t enc_h_ = 0;
@@ -261,13 +257,9 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> failed_{false};
 
-    // The poster: the capture thread copies the next frame into a staging
-    // texture when `poster_wanted_` is set; `capture` maps it.
+    // The poster: the capture thread keeps the next frame (ReplayFrames)
+    // when `poster_wanted_` is set; `capture` writes it.
     std::atomic<bool> poster_wanted_{false};
-    std::mutex poster_mutex_;
-    std::condition_variable poster_cv_;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> poster_staging_;  // poster_mutex_
-    bool poster_ready_ = false;                                // poster_mutex_
 
     // Serializes stop, the follow and leave switches, and the start of a capture.
     std::mutex control_mutex_;
@@ -279,4 +271,3 @@ private:
 };
 
 }  // namespace mello::replay
-#endif
