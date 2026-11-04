@@ -20,7 +20,7 @@ struct ClipMuxInput {
     /// The end of the clip. The last frame lasts until then.
     uint64_t end_us = 0;
     /// 48 kHz stereo int16 from the first unit's capture time (mix_clip_audio).
-    /// Empty: no audio track.
+    /// The mux encodes it to Opus. Empty: no audio track.
     std::vector<int16_t> audio;
     uint32_t audio_bitrate = 160'000;
 };
@@ -33,8 +33,9 @@ struct ClipMuxResult {
 
 /// Write the clip as an MP4 with the moov box first: the H.264 units as they
 /// are (no decode, no encode), each at its own capture time, and the audio as
-/// AAC-LC. Runs on the caller's thread; it takes seconds, never the command
-/// loop. False on any failure; the log says why. Windows: Media Foundation.
+/// Opus. Runs on the caller's thread; it takes about a second, never the
+/// command loop. False on any failure; the log says why. m3llo's own writer
+/// (mp4_write.cpp), the same on every platform.
 bool write_clip_mp4(const ClipMuxInput& input, const std::filesystem::path& path,
                     ClipMuxResult* result = nullptr);
 

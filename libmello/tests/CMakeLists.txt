@@ -8,6 +8,7 @@ add_executable(mello_tests
     test_replay_load.cpp
     test_replay_mix.cpp
     test_replay_mux.cpp
+    test_mp4.cpp
     test_replay_ring.cpp
     test_noise_suppressor.cpp
     test_echo_canceller.cpp
@@ -191,6 +192,9 @@ mello_discover_tests(mello_procenum_tests)
 # gate are Windows only (D3D11). The loopback needs the Cisco OpenH264 DLL,
 # which scripts/stream-gate.sh fetches into third_party/openh264; it is
 # copied next to the tests when present, else the loopback skips.
+if(APPLE AND NOT IOS)
+    target_sources(mello_tests PRIVATE test_capture_manager.cpp test_encoder_videotoolbox.cpp)
+endif()
 if(WIN32 AND NOT IOS)
     target_sources(mello_tests PRIVATE test_capture_reference.cpp test_capture_manager.cpp)
     set(_oh264_dll "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/openh264/openh264-2.6.0-win64.dll")
@@ -304,4 +308,14 @@ if(WIN32)
     add_executable(mello_tone_player tone_player.cpp)
     target_compile_definitions(mello_tone_player PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
     target_link_libraries(mello_tone_player PRIVATE ole32)
+endif()
+
+# Game clips on macOS (CLIPS.md 15.12a): which capture gives the
+# game's sound only. A manual probe, not a test; ctest does not run it.
+if(APPLE AND NOT IOS)
+    add_executable(mello_sck_audio_probe mello_sck_audio_probe.mm)
+    set_source_files_properties(mello_sck_audio_probe.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc -fmodules")
+    target_link_libraries(mello_sck_audio_probe PRIVATE
+        "-framework AppKit" "-framework AudioToolbox" "-framework CoreAudio" "-framework CoreMedia"
+        "-framework ScreenCaptureKit" "-framework Foundation")
 endif()

@@ -533,9 +533,8 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         hotkey_mgr
             .borrow()
             .register_clip(callbacks::settings::clip_binding(&s));
-        // The game clip key (CLIPS.md 15.2). Windows only until
-        // the macOS work.
-        if cfg!(windows) {
+        // The game clip key (CLIPS.md 15.2): Windows and macOS.
+        if cfg!(any(windows, target_os = "macos")) {
             hotkey_mgr
                 .borrow()
                 .register_game_clip(callbacks::settings::game_clip_binding(&s));

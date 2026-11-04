@@ -62,7 +62,9 @@ struct ReferenceInfo {
     uint32_t loops            = 0; ///< completed passes over the clip
 };
 
-#ifdef _WIN32
+#if defined(_WIN32) || (defined(__APPLE__) && !defined(MELLO_IOS))
+/// Windows: capture_reference.cpp (D3D11). macOS: capture_reference_mac.mm
+/// (CVPixelBuffer BGRA frames, as ScreenCaptureKit delivers).
 class ReferenceCapture : public CaptureSource {
 public:
     ReferenceCapture();
@@ -88,7 +90,7 @@ public:
 
 private:
     struct Impl;
-    std::unique_ptr<Impl> impl_;  // the COM objects, the file and the thread
+    std::unique_ptr<Impl> impl_;  // the platform objects, the file and the threads
     std::atomic<bool> failed_{false};
 };
 #endif

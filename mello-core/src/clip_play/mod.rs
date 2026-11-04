@@ -35,6 +35,9 @@ pub(crate) struct ClipPlayback {
     player: *mut mello_sys::MelloClipPlayer,
     /// The read callback's user data, freed after the player stopped.
     bytes: *mut Arc<dyn ClipBytes>,
+    /// macOS and Linux: the RGBA callback's user data (the frame slot that
+    /// the client's frame timer shows), freed after the player stopped.
+    frames: *mut crate::client::FrameSlot,
     pub source: String,
     sent: Option<PlaybackState>,
 }
@@ -53,7 +56,11 @@ fn cache_dir() -> PathBuf {
 impl ClipPlayback {
     /// Opens `source` (an `http(s)` URL, or the clipper's own file) and
     /// starts libmello's player. Blocking: a URL costs one request.
-    pub(crate) fn start(ctx: SendCtx, source: &str) -> Result<Self, String> {
+    pub(crate) fn start(
+        ctx: SendCtx,
+        source: &str,
+        frame_slot: crate::client::FrameSlot,
+    ) -> Result<Self, String> {
         let bytes: Arc<dyn ClipBytes> =
             if source.starts_with("http://") || source.starts_with("https://") {
                 Arc::new(RangeReader::open(source, &cache_dir())?)
@@ -82,10 +89,27 @@ impl ClipPlayback {
                 std::ptr::null_mut(),
             );
         }
+        // macOS and Linux have no native presenter: the RGBA goes into the
+        // frame slot, which the client shows as it shows a watched stream.
+        let frames = if cfg!(windows) {
+            drop(frame_slot);
+            std::ptr::null_mut()
+        } else {
+            let frames = Box::into_raw(Box::new(frame_slot));
+            unsafe {
+                mello_sys::mello_clip_player_set_frame_callback(
+                    player,
+                    Some(on_clip_rgba_frame),
+                    frames as *mut c_void,
+                );
+            }
+            frames
+        };
         log::info!("[clip-play] playing {source} ({length} bytes)");
         Ok(Self {
             player,
             bytes: user,
+            frames,
             source: source.to_string(),
             sent: None,
         })
@@ -165,6 +189,9 @@ impl Drop for ClipPlayback {
         // The player calls `read_clip` until its stop returns.
         unsafe { mello_sys::mello_clip_player_stop(self.player) };
         drop(unsafe { Box::from_raw(self.bytes) });
+        if !self.frames.is_null() {
+            drop(unsafe { Box::from_raw(self.frames) });
+        }
         log::info!("[clip-play] stopped {}", self.source);
     }
 }
@@ -185,6 +212,33 @@ pub unsafe extern "C" fn read_clip(user: *mut c_void, offset: u64, buf: *mut u8,
     let bytes = &*(user as *const Arc<dyn ClipBytes>);
     let slice = std::slice::from_raw_parts_mut(buf, len as usize);
     bytes.read(offset, slice)
+}
+
+/// The player's present thread (macOS, Linux): the RGBA into the frame slot.
+/// The slot keeps one buffer and copies over it while the size holds.
+unsafe extern "C" fn on_clip_rgba_frame(
+    user: *mut c_void,
+    rgba: *const u8,
+    w: u32,
+    h: u32,
+    _ts: u64,
+) {
+    if user.is_null() || rgba.is_null() || w == 0 || h == 0 {
+        return;
+    }
+    let slot = &*(user as *const crate::client::FrameSlot);
+    let len = (w as usize) * (h as usize) * 4;
+    let src = std::slice::from_raw_parts(rgba, len);
+    if let Ok(mut slot) = slot.lock() {
+        match slot.as_mut() {
+            Some((ow, oh, buf)) if buf.len() == len => {
+                buf.copy_from_slice(src);
+                *ow = w;
+                *oh = h;
+            }
+            _ => *slot = Some((w, h, src.to_vec())),
+        }
+    }
 }
 
 static CLIP_FRAME_SEQ: AtomicU64 = AtomicU64::new(0);

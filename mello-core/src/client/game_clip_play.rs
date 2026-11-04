@@ -21,8 +21,12 @@ impl super::Client {
             });
             return;
         }
-        // A URL costs one request: off the command loop.
-        let opened = tokio::task::spawn_blocking(move || ClipPlayback::start(ctx, &source)).await;
+        // A URL costs one request: off the command loop. macOS and Linux show
+        // the clip through the frame slot of a watched stream: one view.
+        let frame_slot = self.frame_slot.clone();
+        let opened =
+            tokio::task::spawn_blocking(move || ClipPlayback::start(ctx, &source, frame_slot))
+                .await;
         match opened {
             Ok(Ok(playback)) => self.clip_playback = Some(playback),
             Ok(Err(e)) => {

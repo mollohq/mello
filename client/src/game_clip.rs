@@ -11,6 +11,7 @@ use crate::app_context::AppContext;
 use crate::hud_manager::HudClipToast;
 
 const DISK_LOW_TOAST: &str = "Game clips are off: the disk is almost full";
+const NO_PERMISSION_TOAST: &str = "Allow Screen Recording in Settings to clip your game";
 
 /// The replay as core last reported it.
 #[derive(Debug, Clone, Default)]
@@ -52,6 +53,10 @@ pub(crate) fn game_clip_key_pressed(ctx: &AppContext) {
             );
             toast(ctx, "Clips are not available for this game");
         }
+        GameClipState::NoPermission => {
+            log::info!("[game clip] key ignored: no screen recording permission");
+            toast(ctx, NO_PERMISSION_TOAST);
+        }
     }
 }
 
@@ -64,6 +69,9 @@ pub(crate) fn handle(ctx: &AppContext, event: Event) {
         } => {
             log::info!("[game clip] replay {:?} {} {}", state, game_name, reason);
             let was = ctx.game_clip.borrow().state;
+            // macOS: the Settings row that asks for Screen Recording.
+            ctx.app
+                .set_game_clips_need_permission(state == GameClipState::NoPermission);
             *ctx.game_clip.borrow_mut() = GameClipUi {
                 state,
                 game_name,

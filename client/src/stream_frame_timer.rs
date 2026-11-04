@@ -31,6 +31,10 @@ struct TickCtx {
     frame_timer_ticks: Cell<u64>,
     frame_timer_last_log: Cell<Instant>,
     frame_timer_presented: Cell<u64>,
+    /// Off Windows: a game clip plays, so the frames are the clip's and go
+    /// to the clip view (CLIPS.md 15.9). One view at a time.
+    #[cfg(not(target_os = "windows"))]
+    clip: Cell<bool>,
     #[cfg(target_os = "windows")]
     last_presented_total: Cell<u64>,
     #[cfg(target_os = "windows")]
@@ -71,12 +75,18 @@ fn on_frame_tick(ctx: &TickCtx) {
             if let Some(app) = app_for_tick.as_ref() {
                 let buf =
                     slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&rgba, w, h);
-                app.set_stream_frame(slint::Image::from_rgba8(buf));
                 ctx.frame_timer_presented
                     .set(ctx.frame_timer_presented.get().saturating_add(1));
-                // Stage 9: the card's label and the end of "starting".
-                crate::handlers::streaming::mark_first_frame(app);
-                crate::handlers::streaming::refresh_stream_format(app, h);
+                if ctx.clip.get() {
+                    use slint::ComponentHandle;
+                    app.global::<crate::ClipPlayerUi>()
+                        .set_frame(slint::Image::from_rgba8(buf));
+                } else {
+                    app.set_stream_frame(slint::Image::from_rgba8(buf));
+                    // Stage 9: the card's label and the end of "starting".
+                    crate::handlers::streaming::mark_first_frame(app);
+                    crate::handlers::streaming::refresh_stream_format(app, h);
+                }
             }
         }
     }
@@ -141,12 +151,30 @@ impl StreamFrameTimer {
                 frame_timer_ticks: Cell::new(0),
                 frame_timer_last_log: Cell::new(Instant::now()),
                 frame_timer_presented: Cell::new(0),
+                #[cfg(not(target_os = "windows"))]
+                clip: Cell::new(false),
                 #[cfg(target_os = "windows")]
                 last_presented_total: Cell::new(0),
                 #[cfg(target_os = "windows")]
                 dcomp_presenter,
             }),
         }
+    }
+
+    /// Off Windows: a game clip opens or closes. Its frames come through the
+    /// same slot as a watched stream's, and the clip view shows them. On
+    /// Windows the native presenter shows the clip: nothing to do.
+    pub fn set_clip_playing(&self, playing: bool) {
+        #[cfg(not(target_os = "windows"))]
+        {
+            self.tick_ctx.clip.set(playing);
+            if let Ok(mut slot) = self.tick_ctx.frame_slot.lock() {
+                slot.take();
+            }
+            self.set_watching(playing);
+        }
+        #[cfg(target_os = "windows")]
+        let _ = playing;
     }
 
     pub fn set_watching(&self, watching: bool) {

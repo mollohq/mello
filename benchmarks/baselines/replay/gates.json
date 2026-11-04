@@ -21,9 +21,9 @@
       },
       "press-47s": {
         "psnr_y_mean": [
-          27.811590902092714,
-          27.811590902092714,
-          27.811590902092714
+          27.81159090209271,
+          27.81159090209271,
+          27.81159090209271
         ],
         "ssim_y_mean": [
           0.7464362834869998,
@@ -68,6 +68,76 @@
           78.4462,
           78.4462,
           78.4462
+        ]
+      }
+    },
+    "mac": {
+      "press-35s": {
+        "psnr_y_mean": [
+          29.47493626968387,
+          29.47535252833114,
+          29.47535252833114
+        ],
+        "ssim_y_mean": [
+          0.8453176444926553,
+          0.8453874108935295,
+          0.8453874108935295
+        ],
+        "vmaf_mean": [
+          95.6872,
+          95.6872,
+          95.6872
+        ]
+      },
+      "press-47s": {
+        "psnr_y_mean": [
+          29.54574976433239,
+          29.546188133795475,
+          29.546188133795475
+        ],
+        "ssim_y_mean": [
+          0.8391279553445989,
+          0.8391311705828848,
+          0.8391311705828848
+        ],
+        "vmaf_mean": [
+          96.2455,
+          96.2455,
+          96.2455
+        ]
+      },
+      "press-60s": {
+        "psnr_y_mean": [
+          29.27722498907985,
+          29.276806061667624,
+          29.276806061667624
+        ],
+        "ssim_y_mean": [
+          0.8510031856469484,
+          0.8510011649042111,
+          0.8510011649042111
+        ],
+        "vmaf_mean": [
+          94.0135,
+          94.0135,
+          94.0135
+        ]
+      },
+      "press-62s": {
+        "psnr_y_mean": [
+          29.380146322025354,
+          29.380892920276988,
+          29.380892920276988
+        ],
+        "ssim_y_mean": [
+          0.8512523108542931,
+          0.8512548469231505,
+          0.8512548469231505
+        ],
+        "vmaf_mean": [
+          94.1063,
+          94.1063,
+          94.1063
         ]
       }
     }
@@ -659,6 +729,326 @@
           "max": 20.0,
           "metric": "av_offset_abs_max_ms",
           "note": "CLIPS.md 15.13: game audio burst to video frame offset within +-20 ms for every marker"
+        }
+      ]
+    },
+    "mac": {
+      "playback": [
+        {
+          "enforced": true,
+          "max": 1000.0,
+          "metric": "playback_first_frame_ms",
+          "note": "CLIPS.md 15.9 and 15.13: the first frame under 1 s from the start call on a 20 Mbps link with 50 ms delay"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "playback_buffering_ms",
+          "note": "CLIPS.md 15.13: no stall at 20 Mbps: the player's state says buffering at no time after the first frame"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "playback_frames_out_of_order",
+          "note": "CLIPS.md 15.13: every frame code in order: no shown frame goes back or repeats"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "playback_frames_skipped",
+          "note": "CLIPS.md 15.13: every unit of the clip shows when it plays to its end in real time"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "playback_frames_unreadable",
+          "note": "every shown frame's code reads"
+        },
+        {
+          "enforced": true,
+          "max": 1000.0,
+          "metric": "playback_seek_ms",
+          "note": "CLIPS.md 15.13: a seek to 20 s shows the frame of 20 s within 1 s"
+        }
+      ],
+      "press-35s": [
+        {
+          "enforced": true,
+          "max": 31.0,
+          "metric": "duration_s",
+          "min": 30.0,
+          "note": "CLIPS.md 15.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
+        },
+        {
+          "enforced": true,
+          "max": 60.0,
+          "metric": "start_lead_frames",
+          "min": 0.0,
+          "note": "CLIPS.md 15.13: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "frames_missing",
+          "note": "CLIPS.md 15.13: no missing frame index from the first frame to the last"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "frames_out_of_order",
+          "note": "CLIPS.md 15.13: every frame index in order"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "frames_unreadable",
+          "note": "every frame code reads"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "frames_undecoded",
+          "note": "every video unit of the clip decodes to a picture"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "av_markers_missing",
+          "note": "the sound has every game audio marker of the clip's frames"
+        },
+        {
+          "enforced": true,
+          "max": 20.0,
+          "metric": "av_offset_abs_max_ms",
+          "note": "CLIPS.md 15.13: game audio burst to video frame offset within +-20 ms for every marker"
+        },
+        {
+          "enforced": true,
+          "metric": "vmaf_mean",
+          "min": 93.6872,
+          "note": "run 1 95.6872 minus 2.0000 (spread 0.0000 over 3 runs; margin = max(fixed 2, 0 % of the value, 1.1 x spread))"
+        },
+        {
+          "enforced": true,
+          "metric": "psnr_y_mean",
+          "min": 28.4749,
+          "note": "run 1 29.4749 minus 1.0000 (spread 0.0004 over 3 runs; margin = max(fixed 1, 0 % of the value, 1.1 x spread))"
+        },
+        {
+          "enforced": true,
+          "metric": "ssim_y_mean",
+          "min": 0.8353,
+          "note": "run 1 0.8453 minus 0.0100 (spread 0.0001 over 3 runs; margin = max(fixed 0.01, 0 % of the value, 1.1 x spread))"
+        }
+      ],
+      "press-47s": [
+        {
+          "enforced": true,
+          "max": 31.0,
+          "metric": "duration_s",
+          "min": 30.0,
+          "note": "CLIPS.md 15.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
+        },
+        {
+          "enforced": true,
+          "max": 60.0,
+          "metric": "start_lead_frames",
+          "min": 0.0,
+          "note": "CLIPS.md 15.13: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "frames_missing",
+          "note": "CLIPS.md 15.13: no missing frame index from the first frame to the last"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "frames_out_of_order",
+          "note": "CLIPS.md 15.13: every frame index in order"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "frames_unreadable",
+          "note": "every frame code reads"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "frames_undecoded",
+          "note": "every video unit of the clip decodes to a picture"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "av_markers_missing",
+          "note": "the sound has every game audio marker of the clip's frames"
+        },
+        {
+          "enforced": true,
+          "max": 20.0,
+          "metric": "av_offset_abs_max_ms",
+          "note": "CLIPS.md 15.13: game audio burst to video frame offset within +-20 ms for every marker"
+        },
+        {
+          "enforced": true,
+          "metric": "vmaf_mean",
+          "min": 94.2455,
+          "note": "run 1 96.2455 minus 2.0000 (spread 0.0000 over 3 runs; margin = max(fixed 2, 0 % of the value, 1.1 x spread))"
+        },
+        {
+          "enforced": true,
+          "metric": "psnr_y_mean",
+          "min": 28.5457,
+          "note": "run 1 29.5457 minus 1.0000 (spread 0.0004 over 3 runs; margin = max(fixed 1, 0 % of the value, 1.1 x spread))"
+        },
+        {
+          "enforced": true,
+          "metric": "ssim_y_mean",
+          "min": 0.8291,
+          "note": "run 1 0.8391 minus 0.0100 (spread 0.0000 over 3 runs; margin = max(fixed 0.01, 0 % of the value, 1.1 x spread))"
+        }
+      ],
+      "press-60s": [
+        {
+          "enforced": true,
+          "max": 31.0,
+          "metric": "duration_s",
+          "min": 30.0,
+          "note": "CLIPS.md 15.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
+        },
+        {
+          "enforced": true,
+          "max": 60.0,
+          "metric": "start_lead_frames",
+          "min": 0.0,
+          "note": "CLIPS.md 15.13: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "frames_missing",
+          "note": "CLIPS.md 15.13: no missing frame index from the first frame to the last"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "frames_out_of_order",
+          "note": "CLIPS.md 15.13: every frame index in order"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "frames_unreadable",
+          "note": "every frame code reads"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "frames_undecoded",
+          "note": "every video unit of the clip decodes to a picture"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "av_markers_missing",
+          "note": "the sound has every game audio marker of the clip's frames"
+        },
+        {
+          "enforced": true,
+          "max": 20.0,
+          "metric": "av_offset_abs_max_ms",
+          "note": "CLIPS.md 15.13: game audio burst to video frame offset within +-20 ms for every marker"
+        },
+        {
+          "enforced": true,
+          "metric": "vmaf_mean",
+          "min": 92.0135,
+          "note": "run 1 94.0135 minus 2.0000 (spread 0.0000 over 3 runs; margin = max(fixed 2, 0 % of the value, 1.1 x spread))"
+        },
+        {
+          "enforced": true,
+          "metric": "psnr_y_mean",
+          "min": 28.2772,
+          "note": "run 1 29.2772 minus 1.0000 (spread 0.0004 over 3 runs; margin = max(fixed 1, 0 % of the value, 1.1 x spread))"
+        },
+        {
+          "enforced": true,
+          "metric": "ssim_y_mean",
+          "min": 0.841,
+          "note": "run 1 0.8510 minus 0.0100 (spread 0.0000 over 3 runs; margin = max(fixed 0.01, 0 % of the value, 1.1 x spread))"
+        }
+      ],
+      "press-62s": [
+        {
+          "enforced": true,
+          "max": 31.0,
+          "metric": "duration_s",
+          "min": 30.0,
+          "note": "CLIPS.md 15.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
+        },
+        {
+          "enforced": true,
+          "max": 60.0,
+          "metric": "start_lead_frames",
+          "min": 0.0,
+          "note": "CLIPS.md 15.13: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "frames_missing",
+          "note": "CLIPS.md 15.13: no missing frame index from the first frame to the last"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "frames_out_of_order",
+          "note": "CLIPS.md 15.13: every frame index in order"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "frames_unreadable",
+          "note": "every frame code reads"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "frames_undecoded",
+          "note": "every video unit of the clip decodes to a picture"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "av_markers_missing",
+          "note": "the sound has every game audio marker of the clip's frames"
+        },
+        {
+          "enforced": true,
+          "max": 20.0,
+          "metric": "av_offset_abs_max_ms",
+          "note": "CLIPS.md 15.13: game audio burst to video frame offset within +-20 ms for every marker"
+        },
+        {
+          "enforced": true,
+          "metric": "vmaf_mean",
+          "min": 92.1063,
+          "note": "run 1 94.1063 minus 2.0000 (spread 0.0000 over 3 runs; margin = max(fixed 2, 0 % of the value, 1.1 x spread))"
+        },
+        {
+          "enforced": true,
+          "metric": "psnr_y_mean",
+          "min": 28.3801,
+          "note": "run 1 29.3801 minus 1.0000 (spread 0.0007 over 3 runs; margin = max(fixed 1, 0 % of the value, 1.1 x spread))"
+        },
+        {
+          "enforced": true,
+          "metric": "ssim_y_mean",
+          "min": 0.8412,
+          "note": "run 1 0.8513 minus 0.0100 (spread 0.0000 over 3 runs; margin = max(fixed 0.01, 0 % of the value, 1.1 x spread))"
         }
       ]
     }

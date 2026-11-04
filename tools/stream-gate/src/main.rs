@@ -2827,7 +2827,7 @@ fn replay_main() -> Result<bool, String> {
             "psnr_ssim": "stream-gate score.rs: luma, PSNR 10 log10(255^2/MSE) capped at 100, SSIM 8x8 windows on a 4 px grid",
         },
         "method": {
-            "path": "reference clip and game audio (MELLO_CAPTURE_REFERENCE) -> capture manager -> replay session: preprocessor, recording encoder, video and audio rings -> mello_replay_capture (30 s, MP4 passthrough and AAC) -> mello_test_mp4_read_video -> stream viewer, one unit at a time, CPU frame callback -> burned-in code; mello_test_mp4_read_audio -> marker onsets",
+            "path": "reference clip and game audio (MELLO_CAPTURE_REFERENCE) -> capture manager -> replay session: preprocessor, recording encoder, video and audio rings -> mello_replay_capture (30 s, MP4 passthrough and Opus) -> mello_test_mp4_read_video -> stream viewer, one unit at a time, CPU frame callback -> burned-in code; mello_test_mp4_read_audio -> marker onsets",
             "presses": replay::PRESSES.iter().map(|(n, at)| json!({ "name": n, "at_s": at })).collect::<Vec<_>>(),
             "start": "start_lead_frames = the frame the source captured 30 s before the press (its clock) minus the clip's first frame",
             "markers": "marker k (frame 15k): its onset in the clip's sound, less the detector bias, minus the clip time of frame 15k; markers within 50 ms of either end of the sound are not expected",

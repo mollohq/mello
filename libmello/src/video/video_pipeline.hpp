@@ -15,8 +15,14 @@
 #include <condition_variable>
 #include <deque>
 
-#ifdef _WIN32
+// The stream host takes its capture from a CaptureManager, which a game clip
+// replay of the same game joins (14-VIDEO-PIPELINE.md 4.8): Windows and the
+// macOS host. iOS hosts nothing; Linux keeps its own capture.
+#if defined(_WIN32) || (defined(__APPLE__) && !defined(MELLO_IOS_NO_HOSTING))
+#define MELLO_HOST_MANAGER 1
 #include "capture_manager.hpp"
+#endif
+#ifdef _WIN32
 #include "video_preprocessor.hpp"
 #endif
 
@@ -203,7 +209,7 @@ public:
     /// True when the capture gives game audio through the timed callback.
     bool capture_provides_timed_audio() const;
 
-#ifdef _WIN32
+#ifdef MELLO_HOST_MANAGER
     /// The capture this host encodes, or nullptr when not hosting. Valid
     /// until stop_host().
     CaptureManager* capture_manager() const { return manager_.get(); }
@@ -267,11 +273,17 @@ public:
     bool encoder_available() const;
 
 private:
-#ifdef _WIN32
+#ifdef MELLO_HOST_MANAGER
+    /// The capture manager's thread. Windows: a D3D11 texture. macOS: a
+    /// CVPixelBufferRef, retained into the encode queue.
     void on_captured_frame(const CapturedFrame& frame);
 #elif defined(__APPLE__) || defined(__linux__)
-    /// macOS: a CVPixelBufferRef. Linux: a CaptureFrame (capture thread).
+    /// iOS: a CVPixelBufferRef. Linux: a CaptureFrame (capture thread).
     void on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_us);
+#endif
+#if defined(MELLO_HOST_MANAGER) && defined(__APPLE__)
+    /// macOS: the encode thread (VideoToolbox takes the CVPixelBuffer).
+    void encode_thread_mac();
 #endif
 #if defined(__linux__)
     /// Linux: no picture for a while; drain the encoder (capture thread).
@@ -281,7 +293,7 @@ private:
     // The viewer's device. A Windows host encodes on its capture manager's
     // device instead (zero copy needs the capture's device).
     GraphicsDevice                       device_{};
-#ifdef _WIN32
+#ifdef MELLO_HOST_MANAGER
     // Declared before the encoder and the preprocessor, so the device they
     // were made on is released after them.
     std::shared_ptr<CaptureManager>      manager_;
@@ -411,11 +423,11 @@ private:
     // answers the keyframe request with the last picture at once.
     std::atomic<bool> keepalive_kick_{false};
     std::atomic<uint64_t> idle_repeat_frames_{0};
-#ifndef _WIN32
-    // On Windows the capture manager owns it.
+#ifndef MELLO_HOST_MANAGER
+    // With a capture manager the manager owns it.
     PresentDelayHistogram present_delay_hist_;
 #endif
-#ifdef _WIN32
+#ifdef MELLO_HOST_MANAGER
     // Called on the encode thread after each encoded frame.
     void maybe_reduce_encoder_cost();
     uint64_t cost_window_start_captured_ = 0;

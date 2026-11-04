@@ -4915,6 +4915,57 @@ fn the_game_clip_key_clips_only_while_the_replay_runs() {
     assert_eq!(capture(&h.commands()), 0, "a full disk: no clip");
 }
 
+/// macOS: with no Screen Recording permission the replay does not start.
+/// F8 makes no clip, the Game clips section shows the row that asks, and
+/// ALLOW sends the request to core (CLIPS.md 15.12a). The permission comes
+/// back: the row goes.
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn without_screen_recording_the_settings_row_asks_for_it() {
+    use mello_core::events::GameClipState;
+    let mut h = Harness::new();
+    h.app()
+        .window()
+        .set_size(slint::PhysicalSize::new(1600, 3000));
+    logged_in_app(&mut h);
+    h.emit(Event::GameClipStateChanged {
+        state: GameClipState::NoPermission,
+        game_name: "Hearthstone".into(),
+        reason: "no screen recording permission".into(),
+    });
+    assert!(h.app().get_game_clips_need_permission());
+    let _ = h.commands();
+    crate::game_clip::game_clip_key_pressed(h.ctx());
+    assert!(
+        !h.commands()
+            .iter()
+            .any(|c| matches!(c, Command::CaptureGameClip)),
+        "no permission: no clip"
+    );
+
+    h.app().set_settings_open(true);
+    h.pump();
+    h.click_label("GAMES");
+    let _ = h.commands();
+    h.click_label("ALLOW");
+    assert!(
+        h.commands()
+            .iter()
+            .any(|c| matches!(c, Command::RequestGameClipPermission)),
+        "ALLOW asks core for the permission"
+    );
+
+    h.emit(Event::GameClipStateChanged {
+        state: GameClipState::Recording,
+        game_name: "Hearthstone".into(),
+        reason: String::new(),
+    });
+    assert!(
+        !h.app().get_game_clips_need_permission(),
+        "the permission came: no row"
+    );
+}
+
 /// A saved game clip goes to the active crew for the upload, and stays
 /// local with no active crew (CLIPS.md 15.2 and 15.7).
 #[test]
@@ -5137,7 +5188,7 @@ fn reset_to_defaults_gives_the_clip_key_back_to_f7() {
 
 /// The game clip key is bound in Settings, Keybinds, below the voice clip
 /// key (CLIPS.md 15.2). The new key is saved and shown.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn keybinds_rebinds_the_game_clip_key() {
     let mut h = Harness::new();
@@ -5166,7 +5217,7 @@ fn keybinds_rebinds_the_game_clip_key() {
 /// One key, one binding: the game clip key refuses the voice clip key and
 /// the push-to-talk key, and the voice clip key refuses the game clip key.
 /// Each field keeps its key.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn keybinds_keeps_the_voice_and_game_clip_keys_apart() {
     let mut h = Harness::new();
@@ -5201,7 +5252,7 @@ fn keybinds_keeps_the_voice_and_game_clip_keys_apart() {
     );
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn game_clips_command(cmds: &[Command]) -> Option<(bool, mello_core::events::GameClipQuality)> {
     cmds.iter().rev().find_map(|c| match c {
         Command::SetGameClips { enabled, quality } => Some((*enabled, *quality)),
@@ -5212,7 +5263,7 @@ fn game_clips_command(cmds: &[Command]) -> Option<(bool, mello_core::events::Gam
 /// The Game clips section in Settings, Games (CLIPS.md 15.10): the switch
 /// and the quality are saved and sent to core, which starts or stops the
 /// replay.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn the_game_clips_section_saves_and_tells_core() {
     use mello_core::events::GameClipQuality;

@@ -90,14 +90,15 @@ static void compress_callback(
         return;
     }
 
-    std::vector<uint8_t> annexb;
-    bool is_keyframe = false;
-    avcc_to_annexb(sample, annexb, is_keyframe);
+    VTEncoder::Output out;
+    avcc_to_annexb(sample, out.data, out.keyframe);
+    const CMTime pts = CMSampleBufferGetPresentationTimeStamp(sample);
+    if (CMTIME_IS_VALID(pts) && pts.timescale > 0) {
+        out.pts_us = static_cast<uint64_t>(pts.value) * 1000000ull / static_cast<uint64_t>(pts.timescale);
+    }
 
     std::lock_guard<std::mutex> lock(self->output_mutex_);
-    self->output_data_         = std::move(annexb);
-    self->output_is_keyframe_  = is_keyframe;
-    self->output_ready_        = true;
+    self->outputs_.push_back(std::move(out));
 }
 
 VTEncoder::VTEncoder() = default;
@@ -120,38 +121,51 @@ bool VTEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& co
 
     @autoreleasepool {
         VTCompressionSessionRef sess = nullptr;
+        const bool recording = config.intent == EncoderIntent::Recording;
+
+        // Hardware only (14-VIDEO-PIPELINE.md 6.7): VideoToolbox would pick
+        // a software encoder where the media engine cannot take the session.
+        const void* spec_keys[] = {kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder};
+        const void* spec_values[] = {kCFBooleanTrue};
+        CFDictionaryRef spec = CFDictionaryCreate(kCFAllocatorDefault, spec_keys, spec_values, 1,
+            &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
 
         OSStatus status = VTCompressionSessionCreate(
             kCFAllocatorDefault,
             (int32_t)width_, (int32_t)height_,
             kCMVideoCodecType_H264,
-            nullptr, // encoderSpecification
+            spec,
             nullptr, // sourceImageBufferAttributes (accepts any CVPixelBuffer)
             kCFAllocatorDefault,
             compress_callback,
             this,
             &sess);
 
+        CFRelease(spec);
         if (status != noErr) {
-            MELLO_LOG_ERROR(TAG, "VTCompressionSessionCreate failed: %d", (int)status);
+            MELLO_LOG_ERROR(TAG, "VTCompressionSessionCreate failed: %d (no hardware H.264 encoder?)", (int)status);
             return false;
         }
 
         // Low-latency, real-time encoding
         VTSessionSetProperty(sess, kVTCompressionPropertyKey_RealTime, kCFBooleanTrue);
+        pipelined_ = recording;
         VTSessionSetProperty(sess, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
 
+        // The recording intent (14-VIDEO-PIPELINE.md 6.8): High at the level
+        // the size needs. The stream keeps High 5.1.
         status = VTSessionSetProperty(sess, kVTCompressionPropertyKey_ProfileLevel,
-            kVTProfileLevel_H264_High_5_1);
+            recording ? kVTProfileLevel_H264_High_AutoLevel : kVTProfileLevel_H264_High_5_1);
         if (status != noErr) {
             MELLO_LOG_ERROR(TAG,
-                "VideoToolbox: required H264 profile=High level=5.1 rejected: %d",
-                (int)status);
+                "VideoToolbox: required H264 profile=High (%s) rejected: %d",
+                recording ? "auto level" : "level 5.1", (int)status);
             VTCompressionSessionInvalidate(sess);
             CFRelease(sess);
             return false;
         }
-        MELLO_LOG_INFO(TAG, "VideoToolbox: accepted H264 profile=High level=5.1");
+        MELLO_LOG_INFO(TAG, "VideoToolbox: accepted H264 profile=High %s, intent %s",
+            recording ? "auto level" : "level 5.1", recording ? "recording" : "stream");
 
         // Bitrate: VBR with max = avg * 1.25 (matches spec §6.1)
         int avg_bps = (int)bitrate_ * 1000;
@@ -176,6 +190,13 @@ bool VTEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& co
         CFNumberRef kfi_ref = CFNumberCreate(nullptr, kCFNumberIntType, &kfi);
         VTSessionSetProperty(sess, kVTCompressionPropertyKey_MaxKeyFrameInterval, kfi_ref);
         CFRelease(kfi_ref);
+        if (recording) {
+            // The GOP stays in frames (keyframe_interval = fps): the replay
+            // forces an IDR each second of frames at its current rate. A
+            // MaxKeyFrameIntervalDuration of 1 s put the IDR one frame early
+            // (measured: frames 59 and 118 at 60 fps).
+            VTSessionSetProperty(sess, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, kCFBooleanFalse);
+        }
 
         // FPS hint
         float expected_fps = (float)fps_;
@@ -201,6 +222,11 @@ void VTEncoder::shutdown() {
         CFRelease(session_);
         session_ = nullptr;
     }
+    {
+        // The frames still in flight end with the session.
+        std::lock_guard<std::mutex> lock(output_mutex_);
+        outputs_.clear();
+    }
     MELLO_LOG_INFO(TAG, "VTEncoder shutdown: frames=%llu keyframes=%u bytes=%lluMB",
         frame_count_, stats_.keyframes_sent, stats_.bytes_sent / (1024 * 1024));
 }
@@ -225,11 +251,6 @@ bool VTEncoder::encode(void* cv_pixel_buffer, uint64_t capture_us, EncodedPacket
         force_keyframe_ = false;
     }
 
-    {
-        std::lock_guard<std::mutex> lock(output_mutex_);
-        output_ready_ = false;
-    }
-
     OSStatus status = VTCompressionSessionEncodeFrame(
         (VTCompressionSessionRef)session_,
         pb, pts, kCMTimeInvalid,
@@ -243,18 +264,33 @@ bool VTEncoder::encode(void* cv_pixel_buffer, uint64_t capture_us, EncodedPacket
         return false;
     }
 
-    // Force synchronous output for low-latency
-    VTCompressionSessionCompleteFrames(
-        (VTCompressionSessionRef)session_, kCMTimeInvalid);
+    // A stream waits for this frame: the lowest latency. A recording does
+    // not: the media engine works on the next frame meanwhile, and the
+    // encode time is the submit, not the engine's latency (the replay's
+    // overload rule measures it).
+    if (!pipelined_) {
+        VTCompressionSessionCompleteFrames(
+            (VTCompressionSessionRef)session_, kCMTimeInvalid);
+    }
 
     frame_count_++;
 
     std::lock_guard<std::mutex> lock(output_mutex_);
-    if (!output_ready_ || output_data_.empty()) return false;
+    if (outputs_.empty()) {
+        // A recording with nothing done yet, or a stream frame that
+        // VideoToolbox dropped: no unit this time.
+        out.data.clear();
+        return pipelined_;
+    }
+    Output done = std::move(outputs_.front());
+    outputs_.pop_front();
+    if (done.data.empty()) return pipelined_;
 
-    out.data         = std::move(output_data_);
-    out.is_keyframe  = output_is_keyframe_;
-    out.timestamp_us = 0; // Filled by pipeline from capture timestamp
+    out.data         = std::move(done.data);
+    out.is_keyframe  = done.keyframe;
+    // A recording's unit is an earlier frame's: its own time goes with it.
+    // A stream's is this frame's (the pipeline fills it from the capture).
+    out.timestamp_us = pipelined_ ? done.pts_us : 0;
 
     stats_.bytes_sent += out.data.size();
     if (out.is_keyframe) stats_.keyframes_sent++;

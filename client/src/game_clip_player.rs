@@ -41,6 +41,8 @@ pub(crate) fn open(ctx: &AppContext, card: &FeedCardData) {
         crate::handlers::streaming::open_native_presenter(ctx, 1920, 1080, "a game clip");
         OWNS_PRESENTER.set(true);
     }
+    // macOS and Linux: the frame timer shows the clip in the view.
+    ctx.stream_frame_timer.set_clip_playing(true);
     ui.set_open(true);
     log::info!("UI: play game clip {}", card.clip_path);
     let _ = ctx.cmd_tx.send(Command::PlayGameClip {
@@ -52,6 +54,10 @@ fn close_presenter(ctx: &AppContext) {
     if OWNS_PRESENTER.replace(false) {
         crate::handlers::streaming::close_native_presenter(ctx, "the game clip closed");
     }
+    ctx.stream_frame_timer.set_clip_playing(false);
+    ctx.app
+        .global::<ClipPlayerUi>()
+        .set_frame(slint::Image::default());
 }
 
 pub(crate) fn wire(ctx: &AppContext) {

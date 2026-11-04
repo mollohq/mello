@@ -822,6 +822,12 @@ const ENGINE_MARKER_FILES: &[&str] = &[
     "steam_api.dll",
     "galaxy64.dll",
     "d3d12core.dll",
+    // macOS app bundles: in Contents/Frameworks or Contents/MacOS.
+    "unityplayer.dylib",
+    "gameassembly.dylib",
+    "libmonobdwgc-2.0.dylib",
+    "libsteam_api.dylib",
+    "libgalaxy.dylib",
 ];
 
 /// Suffixes marking a binary that ships *with* a game but is not the game.
@@ -901,7 +907,40 @@ fn looks_like_a_game(p: &RawGameProcess) -> bool {
         return true;
     }
     // Otherwise the process must be fullscreen, or sit next to engine files.
-    p.is_fullscreen || has_engine_marker(std::path::Path::new(&p.path))
+    // A macOS app goes fullscreen in a Space of its own as a matter of course
+    // (a browser, a slide show, an editor), so inside an app bundle only the
+    // engine files count.
+    (p.is_fullscreen && !in_app_bundle(&p.path)) || has_engine_marker(std::path::Path::new(&p.path))
+}
+
+/// The executable of a macOS app bundle: `<Name>.app/Contents/MacOS/<exe>`.
+/// It compares path components, not text, so the separator does not matter.
+fn in_app_bundle(path: &str) -> bool {
+    let parts: Vec<String> = std::path::Path::new(path)
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase())
+        .collect();
+    parts.windows(4).any(|w| {
+        w[0].len() > ".app".len() && w[0].ends_with(".app") && w[1] == "contents" && w[2] == "macos"
+    })
+}
+
+/// The directories whose files say "engine": the executable's own, and for a
+/// macOS app bundle also its `Contents/Frameworks` and `Contents/Resources`
+/// (a Unity player keeps `UnityPlayer.dylib` in Frameworks and its `Data`
+/// folder in Resources).
+fn marker_dirs(exe_path: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let Some(dir) = exe_path.parent() else {
+        return Vec::new();
+    };
+    let mut dirs = vec![dir.to_path_buf()];
+    if in_app_bundle(&exe_path.to_string_lossy()) {
+        if let Some(contents) = dir.parent() {
+            dirs.push(contents.join("Frameworks"));
+            dirs.push(contents.join("Resources"));
+        }
+    }
+    dirs
 }
 
 /// Does the executable's directory contain engine or platform runtime files?
@@ -924,7 +963,10 @@ fn has_engine_marker(exe_path: &std::path::Path) -> bool {
     }
 
     let mut found = false;
-    if let Ok(entries) = std::fs::read_dir(dir) {
+    for dir in marker_dirs(exe_path) {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
             // Unity also ships a `<ExeStem>_Data` directory beside the player.
@@ -935,6 +977,9 @@ fn has_engine_marker(exe_path: &std::path::Path) -> bool {
                 found = true;
                 break;
             }
+        }
+        if found {
+            break;
         }
     }
     if let Ok(mut guard) = CACHE.lock() {
@@ -1638,6 +1683,42 @@ mod tests {
         p.path = format!("D:\\Games\\Indie\\{exe}");
         p.window_title = exe.trim_end_matches(".exe").to_string();
         p
+    }
+
+    /// A process of a macOS app bundle under `root`: `<root>/<name>.app/...`.
+    fn mac_app(root: &std::path::Path, name: &str, fullscreen: bool) -> RawGameProcess {
+        let macos = root
+            .join(format!("{name}.app"))
+            .join("Contents")
+            .join("MacOS");
+        std::fs::create_dir_all(&macos).expect("make the bundle");
+        let mut p = make_process(name, 8888, fullscreen);
+        p.path = macos.join(name).to_string_lossy().into_owned();
+        p.window_title = name.to_string();
+        p
+    }
+
+    #[test]
+    fn a_fullscreen_mac_app_without_engine_files_is_not_a_game() {
+        // macOS apps go fullscreen in their own Space: a slide show is not a game.
+        let dir = std::env::temp_dir().join(format!("mello_sensing_mac_{}", std::process::id()));
+        let keynote = mac_app(&dir, "Keynote", true);
+        assert!(!looks_like_a_game(&keynote));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_mac_app_with_a_unity_player_is_a_game() {
+        let dir = std::env::temp_dir().join(format!("mello_sensing_unity_{}", std::process::id()));
+        let game = mac_app(&dir, "Night Stones", false);
+        let frameworks = dir
+            .join("Night Stones.app")
+            .join("Contents")
+            .join("Frameworks");
+        std::fs::create_dir_all(&frameworks).expect("make Frameworks");
+        std::fs::write(frameworks.join("UnityPlayer.dylib"), b"").expect("write the marker");
+        assert!(looks_like_a_game(&game));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

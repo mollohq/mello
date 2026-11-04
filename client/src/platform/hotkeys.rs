@@ -24,9 +24,8 @@ pub struct PttBinding {
 /// storage format of `Settings::clip_key`. Keybinds in Settings changes it.
 pub const DEFAULT_CLIP_KEY: &str = "F7";
 
-/// The game clip key (CLIPS.md 15.2), in the same format. Windows
-/// only until the macOS work; a Settings row comes with todo
-/// `client-key-settings`.
+/// The game clip key (CLIPS.md 15.2), in the same format: Windows and
+/// macOS. Keybinds in Settings changes it.
 pub const DEFAULT_GAME_CLIP_KEY: &str = "F8";
 
 /// One step of the clip key: `held` is true while the key is down, so a
@@ -101,19 +100,6 @@ impl HotkeyManager {
         let game_clip_binding: Arc<Mutex<Option<PttBinding>>> = Arc::new(Mutex::new(None));
         let (game_clip_tx, game_clip_rx) = mpsc::channel();
 
-        // The game clip key is Windows only until the macOS work.
-        #[cfg(target_os = "macos")]
-        {
-            drop(game_clip_tx);
-            start_listener(
-                binding.clone(),
-                active.clone(),
-                event_tx,
-                clip_binding.clone(),
-                clip_tx,
-            )?;
-        }
-        #[cfg(not(target_os = "macos"))]
         start_listener(
             binding.clone(),
             active.clone(),
@@ -183,6 +169,8 @@ fn start_listener(
     event_tx: mpsc::Sender<PttEvent>,
     clip_binding: Arc<Mutex<Option<PttBinding>>>,
     clip_tx: mpsc::Sender<()>,
+    game_clip_binding: Arc<Mutex<Option<PttBinding>>>,
+    game_clip_tx: mpsc::Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::os::raw::c_void;
 
@@ -210,8 +198,11 @@ fn start_listener(
         event_tx: mpsc::Sender<PttEvent>,
         clip_binding: Arc<Mutex<Option<PttBinding>>>,
         clip_tx: mpsc::Sender<()>,
+        game_clip_binding: Arc<Mutex<Option<PttBinding>>>,
+        game_clip_tx: mpsc::Sender<()>,
         ptt_held: bool,
         clip_held: bool,
+        game_clip_held: bool,
         prev_modifier_flags: u64,
     }
 
@@ -244,6 +235,33 @@ fn start_listener(
             ) {
                 log::info!("[hotkeys] clip key pressed");
                 let _ = ctx.clip_tx.send(());
+            }
+        }
+
+        // The game clip key (F8), with its own held state: a held key makes
+        // one clip (CLIPS.md 15.2).
+        let game_clip = ctx.game_clip_binding.lock().unwrap().clone();
+        if let (Some(game_clip), true) = (
+            game_clip,
+            ev == K_CG_EVENT_KEY_DOWN || ev == K_CG_EVENT_KEY_UP,
+        ) {
+            let vk = CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE) as u16;
+            let flags = CGEventGetFlags(event);
+            let mods_match = (flags & FLAG_CONTROL != 0) == game_clip.ctrl
+                && (flags & FLAG_ALT != 0) == game_clip.alt
+                && (flags & FLAG_SHIFT != 0) == game_clip.shift
+                && (flags & FLAG_COMMAND != 0) == game_clip.meta;
+            let ptt_on_key = ptt_on_clip_key(&ctx.binding.lock().unwrap(), &game_clip)
+                && ctx.active.load(Ordering::Relaxed);
+            if clip_key_step(
+                &mut ctx.game_clip_held,
+                Some(vk) == code_str_to_macos_vk(&game_clip.code_str),
+                ev == K_CG_EVENT_KEY_DOWN,
+                mods_match,
+                ptt_on_key,
+            ) {
+                log::info!("[hotkeys] game clip key pressed");
+                let _ = ctx.game_clip_tx.send(());
             }
         }
 
@@ -319,8 +337,11 @@ fn start_listener(
         event_tx,
         clip_binding,
         clip_tx,
+        game_clip_binding,
+        game_clip_tx,
         ptt_held: false,
         clip_held: false,
+        game_clip_held: false,
         prev_modifier_flags: 0,
     });
     // Safety: Ctx only contains Send types (Arc, mpsc::Sender, bool, u64).

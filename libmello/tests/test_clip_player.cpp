@@ -2,16 +2,15 @@
 // its first bytes, the picture on the sound's clock.
 //
 // The clip is made here with the game clip mux from the H.264 fixture of
-// test_replay_mux.cpp (160x96, 30 fps, 2 s) and a sound of 2 s. The demux is
-// the real Media Foundation one. A fake decoder stands in for the hardware:
-// each frame decodes to a grey picture one step brighter than the last, so
-// the CPU frame callback tells which frame is on screen. A thread takes the
-// sound 10 ms at a time, as the audio render thread does.
+// test_replay_mux.cpp (160x96, 30 fps, 2 s) and a sound of 2 s. The demux and
+// the Opus decode are the real ones, on every platform. A fake decoder stands
+// in for the hardware: each frame decodes to a grey picture one step brighter
+// than the last, so the CPU frame callback tells which frame is on screen. A
+// thread takes the sound 10 ms at a time, as the audio render thread does.
 #include <gtest/gtest.h>
 
 #include "clip/clip_player.hpp"
 
-#ifdef _WIN32
 #include "audio/clip_audio_stream.hpp"
 #include "replay/h264_nal.hpp"
 #include "replay/replay_audio_mix.hpp"
@@ -20,8 +19,14 @@
 #include "video/decoder.hpp"
 #include "video/graphics_device.hpp"
 
+#ifdef _WIN32
 #include <d3d11.h>
 #include <wrl/client.h>
+using Microsoft::WRL::ComPtr;
+#elif defined(__APPLE__)
+#include <CoreFoundation/CoreFoundation.h>
+#include <CoreVideo/CoreVideo.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -40,7 +45,6 @@ using mello::audio::ClipAudioStream;
 using mello::clip::ClipPlayer;
 using mello::clip::ClipPlayerOptions;
 using mello::clip::ClipPlayerState;
-using Microsoft::WRL::ComPtr;
 namespace fs = std::filesystem;
 
 namespace {
@@ -119,16 +123,31 @@ std::vector<uint8_t> make_clip(const TempDir& dir) {
 }
 
 /// Each frame decodes to a grey 160x96 picture, 3 steps brighter than the
-/// one before.
+/// one before, in the picture type of the platform's viewer.
 class StepDecoder : public mello::video::Decoder {
 public:
-    explicit StepDecoder(ID3D11Device* device) : device_(device) { device_->GetImmediateContext(&context_); }
+    explicit StepDecoder(const mello::video::GraphicsDevice& device) {
+#ifdef _WIN32
+        device_ = device.d3d11();
+        device_->GetImmediateContext(&context_);
+#else
+        (void)device;
+#endif
+    }
+    ~StepDecoder() override {
+#ifdef __APPLE__
+        if (buffer_) CVPixelBufferRelease(buffer_);
+#endif
+    }
     bool initialize(const mello::video::GraphicsDevice&, const mello::video::DecoderConfig&) override {
         return true;
     }
     void shutdown() override {}
     mello::video::DecodeFeedResult decode(const uint8_t*, size_t size, bool, int slot) override {
         if (size == 0) return mello::video::DecodeFeedResult::Error;
+        const uint8_t luma = static_cast<uint8_t>(20 + (count_ % 70) * 3);
+        ++count_;
+#ifdef _WIN32
         Slot& s = slots_[slot];
         if (!s.texture) {
             D3D11_TEXTURE2D_DESC desc{};
@@ -144,13 +163,42 @@ public:
                 return mello::video::DecodeFeedResult::Error;
             }
         }
-        const uint8_t luma = static_cast<uint8_t>(20 + (count_ % 70) * 3);
-        ++count_;
         std::vector<uint8_t> nv12(160 * 96 * 3 / 2, 128);
         std::fill(nv12.begin(), nv12.begin() + 160 * 96, luma);
         context_->UpdateSubresource(s.texture.Get(), 0, nullptr, nv12.data(), 160, 0);
+#elif defined(__APPLE__)
+        (void)slot;
+        // A BGRA picture whose green is the studio-swing value of the luma,
+        // so luma_of reads the step back.
+        if (buffer_) CVPixelBufferRelease(buffer_);
+        buffer_ = nullptr;
+        if (CVPixelBufferCreate(kCFAllocatorDefault, 160, 96, kCVPixelFormatType_32BGRA, nullptr, &buffer_) !=
+            kCVReturnSuccess) {
+            return mello::video::DecodeFeedResult::Error;
+        }
+        const auto g = static_cast<uint8_t>(std::clamp((luma - 16) * 255 / 219, 0, 255));
+        CVPixelBufferLockBaseAddress(buffer_, 0);
+        auto* base = static_cast<uint8_t*>(CVPixelBufferGetBaseAddress(buffer_));
+        const size_t stride = CVPixelBufferGetBytesPerRow(buffer_);
+        for (size_t y = 0; y < 96; ++y) {
+            for (size_t x = 0; x < 160; ++x) {
+                uint8_t* p = base + y * stride + x * 4;
+                p[0] = g;
+                p[1] = g;
+                p[2] = g;
+                p[3] = 255;
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(buffer_, 0);
+#else
+        Slot& s = slots_[slot];
+        s.y.assign(160 * 96, luma);
+        s.u.assign(80 * 48, 128);
+        s.v.assign(80 * 48, 128);
+#endif
         return mello::video::DecodeFeedResult::FrameReady;
     }
+#ifdef _WIN32
     bool picture(int slot, mello::video::DecodedPicture& out) const override {
         const Slot& s = slots_[slot];
         if (!s.texture) return false;
@@ -160,16 +208,42 @@ public:
         out.height = 96;
         return true;
     }
+#elif defined(__APPLE__)
+    void* get_frame_buffer() override { return buffer_; }
+#else
+    bool picture(int slot, mello::video::CpuPicture& out) const override {
+        const Slot& s = slots_[slot];
+        if (s.y.empty()) return false;
+        out.format = mello::video::CpuPictureFormat::I420;
+        out.y = s.y.data();
+        out.u = s.u.data();
+        out.v = s.v.data();
+        out.y_stride = 160;
+        out.uv_stride = 80;
+        out.width = 160;
+        out.height = 96;
+        return true;
+    }
+#endif
     bool supports_codec(mello::video::VideoCodec) const override { return true; }
     const char* name() const override { return "Step"; }
 
 private:
+#ifdef _WIN32
     struct Slot {
         ComPtr<ID3D11Texture2D> texture;
     };
-    ID3D11Device* device_;
+    ID3D11Device* device_ = nullptr;
     ComPtr<ID3D11DeviceContext> context_;
     Slot slots_[kOutputSlots];
+#elif defined(__APPLE__)
+    CVPixelBufferRef buffer_ = nullptr;
+#else
+    struct Slot {
+        std::vector<uint8_t> y, u, v;
+    };
+    Slot slots_[kOutputSlots];
+#endif
     int count_ = 0;
 };
 
@@ -180,13 +254,33 @@ struct Shown {
     int luma;
 };
 
+mello::video::GraphicsDevice make_device() {
+#ifdef _WIN32
+    return mello::video::create_d3d11_device();
+#elif defined(__APPLE__)
+    return mello::video::create_metal_device();
+#else
+    return mello::video::create_cpu_device();
+#endif
+}
+
+void release_device(mello::video::GraphicsDevice& device) {
+    if (!device.handle) return;
+#ifdef _WIN32
+    device.d3d11()->Release();
+#elif defined(__APPLE__)
+    CFRelease(device.handle);
+#endif
+    device.handle = nullptr;
+}
+
 /// The player around one clip: the decoder, the frames on screen, and a
 /// thread that takes the sound 10 ms at a time.
 class PlayerRig {
 public:
     PlayerRig(const std::vector<uint8_t>& mp4, std::function<int64_t(uint64_t)> frontier = {})
         : mp4_(mp4), frontier_(std::move(frontier)) {
-        device_ = mello::video::create_d3d11_device();
+        device_ = make_device();
         ClipPlayerOptions o;
         o.length = mp4_.size();
         o.read = [this](uint64_t offset, uint8_t* buf, uint32_t len) -> int64_t {
@@ -202,7 +296,7 @@ public:
         };
         o.output_latency_us = [] { return int64_t{20'000}; };
         o.make_decoder = [](const mello::video::GraphicsDevice& device) {
-            return std::make_unique<StepDecoder>(device.d3d11());
+            return std::make_unique<StepDecoder>(device);
         };
         o.on_cpu_frame = [this](const uint8_t* rgba, uint32_t w, uint32_t h, uint64_t ts) {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -215,7 +309,7 @@ public:
         if (player_) player_->stop();
         running_ = false;
         if (render_.joinable()) render_.join();
-        if (device_.handle) device_.d3d11()->Release();
+        release_device(device_);
     }
 
     ClipPlayer& player() { return *player_; }
@@ -283,7 +377,7 @@ TEST(ClipPlayer, AClipPlaysInOrderOnTheClockOfItsSound) {
     const auto mp4 = make_clip(dir);
     ASSERT_FALSE(mp4.empty()) << "no clip made";
     PlayerRig rig(mp4);
-    if (!rig.valid()) GTEST_SKIP() << "no D3D11 device";
+    if (!rig.valid()) GTEST_SKIP() << "no graphics device";
 
     ASSERT_TRUE(rig.wait_for([](const ClipPlayerState& s) { return s.ended || s.failed; }, 8000));
     const ClipPlayerState s = rig.player().state();
@@ -315,7 +409,7 @@ TEST(ClipPlayer, AStallHoldsThePictureAndSaysBuffering) {
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0);
         return ms.count() < 1500 ? half : INT64_MAX;
     });
-    if (!rig.valid()) GTEST_SKIP() << "no D3D11 device";
+    if (!rig.valid()) GTEST_SKIP() << "no graphics device";
 
     ASSERT_TRUE(rig.wait_for([](const ClipPlayerState& s) { return s.ended || s.failed; }, 10000));
     EXPECT_FALSE(rig.player().state().failed);
@@ -330,7 +424,7 @@ TEST(ClipPlayer, ASeekPlaysFromTheTarget) {
     const auto mp4 = make_clip(dir);
     ASSERT_FALSE(mp4.empty());
     PlayerRig rig(mp4);
-    if (!rig.valid()) GTEST_SKIP() << "no D3D11 device";
+    if (!rig.valid()) GTEST_SKIP() << "no graphics device";
 
     ASSERT_TRUE(rig.wait_for([](const ClipPlayerState& s) { return s.position_us > 200'000; }, 4000));
     const auto at_seek = std::chrono::steady_clock::now();
@@ -349,7 +443,7 @@ TEST(ClipPlayer, APauseHoldsTheClock) {
     const auto mp4 = make_clip(dir);
     ASSERT_FALSE(mp4.empty());
     PlayerRig rig(mp4);
-    if (!rig.valid()) GTEST_SKIP() << "no D3D11 device";
+    if (!rig.valid()) GTEST_SKIP() << "no graphics device";
 
     ASSERT_TRUE(rig.wait_for([](const ClipPlayerState& s) { return s.position_us > 500'000; }, 4000));
     rig.player().set_paused(true);
@@ -365,8 +459,6 @@ TEST(ClipPlayer, APauseHoldsTheClock) {
     ASSERT_TRUE(rig.wait_for([](const ClipPlayerState& s) { return s.ended || s.failed; }, 4000));
     EXPECT_FALSE(rig.player().state().failed);
 }
-
-#endif  // _WIN32
 
 // A read that waits is a stall only in a clip without sound. With sound, the
 // source reads ahead while the sound plays on; the sound's stall rule says

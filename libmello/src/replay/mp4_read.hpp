@@ -2,7 +2,7 @@
 
 // A game clip MP4 read back, for the stream gate's replay lane
 // (CLIPS.md 15.13): the H.264 units as a decoder takes them, and
-// the sound as PCM. Windows: Media Foundation. False elsewhere.
+// the sound as PCM. m3llo's own demux and libopus, on every platform.
 
 #include <cstddef>
 #include <cstdint>
@@ -27,8 +27,8 @@ bool read_mp4_video(const std::filesystem::path& mp4,
                     uint32_t* height);
 
 /// Calls `on_pcm` with the sound of `mp4` decoded to 48 kHz stereo int16,
-/// each chunk with the time of its first frame. False when the file does not
-/// open or has no sound.
+/// each chunk with the time of its first frame from the start of play (after
+/// the pre-skip). False when the file does not open or has no Opus sound.
 bool read_mp4_audio(const std::filesystem::path& mp4,
                     const std::function<bool(const int16_t* stereo, size_t frames, int64_t time_us)>& on_pcm);
 

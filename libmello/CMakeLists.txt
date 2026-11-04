@@ -252,10 +252,13 @@ set(MELLO_SOURCES
     src/audio/echo_suppressor.cpp
     src/audio/ort_loader.cpp
     src/audio/vad.cpp
-    src/clip/clip_player_stub.cpp
-    src/replay/mp4_faststart.cpp
+    src/clip/clip_player.cpp
+    src/replay/mp4_demux.cpp
     src/replay/mp4_read.cpp
+    src/replay/mp4_write.cpp
     src/replay/replay_audio_mix.cpp
+    src/replay/replay_poster.cpp
+    src/audio/shared_game_audio.cpp
     src/replay/replay_audio_ring.cpp
     src/replay/replay_video_ring.cpp
     src/transport/peer_connection.cpp
@@ -278,15 +281,15 @@ if(WIN32)
     list(APPEND MELLO_SOURCES
         src/audio/capture_wasapi.cpp
         src/audio/capture_wasapi_loopback.cpp
-        src/audio/shared_game_audio.cpp
+        src/audio/shared_game_audio_win.cpp
         src/audio/playback_wasapi.cpp
         src/audio/audio_backend_wasapi.cpp
         src/audio/audio_session_win.cpp
         src/audio/device_enumerator_wasapi.cpp
         src/audio/clip_encoder_wmf.cpp
         src/audio/mic_permission_stub.cpp
-        src/clip/clip_player_win.cpp
-        src/replay/replay_mux_wmf.cpp
+        src/replay/replay_frames_win.cpp
+        src/replay/replay_poster_win.cpp
         src/replay/replay_session.cpp
     )
 elseif(IOS)
@@ -310,6 +313,10 @@ elseif(APPLE)
         src/audio/audio_backend_coreaudio.cpp
         src/audio/device_enumerator_coreaudio.cpp
         src/audio/clip_encoder_audiotoolbox.cpp
+        src/audio/shared_game_audio_mac.mm
+        src/replay/replay_frames_mac.mm
+        src/replay/replay_poster_mac.mm
+        src/replay/replay_session.cpp
         src/audio/mic_permission_macos.mm
     )
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -377,6 +384,9 @@ elseif(APPLE)
         src/video/video_pipeline.cpp
         src/video/video_viewer.cpp
         src/video/capture_screencapturekit.mm
+        src/video/capture_manager.cpp
+        src/video/capture_reference.cpp
+        src/video/capture_reference_mac.mm
         src/video/encoder_videotoolbox.mm
         src/video/decoder_videotoolbox.mm
         src/video/process_enum_macos.mm
@@ -542,6 +552,7 @@ elseif(APPLE)
         "-framework CoreMedia"
         "-framework CoreVideo"
         "-framework CoreGraphics"
+        "-framework ImageIO"
         "-framework ScreenCaptureKit"
         "-framework AppKit"
         "-framework Accelerate"

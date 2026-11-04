@@ -1,19 +1,24 @@
 // The game clip MP4 (CLIPS.md 15.4, 15.5 and 15.13): H.264 passthrough
-// from the replay ring, AAC from the clip mix, the moov box first, the poster.
+// from the replay ring, Opus from the clip mix, the moov box first, the poster.
+// The MP4 reads back through m3llo's own demux (mp4_read.hpp), so the mux
+// tests run on every platform. The replay session tests are Windows only
+// until the macOS replay.
 // The video is a fixture that libmello's own recording encoder made once
 // (160x96, 30 fps, an IDR every 30 frames with SPS and PPS, no B-frames, an
 // AUD before each access unit). No GPL encoder: m3llo is Apache 2.0
 // (14-VIDEO-PIPELINE.md 6.7). ReplayFixture.DISABLED_MakeTheH264Fixture
 // makes it again:
 //   mello_tests --gtest_also_run_disabled_tests --gtest_filter=ReplayFixture.*
-#ifdef _WIN32
 #include <gtest/gtest.h>
 #include "replay/h264_nal.hpp"
+#include "replay/mp4_demux.hpp"
 #include "replay/mp4_read.hpp"
 #include "replay/replay_audio_mix.hpp"
 #include "replay/replay_mux.hpp"
-#include "replay/replay_session.hpp"
 #include "replay/replay_video_ring.hpp"
+
+#ifdef _WIN32
+#include "replay/replay_session.hpp"
 #include "video/capture_process.hpp"
 #include "video/encoder_factory.hpp"
 #include "video/graphics_device.hpp"
@@ -27,10 +32,9 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
-#include <mfapi.h>
-#include <mfidl.h>
-#include <mfreadwrite.h>
 #include <wrl/client.h>
+using Microsoft::WRL::ComPtr;
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -45,7 +49,6 @@
 #include <vector>
 
 using namespace mello::replay;
-using Microsoft::WRL::ComPtr;
 namespace fs = std::filesystem;
 
 namespace {
@@ -93,79 +96,35 @@ void pad_to(std::vector<uint8_t>& unit, size_t bytes) {
     unit.push_back(0x80);
 }
 
+// The video samples of an MP4 as the demux reads them. Times in 100 ns.
 struct Mp4Video {
-    std::vector<LONGLONG> times;
-    std::vector<LONGLONG> durations;
+    std::vector<int64_t> times;
+    std::vector<int64_t> durations;
     std::vector<bool> clean_points;
 };
 
-struct MfScope {
-    MfScope() {
-        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-        MFStartup(MF_VERSION);
-    }
-    ~MfScope() {
-        MFShutdown();
-        CoUninitialize();
-    }
-};
-
-// The H.264 samples of an MP4 as they are stored, with no decode.
 Mp4Video read_video(const fs::path& mp4) {
-    MfScope mf;
     Mp4Video v;
-    ComPtr<IMFSourceReader> reader;
-    if (FAILED(MFCreateSourceReaderFromURL(mp4.wstring().c_str(), nullptr, &reader))) return v;
-    const DWORD video = static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM);
-    reader->SetStreamSelection(static_cast<DWORD>(MF_SOURCE_READER_ALL_STREAMS), FALSE);
-    reader->SetStreamSelection(video, TRUE);
-    for (;;) {
-        DWORD flags = 0;
-        LONGLONG time = 0;
-        ComPtr<IMFSample> sample;
-        if (FAILED(reader->ReadSample(video, 0, nullptr, &flags, &time, &sample))) break;
-        if (flags & MF_SOURCE_READERF_ENDOFSTREAM) break;
-        if (!sample) continue;
-        LONGLONG duration = 0;
-        sample->GetSampleDuration(&duration);
-        v.times.push_back(time);
-        v.durations.push_back(duration);
-        v.clean_points.push_back(MFGetAttributeUINT32(sample.Get(), MFSampleExtension_CleanPoint, FALSE) != 0);
+    uint64_t size = 0;
+    const Mp4ReadAt read = file_reader(mp4, &size);
+    Mp4Movie movie;
+    if (!open_mp4(read, size, movie, nullptr) || !movie.video()) return v;
+    const Mp4Track& t = *movie.video();
+    for (const Mp4Sample& s : t.samples) {
+        v.times.push_back(t.time_us(s.time) * 10);
+        v.durations.push_back(static_cast<int64_t>(s.duration) * 10'000'000 / t.timescale);
+        v.clean_points.push_back(s.sync);
     }
     return v;
 }
 
-// The audio of an MP4, decoded to 48 kHz stereo int16.
+// The sound of an MP4, decoded to 48 kHz stereo int16 from the start of play.
 std::vector<int16_t> read_audio(const fs::path& mp4) {
-    MfScope mf;
     std::vector<int16_t> pcm;
-    ComPtr<IMFSourceReader> reader;
-    if (FAILED(MFCreateSourceReaderFromURL(mp4.wstring().c_str(), nullptr, &reader))) return pcm;
-    const DWORD audio = static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM);
-    ComPtr<IMFMediaType> type;
-    MFCreateMediaType(&type);
-    type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
-    type->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM);
-    type->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
-    type->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, 48000);
-    type->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, 2);
-    if (FAILED(reader->SetCurrentMediaType(audio, nullptr, type.Get()))) return pcm;
-    for (;;) {
-        DWORD flags = 0;
-        ComPtr<IMFSample> sample;
-        if (FAILED(reader->ReadSample(audio, 0, nullptr, &flags, nullptr, &sample))) break;
-        if (flags & MF_SOURCE_READERF_ENDOFSTREAM) break;
-        if (!sample) continue;
-        ComPtr<IMFMediaBuffer> buffer;
-        sample->ConvertToContiguousBuffer(&buffer);
-        BYTE* data = nullptr;
-        DWORD length = 0;
-        buffer->Lock(&data, nullptr, &length);
-        const size_t at = pcm.size();
-        pcm.resize(at + length / 2);
-        std::memcpy(pcm.data() + at, data, length);
-        buffer->Unlock();
-    }
+    read_mp4_audio(mp4, [&](const int16_t* s, size_t frames, int64_t) {
+        pcm.insert(pcm.end(), s, s + frames * 2);
+        return true;
+    });
     return pcm;
 }
 
@@ -305,7 +264,15 @@ TEST(ReplayMux, TheAudioIsOnTheVideoTimeline) {
     EXPECT_LE(std::abs(off_ms), 1.0) << "the click is " << off_ms << " ms off";
 }
 
+// The poster decodes through the viewer's decoder. Linux has no JPEG writer:
+// it records no game clips.
+#ifndef __linux__
 TEST(ReplayMux, APosterFromTheMp4IsAJpeg) {
+#ifdef _WIN32
+    // The decode is NVDEC, AMF or OpenH264 through the viewer. The Windows CI
+    // runner is a service: in session 0 the CUDA interop of NVDEC fails.
+    if (std::getenv("CI")) GTEST_SKIP() << "hardware decode skipped under CI on Windows";
+#endif
     TempDir dir;
     const auto units = fixture_units();
     ReplayVideoRing ring;
@@ -337,6 +304,8 @@ TEST(ReplayMux, APosterFromTheMp4IsAJpeg) {
     EXPECT_GT(fs::file_size(jpeg), 500u);
     EXPECT_LT(fs::file_size(jpeg), 1024u * 1024u) << "under 1 MB (12-STREAMING.md 3.7, G1)";
 }
+
+#endif  // __linux__
 
 // CLIPS.md 15.4 and 15.13 (ReplayMuxTime): a 30 s clip at the default
 // quality (720p60 at 5 Mbps: about 10 KB a frame) muxes in under 3 s. The
@@ -398,6 +367,7 @@ TEST(ReplayMuxTime, ThirtySecondsAtTheDefaultQualityMuxInUnderThreeSeconds) {
                 static_cast<double>(result.bytes) / 1e6, seconds);
 }
 
+#ifdef _WIN32
 // Makes the fixture of the tests above with the recording encoder of this
 // machine: 60 frames of a moving pattern, an IDR every 30 frames, each access
 // unit after an AUD. Run on request only (see the top of this file).
@@ -470,6 +440,13 @@ TEST(ReplayFixture, DISABLED_MakeTheH264Fixture) {
     ASSERT_TRUE(f.good());
     std::printf("[ ReplayFixture ] %s: %zu bytes\n", file.string().c_str(), out.size());
 }
+#endif  // _WIN32
+
+// The replay session: Windows and macOS.
+#if defined(_WIN32) || defined(__APPLE__)
+#include "replay/replay_session.hpp"
+#include "video/capture_reference.hpp"
+#include "video/video_pipeline.hpp"
 
 namespace {
 
@@ -498,8 +475,8 @@ mello::video::CaptureSourceDesc write_reference_clip(const fs::path& yuv) {
 
 // The whole replay on this PC's encoder: a reference clip through the
 // capture manager, the recording encoder and the rings, then a capture.
-// Needs a D3D11 device with a video processor and an encoder, so it skips
-// under CI like the other pipeline tests.
+// Needs a graphics device and a hardware encoder, so it skips under CI like
+// the other pipeline tests.
 TEST(ReplaySession, AClipOfTheReferenceSourceHasItsFramesAndALivePoster) {
     if (std::getenv("CI")) GTEST_SKIP() << "hardware-dependent test skipped under CI";
     TempDir dir;
@@ -625,6 +602,7 @@ TEST(ReplaySession, TheReferenceGameAudioIsInTheClipAndReadsBack) {
     }
 }
 
+
 // CLIPS.md 15.3; 14-VIDEO-PIPELINE.md 4.8: a stream of the same game starts, and the
 // replay moves onto the stream's capture and keeps recording while the
 // stream keeps its frames. Before the stream stops, the replay goes back to
@@ -687,13 +665,14 @@ TEST(ReplaySession, FollowsAStreamOfTheSameGameAndComesBack) {
     EXPECT_TRUE(v.clean_points.front());
     EXPECT_EQ(clip.width, 320u) << "one picture size over the switches";
     EXPECT_GE(v.times.size(), 150u) << "about 60 frames a second, a short gap at each switch";
-    LONGLONG longest_gap = 0;
-    for (const LONGLONG d : v.durations) longest_gap = (std::max)(longest_gap, d);
+    int64_t longest_gap = 0;
+    for (const int64_t d : v.durations) longest_gap = (std::max)(longest_gap, d);
     std::printf("[ ReplaySession ] follow and back: %u frames in %.2f s, longest frame %.0f ms\n",
                 static_cast<unsigned>(v.times.size()), static_cast<double>(clip.duration_us) / 1e6,
                 static_cast<double>(longest_gap) / 1e4);
 }
 
+#ifdef _WIN32
 // On request only: the replay on a running game, as the client starts it.
 //   set MELLO_REPLAY_PID=<pid>
 //   mello_tests --gtest_also_run_disabled_tests --gtest_filter=ReplaySession.DISABLED_*
@@ -715,7 +694,7 @@ TEST(ReplaySession, DISABLED_RecordsTheGameOfMelloReplayPid) {
 
     TempDir dir;
     ReplayConfig config;
-    config.hwnd = hwnd;
+    config.window = hwnd;
     config.pid = pid;
     config.dir = dir.path();
     std::string error;
@@ -732,6 +711,7 @@ TEST(ReplaySession, DISABLED_RecordsTheGameOfMelloReplayPid) {
                 static_cast<unsigned long long>(stats.frames_encoded), clip.has_game_audio);
     EXPECT_TRUE(ok);
 }
+#endif  // _WIN32
 
 // 12-STREAMING.md 3.7, F3: the stream that the replay follows is overloaded
 // twice. The replay drops to 30 fps, then pauses, while the stream keeps its
@@ -789,8 +769,8 @@ TEST(ReplaySession, UnderOverloadTheReplayShedsBeforeTheStream) {
     session->stop();
     const auto v = read_video(mp4);
     ASSERT_FALSE(v.times.empty());
-    LONGLONG longest = 0;
-    for (const LONGLONG d : v.durations) longest = (std::max)(longest, d);
+    int64_t longest = 0;
+    for (const int64_t d : v.durations) longest = (std::max)(longest, d);
     EXPECT_GE(longest, 5'000'000) << "the last frame lasts over the pause (at least 0.5 s)";
 }
-#endif // _WIN32
+#endif  // _WIN32 || __APPLE__

@@ -8,10 +8,15 @@
 #include "video/decoder_factory.hpp"
 #include "video/process_enum.hpp"
 #include "video/window_thumbnail.hpp"
+#if defined(_WIN32) || (defined(__APPLE__) && !defined(MELLO_IOS))
+// The game clip replay (CLIPS.md 15): Windows and macOS.
+#define MELLO_HAS_REPLAY 1
+#include "replay/replay_frames.hpp"
+#include "replay/replay_session.hpp"
+#endif
 #ifdef _WIN32
 #include "video/hook_launcher.hpp"
 #include "video/graphics_device.hpp"
-#include "replay/replay_session.hpp"
 #include "video/capture_process.hpp"
 #endif
 #include "replay/mp4_read.hpp"
@@ -131,18 +136,15 @@ struct MelloStreamHost {
 /// decreases; a non-zero value means this session leaked a capture pipeline.
 static std::atomic<uint32_t> g_abandoned_pipelines{0};
 
-#ifdef _WIN32
+#ifdef MELLO_HAS_REPLAY
 /// The game a stream shows, as ReplaySession::game_key has it: the pid of a
 /// process or of a window's process, the reference key, or 0 for a monitor.
 static uint32_t stream_game_key(const mello::video::CaptureSourceDesc& desc) {
     switch (desc.mode) {
         case mello::video::CaptureMode::Process:
             return desc.pid;
-        case mello::video::CaptureMode::Window: {
-            DWORD pid = 0;
-            if (desc.hwnd) GetWindowThreadProcessId(static_cast<HWND>(desc.hwnd), &pid);
-            return static_cast<uint32_t>(pid);
-        }
+        case mello::video::CaptureMode::Window:
+            return mello::replay::window_owner_pid(desc.hwnd);
         case mello::video::CaptureMode::Reference:
             return mello::replay::ReplaySession::kReferenceKey;
         default:
@@ -708,17 +710,17 @@ MelloResult mello_clip_encode(const char* wav_path, const char* mp4_path, int bi
 
 MelloResult mello_replay_start(MelloContext* ctx, const MelloReplayConfig* config) {
     if (!ctx || !config) return MELLO_ERROR_INVALID_PARAM;
-#ifdef _WIN32
+#ifdef MELLO_HAS_REPLAY
     try {
         auto* c = ctx_cast(ctx);
         // One replay at a time (CLIPS.md 15.2).
         if (auto old = c->exchange_replay(nullptr)) old->stop();
         mello::replay::ReplayConfig rc;
-        rc.hwnd = config->hwnd;
+        rc.window = config->hwnd;
         rc.pid = config->pid;
         // The game's main window, as the stream's process capture finds it.
-        if (!rc.hwnd && rc.pid != 0) rc.hwnd = mello::video::find_main_window(rc.pid);
-        if (!rc.hwnd) {
+        if (!rc.window && rc.pid != 0) rc.window = mello::replay::game_main_window(rc.pid);
+        if (!rc.window) {
             c->set_error("the game has no window");
             return MELLO_ERROR_FAILED;
         }
@@ -752,7 +754,7 @@ MelloResult mello_replay_start(MelloContext* ctx, const MelloReplayConfig* confi
 
 void mello_replay_stop(MelloContext* ctx) {
     if (!ctx) return;
-#ifdef _WIN32
+#ifdef MELLO_HAS_REPLAY
     try {
         if (auto old = ctx_cast(ctx)->exchange_replay(nullptr)) old->stop();
     } catch (...) {
@@ -762,7 +764,7 @@ void mello_replay_stop(MelloContext* ctx) {
 
 MelloResult mello_test_replay_start_reference(MelloContext* ctx, const MelloReplayConfig* config) {
     if (!ctx || !config) return MELLO_ERROR_INVALID_PARAM;
-#ifdef _WIN32
+#ifdef MELLO_HAS_REPLAY
     try {
         auto* c = ctx_cast(ctx);
         if (auto old = c->exchange_replay(nullptr)) old->stop();
@@ -804,7 +806,7 @@ MelloResult mello_test_replay_start_reference(MelloContext* ctx, const MelloRepl
 
 bool mello_test_replay_reference_info(MelloContext* ctx, MelloReferenceInfo* out) {
     if (!ctx || !out) return false;
-#ifdef _WIN32
+#ifdef MELLO_HAS_REPLAY
     const auto session = ctx_cast(ctx)->replay();
     mello::video::ReferenceInfo info;
     if (!session || !session->reference_info(info)) return false;
@@ -823,7 +825,7 @@ bool mello_test_replay_reference_info(MelloContext* ctx, MelloReferenceInfo* out
 
 MelloReplayState mello_replay_state(MelloContext* ctx) {
     if (!ctx) return MELLO_REPLAY_OFF;
-#ifdef _WIN32
+#ifdef MELLO_HAS_REPLAY
     const auto session = ctx_cast(ctx)->replay();
     if (!session) return MELLO_REPLAY_OFF;
     switch (session->state()) {
@@ -839,7 +841,7 @@ MelloReplayState mello_replay_state(MelloContext* ctx) {
 MelloResult mello_replay_capture(MelloContext* ctx, float seconds, const char* mp4_path,
                                  const char* poster_path, MelloReplayClip* out) {
     if (!ctx || seconds <= 0.0f || !mp4_path || !poster_path) return MELLO_ERROR_INVALID_PARAM;
-#ifdef _WIN32
+#ifdef MELLO_HAS_REPLAY
     try {
         auto* c = ctx_cast(ctx);
         const auto session = c->replay();
@@ -1735,7 +1737,7 @@ MelloStreamHost* mello_stream_start_host(
             return nullptr;
         }
         stream_timer_resolution_acquire();
-#ifdef _WIN32
+#ifdef MELLO_HAS_REPLAY
         // A game clip replay of the same game moves onto this stream's
         // capture: one capture per game (CLIPS.md 15.3). The stream
         // started exactly as it would without it (F2).
@@ -1761,7 +1763,7 @@ void mello_stream_stop_host(MelloStreamHost* host) {
     try {
         MELLO_LOG_INFO("stream", "stop_host: audio teardown");
         stream_audio_teardown(host);
-#ifdef _WIN32
+#ifdef MELLO_HAS_REPLAY
         // A replay that follows this stream goes back to its own capture
         // first, so this stream's capture stops with the stream (14-VIDEO-PIPELINE.md 4.8).
         host->video->set_overload_shedder(nullptr);
@@ -1899,10 +1901,12 @@ MelloResult mello_stream_start_audio(MelloStreamHost* host) {
         // the context's link to the host peer.
         pipeline->set_link(host->ctx->stream_audio_link());
         const bool timed_source = host->video->capture_provides_timed_audio();
-#ifdef _WIN32
+#if defined(_WIN32) || defined(MELLO_HAS_REPLAY)
         // F7: one game audio capture per game, shared with a game clip replay
-        // of the same game. Null on a Windows without process loopback: the
-        // pipeline then opens its own capture, as before.
+        // of the same game: process loopback on Windows, a process tap on
+        // macOS (the game's sound only; ScreenCaptureKit audio is the whole
+        // mix of the Mac, m3llo's own playback too). Null where there is
+        // none: the pipeline then takes the audio as before.
         if (host->capture_pid != 0 && !timed_source) {
             pipeline->set_shared_game_audio(host->ctx->game_audio(host->capture_pid));
         }
@@ -1925,11 +1929,12 @@ MelloResult mello_stream_start_audio(MelloStreamHost* host) {
                 });
         }
 
-        // macOS has no loopback device: ScreenCaptureKit carries game audio on
-        // the capture stream that is already running for video, so the pipeline
-        // is fed from there instead of opening its own source. On Windows the
-        // capture backend ignores this and the WASAPI loopback drives it.
-        {
+        // macOS without the shared process tap (a monitor or a window
+        // stream, or no tap): ScreenCaptureKit carries audio on the capture
+        // stream that is already running for video, so the pipeline is fed
+        // from there. On Windows the capture backend ignores this and the
+        // WASAPI loopback drives it.
+        if (!pipeline->uses_shared_audio()) {
             auto* raw = pipeline.get();
             host->video->set_capture_audio_callback(
                 [raw](const float* s, uint32_t frames, uint32_t ch, uint32_t rate) {
@@ -2174,6 +2179,18 @@ void mello_clip_player_set_native_frame_callback(MelloClipPlayer* player, MelloN
                                   uint64_t ts) {
                 callback(user_data, handle, w, h, static_cast<MelloNativeFrameFormat>(format), uv_y_offset, ts);
             });
+    } catch (...) {}
+}
+
+void mello_clip_player_set_frame_callback(MelloClipPlayer* player, MelloFrameCallback callback, void* user_data) {
+    if (!player) return;
+    try {
+        if (!callback) {
+            player->player->set_frame_callback({});
+            return;
+        }
+        player->player->set_frame_callback([callback, user_data](const uint8_t* rgba, uint32_t w, uint32_t h,
+                                                                 uint64_t ts) { callback(user_data, rgba, w, h, ts); });
     } catch (...) {}
 }
 

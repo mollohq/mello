@@ -131,6 +131,27 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
         return false;
     }
     const GraphicsDevice& device = manager_->device();
+#elif defined(MELLO_HOST_MANAGER)
+    // macOS: the manager owns a Metal device of its own (the viewer keeps
+    // device_), and a replay of the same game joins this capture.
+    {
+        GraphicsDevice capture_device = create_metal_device();
+        if (!capture_device.handle) {
+            MELLO_LOG_ERROR(TAG, "No graphics device for the capture");
+            return false;
+        }
+        auto source_capture = create_capture_source(source);
+        if (!source_capture) {
+            CFRelease(capture_device.handle);
+            MELLO_LOG_ERROR(TAG, "Failed to initialize capture source");
+            return false;
+        }
+        manager_ = CaptureManager::create_from(capture_device, std::move(source_capture), source);
+        if (!manager_) {
+            MELLO_LOG_ERROR(TAG, "Failed to initialize capture source");
+            return false;
+        }
+    }
 #else
     if (!init_device()) return false;
 #if defined(__linux__)
@@ -258,8 +279,70 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
         if (encode_thread_.joinable()) encode_thread_.join();
         return false;
     }
+#elif defined(MELLO_HOST_MANAGER)
+    // macOS: no preprocessor. VideoToolbox takes the BGRA CVPixelBuffer and
+    // scales it to the encode size. The capture thread retains each frame
+    // into the encode queue; the encode thread encodes it, so the capture
+    // never waits on the encoder (14-VIDEO-PIPELINE.md 4.8).
+    {
+        const uint32_t cap_w = manager_->width() & ~1u;
+        const uint32_t cap_h = manager_->height() & ~1u;
+        const EncodeSize target = encode_size_for(cap_w, cap_h, config.height, config.fps);
+        encode_w_ = target.width;
+        encode_h_ = target.height;
+        EncoderConfig enc_config{};
+        enc_config.width         = encode_w_;
+        enc_config.height        = encode_h_;
+        enc_config.fps           = config.fps;
+        enc_config.bitrate_kbps  = config.bitrate_kbps;
+        enc_config.keyframe_interval = keyframe_interval_for(config.fps);
+        enc_config.codec         = VideoCodec::H264;
+        encoder_ = create_best_encoder(manager_->device(), enc_config);
+        if (!encoder_) {
+            MELLO_LOG_ERROR(TAG, "No encoder available");
+            manager_.reset();
+            return false;
+        }
+        encoder_control_.attach(encoder_.get());
+    }
+    host_running_    = true;
+    host_start_time_ = now_us();
+    frames_encoded_  = 0;
+    eq_head_ = eq_tail_ = eq_count_ = 0;
+    eq_drops_ = 0;
+    frames_captured_.store(0, std::memory_order_relaxed);
+    last_capture_us_.store(host_start_time_, std::memory_order_relaxed);
+    encode_ms_mean_.store(0.0, std::memory_order_relaxed);
+    output_fps_.store(0, std::memory_order_relaxed);
+    next_emit_deadline_us_ = 0;
+    cost_window_start_captured_ = 0;
+    cost_window_start_drops_ = 0;
+    {
+        std::promise<void> exited;
+        encode_exited_ = exited.get_future();
+        encode_thread_ = std::thread([this, exited = std::move(exited)]() mutable {
+            encode_thread_mac();
+            exited.set_value();
+        });
+    }
+    handled_swap_generation_ = manager_->swap_generation();
+    consumer_id_ = manager_->add_consumer([this](const CapturedFrame& frame) { on_captured_frame(frame); });
+    if (consumer_id_ == 0 || !manager_->start(config.fps)) {
+        MELLO_LOG_ERROR(TAG, "Failed to start capture");
+        if (consumer_id_ != 0) {
+            (void)manager_->remove_consumer(consumer_id_);
+            consumer_id_ = 0;
+        }
+        host_running_ = false;
+        eq_cv_.notify_all();
+        if (encode_thread_.joinable()) encode_thread_.join();
+        encoder_control_.attach(nullptr);
+        encoder_.reset();
+        manager_.reset();
+        return false;
+    }
 #elif defined(__APPLE__) || defined(__linux__)
-    // macOS: No preprocessor needed — VT accepts BGRA CVPixelBuffer directly.
+    // iOS: no preprocessor. VT accepts a BGRA CVPixelBuffer directly.
     // Linux: the encoder takes the capture's CPU picture and converts and
     // scales it itself (encoder.hpp).
     uint32_t cap_w = capture_->width()  & ~1u;
@@ -307,7 +390,7 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     }
 #endif
 
-#ifdef _WIN32
+#ifdef MELLO_HOST_MANAGER
     const CaptureManager& capture = *manager_;
 #else
     const CaptureSource& capture = *capture_;
@@ -329,7 +412,7 @@ void VideoPipeline::stop_host() {
     // Each step is logged before it starts. A stop that hangs in a driver or a
     // capture thread then names its own step in the log: the 2026-09-15 beta
     // hang left no way to tell capture, encode and encoder shutdown apart.
-#ifdef _WIN32
+#ifdef MELLO_HOST_MANAGER
     MELLO_LOG_INFO(TAG, "stop_host: capture stop (%s)", manager_ ? manager_->backend_name() : "none");
     if (manager_ && consumer_id_ != 0) {
         // The only consumer leaves, so the manager stops the source.
@@ -414,8 +497,19 @@ void VideoPipeline::stop_host() {
     MELLO_LOG_INFO(TAG, "Host pipeline stopped: uptime=%llus frames_encoded=%llu keyframes=%u bytes_out=%lluMB",
         uptime_s, frames_encoded_, stats.keyframes_sent, stats.bytes_sent / (1024 * 1024));
 
-#ifndef _WIN32
+#ifndef MELLO_HOST_MANAGER
     capture_.reset();
+#endif
+#if defined(MELLO_HOST_MANAGER) && defined(__APPLE__)
+    // The frames that waited in the queue were retained for the encoder.
+    {
+        std::lock_guard<std::mutex> lock(eq_mutex_);
+        while (eq_count_ > 0) {
+            CVPixelBufferRelease(static_cast<CVPixelBufferRef>(encode_queue_[eq_tail_].texture));
+            eq_tail_ = (eq_tail_ + 1) % ENCODE_QUEUE_CAP;
+            --eq_count_;
+        }
+    }
 #endif
     encoder_.reset();
 #ifdef _WIN32
@@ -424,12 +518,14 @@ void VideoPipeline::stop_host() {
         retired_preprocessors_.clear();
     }
     preprocessor_.reset();
+#endif
+#ifdef MELLO_HOST_MANAGER
     // Last: the encoder and the preprocessors were made on its device.
     manager_.reset();
 #endif
 }
 
-#if defined(__APPLE__) || defined(__linux__)
+#if !defined(MELLO_HOST_MANAGER) && (defined(__APPLE__) || defined(__linux__))
 void VideoPipeline::on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_us) {
     if (!host_running_.load()) return;
 
@@ -492,7 +588,7 @@ void VideoPipeline::on_capture_idle() {
 #endif
 
 void VideoPipeline::set_capture_audio_callback(CaptureSource::AudioCallback cb) {
-#ifdef _WIN32
+#ifdef MELLO_HOST_MANAGER
     if (manager_ && consumer_id_ != 0) manager_->set_audio_callback(consumer_id_, std::move(cb));
 #else
     if (capture_) capture_->set_audio_callback(std::move(cb));
@@ -500,7 +596,7 @@ void VideoPipeline::set_capture_audio_callback(CaptureSource::AudioCallback cb) 
 }
 
 void VideoPipeline::set_capture_timed_audio_callback(CaptureSource::TimedAudioCallback cb) {
-#ifdef _WIN32
+#ifdef MELLO_HOST_MANAGER
     if (manager_ && consumer_id_ != 0) {
         manager_->set_timed_audio_callback(consumer_id_, std::move(cb));
     }
@@ -510,7 +606,7 @@ void VideoPipeline::set_capture_timed_audio_callback(CaptureSource::TimedAudioCa
 }
 
 bool VideoPipeline::capture_provides_timed_audio() const {
-#ifdef _WIN32
+#ifdef MELLO_HOST_MANAGER
     return manager_ && manager_->provides_timed_audio();
 #else
     return capture_ && capture_->provides_timed_audio();
@@ -683,7 +779,7 @@ void VideoPipeline::get_host_telemetry(HostTelemetry& out) const {
         out.encode_ms  = static_cast<float>(last_encode_ms_);
     }
 
-#ifdef _WIN32
+#ifdef MELLO_HOST_MANAGER
     if (manager_) {
         out.capture_backend = manager_->backend_name();
         out.capture_failed  = manager_->failed();
@@ -716,7 +812,7 @@ void VideoPipeline::get_host_telemetry(HostTelemetry& out) const {
     out.source_width = source_w_.load(std::memory_order_relaxed);
     out.source_height = source_h_.load(std::memory_order_relaxed);
     out.source_size_changes = source_size_changes_.load(std::memory_order_relaxed);
-#ifdef _WIN32
+#ifdef MELLO_HOST_MANAGER
     out.gpu_name = manager_ ? manager_->device().adapter_name : device_.adapter_name;
 #else
     out.gpu_name = device_.adapter_name;
@@ -986,6 +1082,9 @@ bool VideoPipeline::resize_encoder(uint32_t width, uint32_t height, uint32_t gen
     return true;
 }
 
+#endif
+
+#ifdef MELLO_HOST_MANAGER
 void VideoPipeline::set_overload_shedder(OverloadShedder shedder) {
     std::lock_guard<std::mutex> lock(shedder_mutex_);
     overload_shedder_ = std::move(shedder);
@@ -1038,6 +1137,85 @@ void VideoPipeline::maybe_reduce_encoder_cost() {
     // cannot accumulate into a false positive later.
     cost_window_start_captured_ = captured;
     cost_window_start_drops_    = drops;
+}
+#endif
+
+#if defined(MELLO_HOST_MANAGER) && defined(__APPLE__)
+// The capture manager's thread (ScreenCaptureKit's sample queue): count,
+// decimate, retain the CVPixelBuffer into the encode queue (two deep, newest
+// wins) and return. The encode thread does the rest, so a slow encode never
+// stops the capture for a game clip replay on the same capture.
+void VideoPipeline::on_captured_frame(const CapturedFrame& frame) {
+    if (!host_running_.load()) return;
+    frames_captured_.fetch_add(1, std::memory_order_relaxed);
+    last_capture_us_.store(now_us(), std::memory_order_relaxed);
+    if (!frame.texture) return;
+    if (!decimation_accepts(frame.capture_us, next_emit_deadline_us_, effective_output_fps())) return;
+    if (frame.swap_generation != handled_swap_generation_) {
+        handled_swap_generation_ = frame.swap_generation;
+        encoder_control_.request_keyframe();
+    }
+    CVPixelBufferRetain(static_cast<CVPixelBufferRef>(frame.texture));
+    void* dropped = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(eq_mutex_);
+        if (eq_count_ == ENCODE_QUEUE_CAP) {
+            dropped = encode_queue_[eq_tail_].texture;
+            eq_tail_ = (eq_tail_ + 1) % ENCODE_QUEUE_CAP;
+            --eq_count_;
+            ++eq_drops_;
+        }
+        EncodeJob& job = encode_queue_[eq_head_];
+        job.texture = frame.texture;
+        job.timestamp_us = frame.capture_us;
+        eq_head_ = (eq_head_ + 1) % ENCODE_QUEUE_CAP;
+        ++eq_count_;
+    }
+    if (dropped) CVPixelBufferRelease(static_cast<CVPixelBufferRef>(dropped));
+    eq_cv_.notify_one();
+}
+
+void VideoPipeline::encode_thread_mac() {
+    while (host_running_.load()) {
+        EncodeJob job{};
+        {
+            std::unique_lock<std::mutex> lock(eq_mutex_);
+            eq_cv_.wait(lock, [this] { return eq_count_ > 0 || !host_running_.load(); });
+            if (!host_running_.load()) return;
+            job = encode_queue_[eq_tail_];
+            eq_tail_ = (eq_tail_ + 1) % ENCODE_QUEUE_CAP;
+            --eq_count_;
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        EncodedPacket packet{};
+        const bool encoded = encoder_control_.encode(job.texture, job.timestamp_us, packet);
+        CVPixelBufferRelease(static_cast<CVPixelBufferRef>(job.texture));
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        {
+            std::lock_guard<std::mutex> lock(eq_mutex_);
+            last_encode_ms_ = ms;
+        }
+        // About 1 s of history at 60 fps, as the Windows encode thread.
+        const double mean = encode_ms_mean_.load(std::memory_order_relaxed);
+        encode_ms_mean_.store(mean + (ms - mean) / 60.0, std::memory_order_relaxed);
+        if (!encoded) continue;
+        frames_encoded_++;
+        if (frames_encoded_ <= 3) {
+            MELLO_LOG_DEBUG(TAG, "encode[%llu]: %zu bytes keyframe=%d", frames_encoded_, packet.data.size(),
+                            packet.is_keyframe);
+        }
+        if (frames_encoded_ % 300 == 0) {
+            const uint64_t uptime_s = (now_us() - host_start_time_) / 1'000'000;
+            EncoderStats stats{};
+            encoder_->get_stats(stats);
+            MELLO_LOG_INFO(TAG, "host: uptime=%llus frames=%llu fps=%u bitrate=%ukbps keyframes=%u bytes=%.1fMB",
+                           uptime_s, frames_encoded_, stats.fps_actual, stats.bitrate_kbps, stats.keyframes_sent,
+                           static_cast<double>(stats.bytes_sent) / (1024 * 1024));
+        }
+        if (packet_cb_) packet_cb_(packet.data.data(), packet.data.size(), packet.is_keyframe, job.timestamp_us);
+        // F3: a game clip replay on this capture sheds first.
+        maybe_reduce_encoder_cost();
+    }
 }
 #endif
 

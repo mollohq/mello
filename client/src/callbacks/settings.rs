@@ -112,8 +112,17 @@ pub fn wire(ctx: &AppContext) {
     // The clip button names the clip key from the first frame.
     ctx.app
         .set_clip_key_label(clip_key_label(&ctx.settings.borrow()).into());
-    // Game clips are Windows only until the macOS work (CLIPS.md 15.14).
-    ctx.app.set_game_clips_available(cfg!(windows));
+    // Game clips: Windows and macOS (CLIPS.md 15.12 and 15.12a).
+    ctx.app
+        .set_game_clips_available(cfg!(any(windows, target_os = "macos")));
+    {
+        // macOS: the Screen Recording permission, asked from Settings only.
+        let cmd = ctx.cmd_tx.clone();
+        ctx.app.on_game_clips_permission_requested(move || {
+            log::info!("UI: allow screen recording for game clips");
+            let _ = cmd.send(Command::RequestGameClipPermission);
+        });
+    }
     ctx.app
         .set_settings_game_clip_qualities(slint::ModelRc::new(slint::VecModel::from(
             game_clip_qualities(),
@@ -549,7 +558,9 @@ pub fn wire(ctx: &AppContext) {
                     );
                     return;
                 }
-                if cfg!(windows) && settings.game_clip_key.as_deref() == Some(raw_str.as_str()) {
+                if cfg!(any(windows, target_os = "macos"))
+                    && settings.game_clip_key.as_deref() == Some(raw_str.as_str())
+                {
                     log::info!("Clip key refused, the game clip key uses it: {}", raw_str);
                     app.set_settings_clip_key_warning(
                         format!("Game clip uses {label}. Pick another key.").into(),
@@ -658,7 +669,7 @@ pub fn wire(ctx: &AppContext) {
             s.borrow().save();
             hk.borrow().unregister_ptt();
             hk.borrow().register_clip(clip_binding(&defaults));
-            if cfg!(windows) {
+            if cfg!(any(windows, target_os = "macos")) {
                 hk.borrow().register_game_clip(game_clip_binding(&defaults));
             }
             hk.borrow()

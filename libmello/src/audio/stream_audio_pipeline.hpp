@@ -35,13 +35,15 @@ public:
     /// start(); null: none.
     void set_link(std::shared_ptr<StreamAudioLink> link);
 
-#ifdef _WIN32
     /// The game audio capture of the streamed game, shared with the game
-    /// clip replay (12-STREAMING.md 3.7, F7). Before start(). When it is the
-    /// game of `capture_pid`, start() takes the audio from it and opens no
-    /// loopback of its own; else, or with none, start() works as before.
+    /// clip replay (12-STREAMING.md 3.7, F7): process loopback on Windows, a
+    /// process tap on macOS. Before start(). When it is the game of
+    /// `capture_pid`, start() takes the audio from it and opens no capture of
+    /// its own; else, or with none, start() works as before.
     void set_shared_game_audio(std::shared_ptr<class SharedGameAudio> shared);
-#endif
+    /// True while the audio comes from the shared capture: the caller then
+    /// feeds no PCM of its own (macOS: no ScreenCaptureKit audio).
+    bool uses_shared_audio() const { return shared_consumer_ != 0; }
 
     /// `capture_pid` is the streamed process when capturing a game, 0 otherwise.
     /// Non-zero scopes capture to that process tree; zero scopes it to everything
@@ -81,9 +83,9 @@ private:
     // itself must be gated rather than just its uses.
 #ifdef _WIN32
     std::unique_ptr<class WasapiLoopbackCapture> capture_;
+#endif
     std::shared_ptr<class SharedGameAudio> shared_audio_;
     uint32_t shared_consumer_ = 0;  // 0: not a consumer now
-#endif
     OpusEnc encoder_;
     PacketCallback callback_;
     std::vector<int16_t> pcm_accum_;

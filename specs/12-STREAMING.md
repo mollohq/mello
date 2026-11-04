@@ -570,7 +570,7 @@ rule.
 | F4 | Upload | A game clip uploads during the stream, at a budget that the stream's quality controller sets (G1 to G8 below). |
 | F5 | A replay fault | An encoder, convert or ring error turns off the replay only. The replay never moves the ladder and never sets `device_poisoned_`. A device that the GPU removed ends both. |
 | F6 | The poster readback | The copy to a staging texture is a submit on the capture thread, with no wait. The map and the JPEG run on the mux worker. |
-| F7 | Game audio | One process loopback per game: `SharedGameAudio` (`audio/shared_game_audio.cpp`), kept per pid by the context (`Context::game_audio`). The stream host's audio pipeline and the replay take their game audio from it. On a Windows without process loopback the stream host keeps its own capture with the endpoint fallback; the replay then has no game audio. |
+| F7 | Game audio | One capture per game: `SharedGameAudio` (`audio/shared_game_audio.cpp`), kept per pid by the context (`Context::game_audio`): WASAPI process loopback on Windows, a Core Audio process tap on macOS. The stream host's audio pipeline and the replay take their game audio from it. On a Windows without process loopback the stream host keeps its own capture with the endpoint fallback; the replay then has no game audio. On macOS without a tap the stream keeps ScreenCaptureKit's audio (§9.2). |
 | F8 | Gates | Not built yet: a stream gate case with a replay on the same manager, an F8 press, a forced overload and a pause (CLIPS.md §15.14). |
 
 **The upload during a stream.** `UploadGovernor`
@@ -1187,10 +1187,15 @@ header that counts the frames. libmello adds no framing of its own.
 
 ### 9.2 macOS capture (ScreenCaptureKit)
 
-macOS has no loopback device. ScreenCaptureKit delivers system audio on the
-same `SCStream` that already captures video, so `StreamAudioHostPipeline` opens
-no source of its own: `mello.cpp` registers a `CaptureSource::set_audio_callback`
-that pushes into `feed_float_pcm`.
+A stream of a game takes the game's sound from the shared process tap
+(§3.7, F7). ScreenCaptureKit's audio is the whole mix of the Mac on a window
+filter too, m3llo's own playback included with `excludesCurrentProcessAudio`
+on (measured on 2026-11-04, CLIPS.md §15.12a), so a viewer would hear the
+crew voice back. A monitor or a window stream, or a game with no tap, keeps
+ScreenCaptureKit's audio: it delivers it on the same `SCStream` that already
+captures video, so `StreamAudioHostPipeline` opens no source of its own:
+`mello.cpp` registers a `CaptureSource::set_audio_callback` that pushes into
+`feed_float_pcm` when the pipeline does not use the shared capture.
 
 Four constraints, none of which are visible from the call site:
 

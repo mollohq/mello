@@ -160,9 +160,74 @@ fn disk_free(dir: &Path) -> Option<u64> {
     (ok != 0).then_some(free)
 }
 
-#[cfg(not(windows))]
+/// The bytes free for this user on the volume of `dir`: `f_bavail` blocks of
+/// `f_frsize` (the blocks a process without root may take).
+#[cfg(target_os = "macos")]
+fn disk_free(dir: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(path.as_ptr(), &mut stat) } != 0 {
+        return None;
+    }
+    Some(stat.f_bavail as u64 * stat.f_frsize as u64)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn disk_free(_dir: &Path) -> Option<u64> {
     None
+}
+
+/// macOS: the replay captures the game window with ScreenCaptureKit, which
+/// needs the Screen Recording permission. The replay checks it before each
+/// start and never asks while the user plays: the Settings section asks.
+#[cfg(target_os = "macos")]
+mod screen_capture {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGPreflightScreenCaptureAccess() -> bool;
+        fn CGRequestScreenCaptureAccess() -> bool;
+    }
+
+    pub(super) fn permitted() -> bool {
+        unsafe { CGPreflightScreenCaptureAccess() }
+    }
+
+    pub(super) fn request() {
+        // The prompt shows once per app. After that macOS returns false at
+        // once, and the user turns m3llo on in System Settings.
+        if !unsafe { CGRequestScreenCaptureAccess() } {
+            let pane =
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+            if let Err(e) = std::process::Command::new("/usr/bin/open")
+                .arg(pane)
+                .spawn()
+            {
+                log::warn!("[replay] cannot open the Screen Recording settings: {e}");
+            }
+        }
+    }
+}
+
+/// Whether the replay may capture the screen: false only on a Mac without
+/// the Screen Recording permission.
+fn may_capture_screen() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        screen_capture::permitted()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
+/// `Command::RequestGameClipPermission`: the Screen Recording prompt on
+/// macOS, nothing elsewhere.
+pub(crate) fn request_screen_capture() {
+    log::info!("[replay] the user asks for the screen recording permission");
+    #[cfg(target_os = "macos")]
+    screen_capture::request();
 }
 
 /// The folder of the ring files and the clips: libmello's default, the OS
@@ -249,8 +314,8 @@ impl super::Client {
     pub(super) fn sync_replay(&mut self) {
         // The upload pace: 3 Mbps while a game runs (CLIPS.md 15.7; 12-STREAMING.md 3.7, G8).
         crate::clip_upload::pace().set_game_running(self.game_state.current_game().is_some());
-        // Game clips are Windows only until the macOS work (CLIPS.md 15.14).
-        if !cfg!(windows) {
+        // Game clips: Windows and macOS (CLIPS.md 15.12, 15.12a).
+        if !cfg!(any(windows, target_os = "macos")) {
             return;
         }
         let rules = |game: Option<&ActiveGame>| {
@@ -403,6 +468,24 @@ impl Worker {
             return;
         }
         self.disk_low = false;
+        #[cfg(feature = "e2e-game")]
+        let fake = crate::e2e_game::is_fake_pid(target.pid);
+        #[cfg(not(feature = "e2e-game"))]
+        let fake = false;
+        // A fake game records the reference clip: it needs no permission.
+        if !fake && !may_capture_screen() {
+            if self.sent.0 != GameClipState::NoPermission {
+                log::warn!("[replay] off: no screen recording permission");
+            }
+            // The worker looks again at the next retry: the user may allow it
+            // in System Settings meanwhile.
+            self.retry_at = Some(Instant::now() + retry_delay(1));
+            self.emit(
+                GameClipState::NoPermission,
+                "no screen recording permission".into(),
+            );
+            return;
+        }
         let (height, fps, bitrate_kbps) = target.quality.encoding();
         let config = mello_sys::MelloReplayConfig {
             hwnd: std::ptr::null_mut(),
@@ -761,6 +844,14 @@ mod tests {
         let free = disk_free(&std::env::temp_dir()).expect("GetDiskFreeSpaceExW");
         assert!(free > 0);
         assert_eq!(disk_free(Path::new("Q:\\no\\such\\folder")), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_free_space_of_the_temp_folder_reads() {
+        let free = disk_free(&std::env::temp_dir()).expect("statvfs");
+        assert!(free > 0);
+        assert_eq!(disk_free(Path::new("/no/such/folder")), None);
     }
 
     #[test]

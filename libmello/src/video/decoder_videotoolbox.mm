@@ -250,69 +250,67 @@ DecodeFeedResult VTDecoder::decode(const uint8_t* data, size_t size, bool is_key
 
     if (!session_ || !format_) return DecodeFeedResult::Error;
 
-    // Feed each slice NAL to the decoder
+    // One access unit is one sample: every slice of the picture and its SEI,
+    // each with a 4-byte length (AVCC). The parameter sets are in the format
+    // description; an access unit delimiter or filler alone is not a picture
+    // and VideoToolbox refuses it (kVTVideoDecoderBadDataErr). Clips carry
+    // AUDs, and NVENC can split a picture into several slices.
+    std::vector<uint8_t> avcc;
+    avcc.reserve(size + 4 * nalus.size());
+    bool has_slice = false;
+    for (auto& nalu : nalus) {
+        if (nalu.type == 7 || nalu.type == 8 || nalu.type == 9 || nalu.type == 12) continue;
+        if (nalu.type >= 1 && nalu.type <= 5) has_slice = true;
+        const uint32_t len = (uint32_t)nalu.size;
+        avcc.push_back((len >> 24) & 0xFF);
+        avcc.push_back((len >> 16) & 0xFF);
+        avcc.push_back((len >> 8) & 0xFF);
+        avcc.push_back(len & 0xFF);
+        avcc.insert(avcc.end(), nalu.data, nalu.data + nalu.size);
+    }
     size_t submitted = 0;
     bool submission_failed = false;
-    for (auto& nalu : nalus) {
-        if (nalu.type == 7 || nalu.type == 8) continue; // skip parameter sets
-
-        // Build AVCC-style sample: 4-byte big-endian length prefix + NAL data
-        size_t avcc_size = 4 + nalu.size;
-        std::vector<uint8_t> avcc(avcc_size);
-        uint32_t len = (uint32_t)nalu.size;
-        avcc[0] = (len >> 24) & 0xFF;
-        avcc[1] = (len >> 16) & 0xFF;
-        avcc[2] = (len >> 8)  & 0xFF;
-        avcc[3] =  len        & 0xFF;
-        memcpy(avcc.data() + 4, nalu.data, nalu.size);
-
+    if (has_slice) {
         CMBlockBufferRef block = nullptr;
         OSStatus status = CMBlockBufferCreateWithMemoryBlock(
             kCFAllocatorDefault,
-            avcc.data(), avcc_size,
+            avcc.data(), avcc.size(),
             kCFAllocatorNull, // no dealloc — we own the buffer
-            nullptr, 0, avcc_size,
+            nullptr, 0, avcc.size(),
             0, &block);
-
+        CMSampleBufferRef sample = nullptr;
         if (status != noErr) {
             MELLO_LOG_WARN(TAG, "CMBlockBufferCreateWithMemoryBlock failed: %d", (int)status);
             submission_failed = true;
-            continue;
-        }
-
-        CMSampleBufferRef sample = nullptr;
-        const size_t sample_size = avcc_size;
-        status = CMSampleBufferCreate(
-            kCFAllocatorDefault,
-            block, true, nullptr, nullptr,
-            (CMVideoFormatDescriptionRef)format_,
-            1, 0, nullptr,
-            1, &sample_size,
-            &sample);
-
-        CFRelease(block);
-        if (status != noErr) {
-            MELLO_LOG_WARN(TAG, "CMSampleBufferCreate failed: %d", (int)status);
-            submission_failed = true;
-            continue;
-        }
-
-        VTDecodeFrameFlags flags = kVTDecodeFrame_EnableAsynchronousDecompression
-                                 | kVTDecodeFrame_1xRealTimePlayback;
-        VTDecodeInfoFlags info_flags = 0;
-
-        status = VTDecompressionSessionDecodeFrame(
-            (VTDecompressionSessionRef)session_,
-            sample, flags, nullptr, &info_flags);
-
-        CFRelease(sample);
-
-        if (status != noErr) {
-            MELLO_LOG_WARN(TAG, "VTDecompressionSessionDecodeFrame failed: %d (nalu_type=%u)",
-                (int)status, nalu.type);
-            submission_failed = true;
         } else {
-            submitted++;
+            const size_t sample_size = avcc.size();
+            status = CMSampleBufferCreate(
+                kCFAllocatorDefault,
+                block, true, nullptr, nullptr,
+                (CMVideoFormatDescriptionRef)format_,
+                1, 0, nullptr,
+                1, &sample_size,
+                &sample);
+            CFRelease(block);
+            if (status != noErr) {
+                MELLO_LOG_WARN(TAG, "CMSampleBufferCreate failed: %d", (int)status);
+                submission_failed = true;
+            }
+        }
+        if (sample) {
+            VTDecodeFrameFlags flags = kVTDecodeFrame_EnableAsynchronousDecompression
+                                     | kVTDecodeFrame_1xRealTimePlayback;
+            VTDecodeInfoFlags info_flags = 0;
+            status = VTDecompressionSessionDecodeFrame(
+                (VTDecompressionSessionRef)session_,
+                sample, flags, nullptr, &info_flags);
+            CFRelease(sample);
+            if (status != noErr) {
+                MELLO_LOG_WARN(TAG, "VTDecompressionSessionDecodeFrame failed: %d", (int)status);
+                submission_failed = true;
+            } else {
+                submitted++;
+            }
         }
     }
 
