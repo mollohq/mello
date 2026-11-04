@@ -11,6 +11,7 @@
 //   mello_tests --gtest_also_run_disabled_tests --gtest_filter=ReplayFixture.*
 #include <gtest/gtest.h>
 #include "replay/h264_nal.hpp"
+#include "replay/mp4_demux.hpp"
 #include "replay/mp4_read.hpp"
 #include "replay/replay_audio_mix.hpp"
 #include "replay/replay_mux.hpp"
@@ -104,16 +105,15 @@ struct Mp4Video {
 
 Mp4Video read_video(const fs::path& mp4) {
     Mp4Video v;
-    read_mp4_video(
-        mp4,
-        [&](const Mp4VideoUnit& u) {
-            v.times.push_back(u.time_us * 10);
-            v.clean_points.push_back(u.keyframe);
-            return true;
-        },
-        nullptr, nullptr);
-    for (size_t i = 0; i < v.times.size(); ++i) {
-        v.durations.push_back(i + 1 < v.times.size() ? v.times[i + 1] - v.times[i] : 0);
+    uint64_t size = 0;
+    const Mp4ReadAt read = file_reader(mp4, &size);
+    Mp4Movie movie;
+    if (!open_mp4(read, size, movie, nullptr) || !movie.video()) return v;
+    const Mp4Track& t = *movie.video();
+    for (const Mp4Sample& s : t.samples) {
+        v.times.push_back(t.time_us(s.time) * 10);
+        v.durations.push_back(static_cast<int64_t>(s.duration) * 10'000'000 / t.timescale);
+        v.clean_points.push_back(s.sync);
     }
     return v;
 }
