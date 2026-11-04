@@ -7,7 +7,9 @@
 
 #include "graphics_device.hpp"
 
-#ifdef __APPLE__
+#ifdef _WIN32
+#include <d3d11.h>
+#elif defined(__APPLE__)
 #include <CoreFoundation/CoreFoundation.h>
 #endif
 

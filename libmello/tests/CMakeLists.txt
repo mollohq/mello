@@ -306,3 +306,13 @@ if(WIN32)
     target_compile_definitions(mello_tone_player PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
     target_link_libraries(mello_tone_player PRIVATE ole32)
 endif()
+
+# Game clips on macOS (CLIPS.md 15.12a): which capture gives the
+# game's sound only. A manual probe, not a test; ctest does not run it.
+if(APPLE AND NOT IOS)
+    add_executable(mello_sck_audio_probe mello_sck_audio_probe.mm)
+    set_source_files_properties(mello_sck_audio_probe.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc -fmodules")
+    target_link_libraries(mello_sck_audio_probe PRIVATE
+        "-framework AppKit" "-framework AudioToolbox" "-framework CoreAudio" "-framework CoreMedia"
+        "-framework ScreenCaptureKit" "-framework Foundation")
+endif()
