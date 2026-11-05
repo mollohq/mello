@@ -90,6 +90,17 @@ to Crew history.
 - Voice: a call that is on (who is in it, Join), or on a quiet feed the empty
   default channel with the date of the last call and Start voice.
 
+The parts share one card when they fit. Otherwise each part is a card, under
+the one before it:
+
+| Parts | Full width | Column beside the board |
+|---|---|---|
+| One part | One card | One card |
+| The first five and another part | The first five, then a card with the rest | A card for each part |
+| Joined and voice | One card | Two cards |
+
+One card is 120 px high. A card in a stack of cards is 88 px high.
+
 ## 6. Sessions
 
 Live sessions (client state from presence, `LiveSessionCard`) lead, then the

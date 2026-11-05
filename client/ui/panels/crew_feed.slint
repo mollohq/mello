@@ -1874,6 +1874,81 @@ component ZonePeople inherits PeopleZone {
     voice-more: zones.voice-more;
 }
 
+/// The People zone as cards. One card holds every part when they fit. The
+/// first five (the seats and the red Invite) take a card of their own when
+/// another part shows. Joined and voice share a card only at full width.
+/// In the narrow column each part is a card.
+global PeopleStack {
+    out property <length> one-h: 120px;
+    out property <length> part-h: 88px;
+
+    pure public function parts(z: ZonesData) -> int {
+        (z.open-seats > 0 ? 1 : 0) + (z.joined.length > 0 ? 1 : 0) + (z.voice != "" ? 1 : 0)
+    }
+    /// Every part in one card. Five seats, Invite and a call are wider than the feed.
+    pure public function one(z: ZonesData, wide: bool) -> bool {
+        self.parts(z) <= 1 || (self.parts(z) == 2 && z.open-seats == 0 && wide)
+    }
+    /// Joined and voice in one card under the seats card.
+    pure public function joins-with-voice(z: ZonesData, wide: bool) -> bool {
+        z.joined.length > 0 && z.voice != "" && wide
+    }
+    /// The height of the zone: one card, or the stack of cards.
+    pure public function height(z: ZonesData, wide: bool) -> length {
+        if self.one(z, wide) {
+            return self.one-h;
+        }
+        let cards = self.joins-with-voice(z, wide) ? self.parts(z) - 1 : self.parts(z);
+        cards * self.part-h + (cards - 1) * 12px
+    }
+}
+
+component PeopleCards inherits VerticalLayout {
+    in property <ZonesData> zones;
+    /// The zone runs the full width of the feed, not the column beside the board.
+    in property <bool> wide: true;
+    callback invite();
+    callback voice-clicked();
+
+    property <bool> one: PeopleStack.one(zones, wide);
+    property <bool> joins-with-voice: PeopleStack.joins-with-voice(zones, wide);
+    property <length> one-h: PeopleStack.one-h;
+    property <length> part-h: PeopleStack.part-h;
+    property <bool> seats: zones.open-seats > 0;
+    property <bool> joins: zones.joined.length > 0;
+    property <bool> calls: zones.voice != "";
+
+    spacing: 12px;
+
+    if one: ZonePeople {
+        height: root.one-h;
+        zones: root.zones;
+        invite => { root.invite(); }
+        voice-clicked => { root.voice-clicked(); }
+    }
+    if !one && seats: ZonePeople {
+        height: root.part-h;
+        zones: root.zones;
+        show-joined: false;
+        show-voice: false;
+        invite => { root.invite(); }
+    }
+    if !one && joins: ZonePeople {
+        height: root.part-h;
+        zones: root.zones;
+        show-seats: false;
+        show-voice: root.joins-with-voice;
+        voice-clicked => { root.voice-clicked(); }
+    }
+    if !one && calls && !joins-with-voice: ZonePeople {
+        height: root.part-h;
+        zones: root.zones;
+        show-seats: false;
+        show-joined: false;
+        voice-clicked => { root.voice-clicked(); }
+    }
+}
+
 /// The crew feed in five zones and Crew history: Stage, Board, Clips, People,
 /// Sessions. A zone with nothing to show collapses and the zones under it
 /// move up. The cards are the feed cards (FeedSlot), so play, watch, the
@@ -1938,9 +2013,8 @@ export component CrewFeed inherits Rectangle {
     // The clip row stands beside the board while the left column is shorter.
     property <bool> clips-left: has-board && has-clips && stage-h + 12px + rh <= board-h;
     property <length> left-h: stage-h + (clips-left ? (has-stage ? 12px : 0px) + rh : 0px);
-    property <length> people-h: 120px;
     property <bool> people-left: zones.people && has-board
-        && left-h + (left-h > 0px ? 12px : 0px) + people-h <= board-h;
+        && left-h + (left-h > 0px ? 12px : 0px) + PeopleStack.height(zones, false) <= board-h;
     // Tab of the board: Week when today has nothing.
     property <int> tab-pick: -1;
     property <int> tab: tab-pick >= 0 ? tab-pick : (zones.today-empty ? 1 : 0);
@@ -2067,9 +2141,9 @@ export component CrewFeed inherits Rectangle {
                             seek-clip-ms(m) => { root.seek-clip-ms(m); }
                         }
 
-                        if root.people-left: ZonePeople {
-                            height: root.people-h;
+                        if root.people-left: PeopleCards {
                             zones: root.zones;
+                            wide: false;
                             invite => { root.invite-clicked(); }
                             voice-clicked => { root.start-voice-clicked(zones.channel-id); }
                         }
@@ -2129,8 +2203,7 @@ export component CrewFeed inherits Rectangle {
                     seek-clip-ms(m) => { root.seek-clip-ms(m); }
                 }
 
-                if zones.people && !root.people-left: ZonePeople {
-                    height: root.people-h;
+                if zones.people && !root.people-left: PeopleCards {
                     zones: root.zones;
                     invite => { root.invite-clicked(); }
                     voice-clicked => { root.start-voice-clicked(zones.channel-id); }

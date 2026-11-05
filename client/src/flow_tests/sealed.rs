@@ -674,7 +674,7 @@ fn the_first_day_of_own_chips_is_stored() {
 
 // ---- The centre card fits the feed panel ---------------------------------
 
-fn bounds_of(h: &Harness, name: &str) -> (f32, f32, f32, f32) {
+pub(super) fn bounds_of(h: &Harness, name: &str) -> (f32, f32, f32, f32) {
     let found: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), name).collect();
     assert_eq!(found.len(), 1, "{name}");
     let (p, s) = (found[0].absolute_position(), found[0].size());
@@ -682,7 +682,7 @@ fn bounds_of(h: &Harness, name: &str) -> (f32, f32, f32, f32) {
 }
 
 /// Size the window so that the feed panel is `panel_w` by `panel_h`.
-fn size_feed_panel(h: &Harness, panel_w: f32, panel_h: f32) {
+pub(super) fn size_feed_panel(h: &Harness, panel_w: f32, panel_h: f32) {
     let (_, _, w0, h0) = bounds_of(h, "CrewFeed");
     let win = h.app().window().size();
     h.app().window().set_size(slint::PhysicalSize::new(

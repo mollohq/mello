@@ -26,7 +26,9 @@ Big|3 · Forty members, a busy evening (tall)
 Monday|4 · Monday, the sealed recap
 Quiet|5 · A quiet week
 Dormant|6 · Dormant
-HistoryPlus|7 · Crew history with m3llo+ (tall)'
+HistoryPlus|7 · Crew history with m3llo+ (tall)
+QuietTwo|8 · A quiet crew of two: the first five and voice are two cards
+JoinCall|9 · Three members, a join and a call (tall)'
 
 {
     echo '<!doctype html><meta charset="utf-8"><title>Zone feed matrix</title>'

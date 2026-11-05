@@ -619,75 +619,6 @@ export component BoardHero inherits Rectangle {
     }
 }
 
-/// The voice channel when nobody is in it, with who is online.
-/// `online` empty: the card is the idle voice card of CLIPS.md 7.1.
-export component BoardVoiceCard inherits BoardShell {
-    in property <string> channel;
-    in property <string> state-line;
-    in property <[H2hPerson]> online;
-    in property <int> online-count;
-    callback start-voice();
-
-    corner: "br";
-
-    HorizontalLayout {
-        padding-left: 18px;
-        padding-right: 18px;
-        spacing: 14px;
-        cross-axis-alignment: center;
-
-        VerticalLayout {
-            spacing: 4px;
-            alignment: center;
-            horizontal-stretch: 0;
-            Kicker { text: "VOICE"; }
-            Text { text: root.channel; font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 17px; color: Theme.text-primary; }
-            Text { text: root.state-line; font-family: Theme.font-body; font-weight: Theme.weight-sentence; font-size: 12px; color: Theme.text-dim; }
-        }
-        if root.online.length > 0: Rectangle { width: 1px; height: 56px; background: Theme.card-border; }
-        if root.online.length > 0: VerticalLayout {
-            spacing: 8px;
-            alignment: center;
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: start;
-                Kicker { text: "ONLINE"; vertical-alignment: center; }
-                Text { text: root.online-count; font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 12px; color: Theme.text-body; vertical-alignment: center; }
-            }
-            HorizontalLayout {
-                spacing: 4px;
-                alignment: start;
-                for p in root.online: UserAvatar {
-                    size: 28px;
-                    initials: p.initials;
-                    color-index: p.hue-index;
-                    avatar: p.avatar;
-                    has-avatar: p.has-avatar;
-                    bg-color: Theme.card-bg;
-                }
-            }
-        }
-        Rectangle { horizontal-stretch: 1; }
-        Rectangle {
-            width: 120px;
-            height: 40px;
-            horizontal-stretch: 0;
-            accessible-role: button;
-            accessible-label: "Start voice";
-            CutButtonShape { width: parent.width; height: parent.height; n: Theme.cut; fill: Theme.action; }
-            Text {
-                text: "START VOICE";
-                font-family: Theme.font-label;
-                font-weight: Theme.weight-label;
-                font-size: 10px;
-                letter-spacing: Theme.track-kicker;
-                color: Theme.on-action;
-            }
-            TouchArea { clicked => { root.start-voice(); } }
-        }
-    }
-}
-
 /// The recent games tiles, sorted by how many members have each game.
 export component MostInstalledCard inherits BoardShell {
     in property <[BoardGame]> games;
@@ -1062,8 +993,13 @@ component Keyline inherits Rectangle {
 
 /// People: who is here, who just joined, who is in voice. Each part shows
 /// only when it has someone. Until the crew has five, the open seats and the
-/// red Invite are part of it (the first five).
+/// red Invite are part of it (the first five). A card can hold some of the
+/// parts only (`show-*`): the feed splits the parts into cards when they do
+/// not fit in one (CrewFeed, `PeopleCards`).
 export component PeopleZone inherits BoardShell {
+    in property <bool> show-seats: true;
+    in property <bool> show-joined: true;
+    in property <bool> show-voice: true;
     in property <[H2hPerson]> members;
     in property <int> open-seats: 0;
     in property <[H2hPerson]> joined;
@@ -1083,6 +1019,10 @@ export component PeopleZone inherits BoardShell {
     callback invite();
     callback voice-clicked();
 
+    property <bool> seats: root.show-seats && root.open-seats > 0;
+    property <bool> joins: root.show-joined && root.joined.length > 0;
+    property <bool> calls: root.show-voice && root.voice != "";
+
     corner: "br";
 
     HorizontalLayout {
@@ -1092,7 +1032,7 @@ export component PeopleZone inherits BoardShell {
         cross-axis-alignment: center;
 
         // The first five: who is here, the open seats, the red invite.
-        if root.open-seats > 0: HorizontalLayout {
+        if root.seats: HorizontalLayout {
             spacing: 8px;
             cross-axis-alignment: center;
             for m in root.members: UserAvatar {
@@ -1105,15 +1045,17 @@ export component PeopleZone inherits BoardShell {
             }
             for i in root.open-seats: OpenSeat { size: 40px; show-label: false; }
         }
-        if root.open-seats > 0: Rectangle { horizontal-stretch: 1; }
-        if root.open-seats > 0: InviteButton {
+        if root.seats: Rectangle { horizontal-stretch: 1; }
+        if root.seats: InviteButton {
             label-text: "Invite";
             a11y-label: "Invite your crew";
             width: 112px;
             clicked => { root.invite(); }
         }
 
-        if root.joined.length > 0: HorizontalLayout {
+        if root.seats && (root.joins || root.calls): Keyline {}
+
+        if root.joins: HorizontalLayout {
             spacing: 12px;
             cross-axis-alignment: center;
             horizontal-stretch: 1;
@@ -1144,9 +1086,9 @@ export component PeopleZone inherits BoardShell {
             }
         }
 
-        if root.joined.length > 0 && root.voice != "": Keyline {}
+        if root.joins && root.calls: Keyline {}
 
-        if root.voice != "": HorizontalLayout {
+        if root.calls: HorizontalLayout {
             spacing: 14px;
             cross-axis-alignment: center;
             horizontal-stretch: 1;
@@ -1180,7 +1122,7 @@ export component PeopleZone inherits BoardShell {
                     color: Theme.text-dim;
                 }
             }
-            if root.voice == "idle": ZoneButton { label: "START VOICE"; tone: "white"; clicked => { root.voice-clicked(); } }
+            if root.voice == "idle": ZoneButton { label: "START VOICE"; a11y-label: "Start voice"; tone: "white"; clicked => { root.voice-clicked(); } }
             if root.voice == "call": ZoneButton { label: "JOIN"; tone: "red"; clicked => { root.voice-clicked(); } }
         }
     }

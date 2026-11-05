@@ -327,3 +327,36 @@ export component PreviewFeedHistoryPlus inherits Panel {
         history: Hist.open, plus: true,
     };
 }
+
+/// 8 · A quiet crew of two: three open seats with the invite, and the empty
+/// channel. The voice part is a card of its own.
+export component PreviewFeedQuietTwo inherits Panel {
+    zones: {
+        you: Crew.bob,
+        stage: "card", stage-card: Hist.belt-hero, stage-short: true,
+        board: "quiet", quiet-line: "No crew time last week.", quiet-sub: "Max still played.",
+        titles: Data.titles-opened, title-count: 7, more-label: "",
+        people: true, members: [Crew.bob, Crew.max], open-seats: 3,
+        voice: "idle", channel: "Lounge", voice-line: "Empty. Last call 6 November",
+    };
+}
+
+/// 9 · Three members, one joined today, a call: the seats and the join, and
+/// the call in a card of its own.
+export component PreviewFeedJoinCall inherits Panel {
+    height: 1200px;
+    zones: {
+        you: Crew.bob,
+        stage: "card", stage-card: Hist.hero-max,
+        board: "tabs",
+        today-big: { value: "1", unit: "h", tail: "10", label: "HANGOUT" },
+        today-stats: [{ value: "1", label: "CLIPS" }, { value: "2", label: "SESSIONS" }, { value: "3", label: "ON" }],
+        today-has-top: true, today-top: Base.cs2,
+        week-big: Base.week-big, week-stats: Base.week-stats,
+        titles: Data.titles-monday, title-count: 13, more-label: "+8 MORE",
+        people: true, members: [Crew.bob, Crew.jonas, Crew.elin], open-seats: 2,
+        joined: [Crew.elin], joined-line: "Elin joined", joined-sub: "invited by Jonas, 20:46", say-hi-card: "j1", say-hi-name: "Elin",
+        voice: "call", channel: "Lounge", voice-line: "2 in the call", voice-people: [Crew.jonas, Crew.elin],
+        sessions: [Hist.s-cs, Hist.s-rl],
+    };
+}

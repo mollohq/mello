@@ -333,3 +333,67 @@ fn a_moved_belt_is_unread_until_the_feed_is_opened_again() {
     h.emit(Event::FeedLoaded { response: feed });
     assert!(!unread(&h), "a move before the last open is read");
 }
+
+/// The bounds of every element of type `name`: x, y, width, height.
+fn all_bounds(h: &Harness, name: &str) -> Vec<(f32, f32, f32, f32)> {
+    ElementHandle::find_by_element_type_name(h.app(), name)
+        .map(|e| {
+            let (p, s) = (e.absolute_position(), e.size());
+            (p.x, p.y, s.width, s.height)
+        })
+        .collect()
+}
+
+/// ★ Regression: in a quiet crew of two, the first five and the empty channel
+/// were one card beside the board, and Start voice ran out of the card. The
+/// first five are a card of their own now, and every People control is
+/// inside a card.
+#[test]
+fn the_first_five_and_the_empty_channel_are_two_cards() {
+    use mello_core::crew_state::{CrewState, VoiceChannelState};
+    let mut h = Harness::new();
+    zones_on(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Max")]);
+    h.emit(Event::CrewStateLoaded {
+        state: CrewState {
+            crew_id: "crew-0".into(),
+            name: "Crew".into(),
+            voice_channels: vec![VoiceChannelState {
+                id: "ch-lounge".into(),
+                name: "Lounge".into(),
+                is_default: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    });
+    let carry = h2h_title("the_carry", "u2", serde_json::json!(412.0), "h");
+    let mut feed = feed_of(vec![h2h_entry(2, vec![carry], vec![], None)]);
+    feed.zones.board.mode = "quiet".into();
+    feed.zones.people.open_seats = 3;
+    h.emit(Event::FeedLoaded { response: feed });
+    // The feed panel of the render matrix: People goes in the column beside
+    // the board.
+    super::sealed::size_feed_panel(&h, 865.0, 1200.0);
+    h.pump();
+
+    let z = h.app().get_feed_zones();
+    assert_eq!(z.voice.as_str(), "idle", "the empty channel shows");
+    assert_eq!(z.open_seats, 3);
+    let cards = all_bounds(&h, "PeopleZone");
+    assert_eq!(cards.len(), 2, "the first five and voice are two cards");
+    let (bx, ..) = super::sealed::bounds_of(&h, "FeedBoard");
+    for label in ["Invite your crew", "Start voice"] {
+        let c = h.controls_labelled(label);
+        assert_eq!(c.len(), 1, "{label}");
+        let (p, s) = (c[0].absolute_position(), c[0].size());
+        let inside = cards.iter().any(|&(x, y, w, hh)| {
+            p.x >= x && p.y >= y && p.x + s.width <= x + w && p.y + s.height <= y + hh
+        });
+        assert!(
+            inside,
+            "{label} at {p:?} {s:?} is inside a card of {cards:?}"
+        );
+        assert!(p.x + s.width <= bx, "{label} ends before the board at {bx}");
+    }
+}
