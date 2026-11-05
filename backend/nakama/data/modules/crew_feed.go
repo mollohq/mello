@@ -55,6 +55,11 @@ const (
 
 type FeedRequest struct {
 	CrewID string `json:"crew_id"`
+	// Zones asks for the zone feed (crew_feed_zones.go) next to the sections.
+	Zones bool `json:"zones,omitempty"`
+	// HistoryBefore pages Crew history: the weeks that start before it. Zero
+	// for the first page.
+	HistoryBefore int64 `json:"history_before,omitempty"`
 }
 
 type FeedEntry struct {
@@ -120,6 +125,8 @@ type FeedResponse struct {
 	// Joined holds the members who joined in the last 24 hours, newest first,
 	// at most feedJoinedMax. One row each on the client.
 	Joined []FeedJoin `json:"joined,omitempty"`
+	// Zones is the zone feed, when the request asked for it.
+	Zones *FeedZones `json:"zones,omitempty"`
 }
 
 const (
@@ -1185,16 +1192,46 @@ func CrewFeedRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 
 	updateLastSeen(ctx, nk, userID, req.CrewID)
 
+	joins := feedJoinsFor(ctx, nk, req.CrewID, timeline, userID, nowMs)
 	resp := FeedResponse{
 		CrewID: req.CrewID,
 		Sections: []FeedSection{
 			{ID: "this_week", Entries: thisWeek},
 			{ID: "memory", Entries: memory},
 		},
-		Joined: feedJoinsFor(ctx, nk, req.CrewID, timeline, userID, nowMs),
+		Joined: joins,
+	}
+	if req.Zones {
+		zones := crewFeedZones(ctx, logger, nk, req, userID, timeline, h2h, joins, nowMs)
+		resp.Zones = &zones
 	}
 	data, _ := json.Marshal(resp)
 	return string(data), nil
+}
+
+// crewFeedZones reads the stores the zone feed needs and builds it. The gate
+// is per viewer: IsUserPremium decides if Crew history is open.
+func crewFeedZones(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, req FeedRequest, userID string, timeline []TimelineEntry, h2h *Head2headFeedData, joins []FeedJoin, nowMs int64) FeedZones {
+	cfg := readFeedConfig(ctx, logger, nk)
+	clipsDoc, _ := readClipsDoc(ctx, nk, req.CrewID)
+	streamDoc, _ := readStreamSessionsDoc(ctx, nk, req.CrewID)
+	recapsDoc, _ := readRecapsDoc(ctx, nk, req.CrewID)
+	stampRecapWeeks(ctx, nk, req.CrewID, recapsDoc.Recaps)
+	return buildFeedZones(zonesInput{
+		ViewerID:      userID,
+		NowMs:         nowMs,
+		FreeDays:      cfg.FreeDays,
+		Plus:          IsUserPremium(userID),
+		HistoryBefore: req.HistoryBefore,
+		Cards:         dropEmptyCards(mergedToCards(timeline)),
+		Clips:         clipsDoc.Clips,
+		Streams:       streamDoc.Sessions,
+		Recaps:        recapsDoc.Recaps,
+		H2h:           h2h,
+		Libs:          crewLibraryDocs(ctx, nk, req.CrewID),
+		Joins:         joins,
+		Belts:         crewBeltsMovedSince(ctx, nk, req.CrewID, nowMs-int64(feedDailyRecapDays)*dayMs),
+	})
 }
 
 // crewBeltsMovedSince reads the holders doc of the crew and returns the belts
