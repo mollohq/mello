@@ -223,7 +223,7 @@ func GuestVoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 
 	// The SFU is the only voice transport. Unlike VoiceJoinRPC there is no
 	// crew kill switch here: if the SFU is unavailable the lounge cannot open.
-	if !sfuAuthEnabled() {
+	if !sfuAvailable() {
 		return "", runtime.NewError("voice is unavailable for web guests right now", 14)
 	}
 

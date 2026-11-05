@@ -338,7 +338,7 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 	// The SFU is the only stream transport. Sign the host token before any
 	// state is written, so a failure leaves no stream behind.
 	if !sfuAvailableForCrew(ctx, nk, req.CrewID) {
-		logger.Warn("start_stream: SFU unavailable for crew %s (auth=%v)", req.CrewID, sfuAuthEnabled())
+		logger.Warn("start_stream: SFU unavailable for crew %s (auth=%v, regions=%v)", req.CrewID, sfuAuthEnabled(), sfuRegionsConfigured())
 		return "", errSFUUnavailable
 	}
 

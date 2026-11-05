@@ -26,10 +26,11 @@ func seedSfuOnlyCrew(metadata string) *fakeGuestNk {
 	return nk
 }
 
-// withSFUKey sets the SFU signing key for one test. A nil key means the
-// server has no SFU configured.
+// withSFUKey sets up the SFU for one test: a signing key and one region
+// (SFU_REGIONS). configured=false means the server has no SFU key.
 func withSFUKey(t *testing.T, configured bool) {
 	t.Helper()
+	useSFURegions(t, map[string]string{"SFU_REGIONS": "eu-west=wss://sfu-eu.example.com:8443/ws"})
 	saved := sfuPrivateKey
 	sfuPrivateKey = nil
 	if configured {

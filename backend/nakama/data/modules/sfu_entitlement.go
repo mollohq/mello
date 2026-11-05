@@ -42,8 +42,8 @@ func sfuEnabledInMetadata(metaStr string) bool {
 	return enabled
 }
 
-// sfuAvailableForCrew reports whether the server can sign SFU tokens and the
-// crew kill switch is off.
+// sfuAvailableForCrew reports whether the server can sign SFU tokens, has an
+// SFU region, and the crew kill switch is off.
 func sfuAvailableForCrew(ctx context.Context, nk runtime.NakamaModule, crewID string) bool {
-	return sfuAuthEnabled() && sfuEnabledForCrew(ctx, nk, crewID)
+	return sfuAvailable() && sfuEnabledForCrew(ctx, nk, crewID)
 }
