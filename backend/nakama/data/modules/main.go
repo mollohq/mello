@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/heroiclabs/nakama-common/runtime"
@@ -32,6 +33,14 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 		logger.Info("SFU JWT signing enabled")
 	} else {
 		logger.Warn("SFU JWT signing disabled (SFU_JWT_PRIVATE_KEY not set)")
+	}
+	for _, problem := range sfuRegionProblems {
+		logger.Error("SFU regions: %s", problem)
+	}
+	if sfuRegionsConfigured() {
+		logger.Info("SFU regions: %s (default %s)", strings.Join(sfuRegionOrder, ", "), defaultSFURegion())
+	} else {
+		logger.Warn("SFU regions: none configured (set SFU_REGIONS). Voice and streams are unavailable.")
 	}
 
 	// Snapshots S3 init (non-fatal — stream cards just won't have snapshots)

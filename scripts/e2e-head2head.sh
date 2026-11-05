@@ -62,10 +62,9 @@ else
     PORT="${H2H_NAKAMA_PORT:-17350}"
     TMP="$(mktemp -d)"
     PROJECT=mello-h2h
-    # Voice joins in the test must take the SFU path (P2P is being removed).
-    # SFU mode needs a signing key on Nakama. A throwaway key is enough: the
-    # test makes no media connection. The endpoint is the local SFU, never the
-    # production one that the compose file defaults to.
+    # Voice joins need a signing key on Nakama. A throwaway key is enough: the
+    # test makes no media connection. The endpoint is the local SFU (SFU_REGIONS
+    # below), never the production one.
     # 8443 is signaling, 8080 is the SFU health and admin port. The SFU runs in
     # Docker from the mello-sfu compose.
     if ! curl -sf -o /dev/null --max-time 3 "http://127.0.0.1:8080/health"; then
@@ -81,7 +80,7 @@ else
     PUSH_WORKER_URL="http://host.docker.internal:$MELLO_E2E_PUSH_PORT"
     PUSH_WORKER_TOKEN="e2e-push-token"
     export MELLO_E2E_PUSH_PORT PUSH_WORKER_URL PUSH_WORKER_TOKEN
-    export SFU_ENDPOINT_EU="ws://127.0.0.1:8443/ws"
+    export SFU_REGIONS="eu-west=ws://127.0.0.1:8443/ws"
     # Distinct container names and ports, so it lives next to the main stack.
     cat >"$TMP/override.yml" <<YML
 services:

@@ -101,7 +101,13 @@ services:
       - TURN_SECRET=${TURN_SECRET:-}
       - TURN_HOST=${TURN_HOST:-}
       - SFU_JWT_PRIVATE_KEY=${SFU_JWT_PRIVATE_KEY:-}
-      - SFU_ENDPOINT_EU=${SFU_ENDPOINT_EU:-wss://sfu-eu.m3llo.app/ws}
+      # The SFU regions (region=endpoint, comma-separated), see .env.example.
+      # The default is the local SFU of the mello-sfu compose (region eu-west).
+      # SFU_ENDPOINT_EU is the older single-region variable; SFU_REGIONS wins.
+      - SFU_REGIONS=${SFU_REGIONS:-}
+      - SFU_ENDPOINT_EU=${SFU_ENDPOINT_EU:-ws://localhost:8443/ws}
+      - SFU_DEFAULT_REGION=${SFU_DEFAULT_REGION:-}
+      - SFU_HEALTH_PORT=${SFU_HEALTH_PORT:-}
       - S3_ENDPOINT=http://s3:9000
       - S3_PRESIGN_ENDPOINT=http://localhost:9000
       - S3_BUCKET=mello-clips

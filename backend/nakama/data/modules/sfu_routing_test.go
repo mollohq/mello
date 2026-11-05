@@ -10,7 +10,20 @@ import (
 	"testing"
 )
 
+// twoSFURegions is the SFU_REGIONS of a deployment with two regions.
+const twoSFURegions = "eu-west=wss://sfu-eu.example.com:8443/ws,us-east=wss://sfu-us.example.com:8443/ws"
+
+// useSFURegions loads the SFU regions from env for one test and puts the
+// previous configuration back after it.
+func useSFURegions(t *testing.T, env map[string]string) {
+	t.Helper()
+	endpoints, order, problems := sfuEndpoints, sfuRegionOrder, sfuRegionProblems
+	t.Cleanup(func() { sfuEndpoints, sfuRegionOrder, sfuRegionProblems = endpoints, order, problems })
+	loadSFURegions(func(k string) string { return env[k] })
+}
+
 func TestSelectSFURegion_PrefersAConfiguredClientChoice(t *testing.T) {
+	useSFURegions(t, map[string]string{"SFU_REGIONS": twoSFURegions})
 	t.Setenv("SFU_DEFAULT_REGION", "")
 	if got := selectSFURegion("us-east"); got != "us-east" {
 		t.Fatalf("preferred us-east: got %q", got)
@@ -20,7 +33,8 @@ func TestSelectSFURegion_PrefersAConfiguredClientChoice(t *testing.T) {
 	}
 }
 
-func TestSelectSFURegion_UnknownOrEmptyFallsBackToEuWest(t *testing.T) {
+func TestSelectSFURegion_UnknownOrEmptyFallsBackToTheFirstRegion(t *testing.T) {
+	useSFURegions(t, map[string]string{"SFU_REGIONS": twoSFURegions})
 	t.Setenv("SFU_DEFAULT_REGION", "")
 	for _, preferred := range []string{"", "ap-south", "US-EAST", " us-east"} {
 		if got := selectSFURegion(preferred); got != "eu-west" {
@@ -30,6 +44,7 @@ func TestSelectSFURegion_UnknownOrEmptyFallsBackToEuWest(t *testing.T) {
 }
 
 func TestSelectSFURegion_DefaultRegionFromEnvironment(t *testing.T) {
+	useSFURegions(t, map[string]string{"SFU_REGIONS": twoSFURegions})
 	t.Setenv("SFU_DEFAULT_REGION", "us-east")
 	if got := selectSFURegion(""); got != "us-east" {
 		t.Fatalf("no preference with SFU_DEFAULT_REGION=us-east: got %q", got)
@@ -46,6 +61,7 @@ func TestSelectSFURegion_DefaultRegionFromEnvironment(t *testing.T) {
 }
 
 func TestVoiceRoomSFURegion_FirstMemberPicksAndTheRoomKeepsIt(t *testing.T) {
+	useSFURegions(t, map[string]string{"SFU_REGIONS": twoSFURegions})
 	t.Setenv("SFU_DEFAULT_REGION", "")
 	resetVoiceState()
 	defer resetVoiceState()
@@ -71,6 +87,7 @@ func TestVoiceRoomSFURegion_FirstMemberPicksAndTheRoomKeepsIt(t *testing.T) {
 // voice_join issues the SFU token and endpoint for the preferred region, and
 // the token carries it.
 func TestIssueVoiceSFUToken_UsesThePreferredRegion(t *testing.T) {
+	useSFURegions(t, map[string]string{"SFU_REGIONS": twoSFURegions})
 	t.Setenv("SFU_DEFAULT_REGION", "")
 	resetVoiceState()
 	defer resetVoiceState()
@@ -148,20 +165,7 @@ func TestSFUHealthURL_DerivedFromTheSignalingEndpoint(t *testing.T) {
 }
 
 func TestGetSFURegionsRPC_ListsBothRegionsWithHealthURLs(t *testing.T) {
-	saved := map[string]string{}
-	for k, v := range sfuEndpoints {
-		saved[k] = v
-	}
-	defer func() {
-		for k := range sfuEndpoints {
-			delete(sfuEndpoints, k)
-		}
-		for k, v := range saved {
-			sfuEndpoints[k] = v
-		}
-	}()
-	sfuEndpoints["eu-west"] = "wss://sfu-eu.m3llo.app:8443/ws"
-	sfuEndpoints["us-east"] = "wss://sfu-us.m3llo.app:8443/ws"
+	useSFURegions(t, map[string]string{"SFU_REGIONS": twoSFURegions})
 
 	out, err := GetSFURegionsRPC(ctxWithUser("u1"), testLogger(), nil, nil, "{}")
 	if err != nil {
@@ -172,8 +176,8 @@ func TestGetSFURegionsRPC_ListsBothRegionsWithHealthURLs(t *testing.T) {
 		t.Fatalf("response is not JSON: %v: %s", err, out)
 	}
 	want := []SFURegion{
-		{Region: "eu-west", HealthURL: "https://sfu-eu.m3llo.app:8080/health"},
-		{Region: "us-east", HealthURL: "https://sfu-us.m3llo.app:8080/health"},
+		{Region: "eu-west", HealthURL: "https://sfu-eu.example.com:8080/health"},
+		{Region: "us-east", HealthURL: "https://sfu-us.example.com:8080/health"},
 	}
 	if len(resp.Regions) != len(want) {
 		t.Fatalf("regions %+v, want %+v", resp.Regions, want)
@@ -192,8 +196,7 @@ func TestGetSFURegionsRPC_ListsBothRegionsWithHealthURLs(t *testing.T) {
 }
 
 func TestGetSFURegionsRPC_LeavesOutAnEndpointWithoutHealthURL(t *testing.T) {
-	saved := sfuEndpoints["us-east"]
-	defer func() { sfuEndpoints["us-east"] = saved }()
+	useSFURegions(t, map[string]string{"SFU_REGIONS": twoSFURegions})
 	sfuEndpoints["us-east"] = "not a url"
 
 	out, err := GetSFURegionsRPC(ctxWithUser("u1"), testLogger(), nil, nil, "{}")
@@ -214,5 +217,106 @@ func TestGetSFURegionsRPC_LeavesOutAnEndpointWithoutHealthURL(t *testing.T) {
 func TestGetSFURegionsRPC_RequiresAUser(t *testing.T) {
 	if _, err := GetSFURegionsRPC(context.Background(), testLogger(), nil, nil, "{}"); err == nil {
 		t.Fatal("an unauthenticated call got the region list")
+	}
+}
+
+// No built-in SFU: a backend without SFU_REGIONS (or the older
+// SFU_ENDPOINT_EU/US) has no region, no default and no SFU.
+func TestSFURegions_NoneConfiguredMeansNoSFU(t *testing.T) {
+	useSFURegions(t, map[string]string{})
+	t.Setenv("SFU_DEFAULT_REGION", "eu-west")
+	if sfuRegionsConfigured() {
+		t.Fatal("regions configured with an empty environment")
+	}
+	if got := selectSFURegion("eu-west"); got != "" {
+		t.Fatalf("selectSFURegion: got %q, want none", got)
+	}
+	if got := sfuEndpointForRegion("eu-west"); got != "" {
+		t.Fatalf("sfuEndpointForRegion: got %q, want none", got)
+	}
+	if got := sfuRegions(); len(got) != 0 {
+		t.Fatalf("sfuRegions: got %+v, want none", got)
+	}
+	saved := sfuPrivateKey
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sfuPrivateKey = key
+	defer func() { sfuPrivateKey = saved }()
+	if sfuAvailable() {
+		t.Fatal("sfuAvailable with a key and no region")
+	}
+}
+
+// A self-hoster with one SFU: get_sfu_regions lists only it, and every
+// preference ends there. Before, the backend also listed the official
+// us-east SFU, which refuses tokens signed with another key.
+func TestSFURegions_OneSelfHostedRegion(t *testing.T) {
+	useSFURegions(t, map[string]string{"SFU_REGIONS": "home=wss://sfu.example.com:8443/ws"})
+	t.Setenv("SFU_DEFAULT_REGION", "")
+	got := sfuRegions()
+	want := []SFURegion{{Region: "home", HealthURL: "https://sfu.example.com:8080/health"}}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("sfuRegions: got %+v, want %+v", got, want)
+	}
+	for _, preferred := range []string{"", "us-east", "eu-west", "home"} {
+		if r := selectSFURegion(preferred); r != "home" {
+			t.Errorf("preferred %q: region %q, want home", preferred, r)
+		}
+	}
+	if ep := sfuEndpointForRegion("us-east"); ep != "wss://sfu.example.com:8443/ws" {
+		t.Errorf("endpoint for an unknown region: %q", ep)
+	}
+}
+
+// The default is the first region in SFU_REGIONS; SFU_DEFAULT_REGION
+// overrides it when it names a configured region.
+func TestSFURegions_DefaultIsTheFirstRegion(t *testing.T) {
+	useSFURegions(t, map[string]string{"SFU_REGIONS": "us-east=wss://a.example.com/ws,eu-west=wss://b.example.com/ws"})
+	t.Setenv("SFU_DEFAULT_REGION", "")
+	if got := defaultSFURegion(); got != "us-east" {
+		t.Fatalf("default: got %q, want us-east", got)
+	}
+	t.Setenv("SFU_DEFAULT_REGION", "eu-west")
+	if got := defaultSFURegion(); got != "eu-west" {
+		t.Fatalf("default with SFU_DEFAULT_REGION=eu-west: got %q", got)
+	}
+}
+
+// Without SFU_REGIONS the older SFU_ENDPOINT_EU and SFU_ENDPOINT_US still
+// work, and only the ones that are set become regions.
+func TestSFURegions_OlderEndpointVariables(t *testing.T) {
+	useSFURegions(t, map[string]string{"SFU_ENDPOINT_EU": "wss://sfu-eu.example.com:8443/ws"})
+	if got := strings.Join(sfuRegionOrder, ","); got != "eu-west" {
+		t.Fatalf("regions: got %q, want eu-west only", got)
+	}
+	useSFURegions(t, map[string]string{
+		"SFU_REGIONS":     "home=ws://127.0.0.1:8443/ws",
+		"SFU_ENDPOINT_EU": "wss://sfu-eu.example.com:8443/ws",
+	})
+	if got := strings.Join(sfuRegionOrder, ","); got != "home" {
+		t.Fatalf("SFU_REGIONS wins over SFU_ENDPOINT_EU: got %q", got)
+	}
+}
+
+// Bad entries are left out and named for the start log; good ones stay.
+func TestSFURegions_BadEntriesAreLeftOutAndReported(t *testing.T) {
+	useSFURegions(t, map[string]string{"SFU_REGIONS": " eu-west = wss://a.example.com/ws ,nonsense,=wss://b.example.com/ws,x=https://c.example.com/ws,eu-west=wss://d.example.com/ws,"})
+	if got := strings.Join(sfuRegionOrder, ","); got != "eu-west" {
+		t.Fatalf("regions: got %q, want eu-west", got)
+	}
+	if ep := sfuEndpoints["eu-west"]; ep != "wss://a.example.com/ws" {
+		t.Fatalf("eu-west endpoint %q, want the first entry, trimmed", ep)
+	}
+	if len(sfuRegionProblems) != 4 {
+		t.Fatalf("problems: %q, want 4 (no '=', no name, not ws, duplicate)", sfuRegionProblems)
+	}
+}
+
+func TestSFUHealthURL_PortFromEnvironment(t *testing.T) {
+	t.Setenv("SFU_HEALTH_PORT", "9090")
+	if got := sfuHealthURL("wss://sfu.example.com:8443/ws"); got != "https://sfu.example.com:9090/health" {
+		t.Fatalf("got %q", got)
 	}
 }

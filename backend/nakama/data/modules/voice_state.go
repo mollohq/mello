@@ -433,7 +433,7 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 
 	// The SFU is the only voice transport.
 	if !sfuAvailableForCrew(ctx, nk, req.CrewID) {
-		logger.Warn("voice_join: SFU unavailable for crew %s (auth=%v)", req.CrewID, sfuAuthEnabled())
+		logger.Warn("voice_join: SFU unavailable for crew %s (auth=%v, regions=%v)", req.CrewID, sfuAuthEnabled(), sfuRegionsConfigured())
 		return "", errSFUUnavailable
 	}
 

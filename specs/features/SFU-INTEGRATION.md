@@ -179,50 +179,23 @@ func base64URLEncode(data []byte) string {
 
 ### 2.2 `sfu_routing.go` - Region Selection and Endpoints
 
-```go
-// backend/nakama/data/modules/sfu_routing.go
+The SFU regions come only from configuration. Nothing is built in.
 
-package main
+| Variable | Meaning |
+|---|---|
+| `SFU_REGIONS` | `region=endpoint`, comma-separated, for example `eu-west=wss://sfu-eu.example.com:8443/ws,us-east=wss://sfu-us.example.com:8443/ws`. The region name must match the `SFU_REGION` of the SFU at that endpoint: the token carries the region and the SFU refuses another |
+| `SFU_ENDPOINT_EU`, `SFU_ENDPOINT_US` | Older variables, read only when `SFU_REGIONS` is empty. They give the regions `eu-west` and `us-east` |
+| `SFU_DEFAULT_REGION` | The fallback region when it names a configured one. Else the first region |
+| `SFU_HEALTH_PORT` | The port of each SFU's `/health` in `get_sfu_regions`. Default `8080` |
 
-import "os"
+- `selectSFURegion(preferred)`: the client's `preferred_region` when it names a configured region, else the default region. With no region configured it is empty.
+- `sfuEndpointForRegion(region)`: the region's endpoint, else the default region's endpoint.
+- `sfuAvailable()`: a signing key and at least one region. Without both, `voice_join`, `start_stream` and `guest_voice_join` return `SFU_UNAVAILABLE`.
+- At start, Nakama logs the regions and the default, or that none are set, and each `SFU_REGIONS` entry it left out.
 
-var sfuEndpoints = map[string]string{
-    "eu-west": "wss://sfu-eu.m3llo.app/ws",
-    "us-east": "wss://sfu-us.m3llo.app/ws",
-}
+The official network sets `SFU_REGIONS` on its own deployment, as any self-hoster does.
 
-func init() {
-    // Allow override via env for dev/staging
-    if eu := os.Getenv("SFU_ENDPOINT_EU"); eu != "" {
-        sfuEndpoints["eu-west"] = eu
-    }
-    if us := os.Getenv("SFU_ENDPOINT_US"); us != "" {
-        sfuEndpoints["us-east"] = us
-    }
-}
-
-func selectSFURegion(userRegion string) string {
-    // Simple geo-mapping for beta.
-    // userRegion: derived from Nakama session context or IP geolocation.
-    // For beta, default to eu-west since most testers are EU-based.
-    // TODO: Integrate MaxMind GeoLite2 for IP-based region detection.
-    switch userRegion {
-    case "NA", "SA":
-        return "us-east"
-    default:
-        return "eu-west"
-    }
-}
-
-func sfuEndpointForRegion(region string) string {
-    if ep, ok := sfuEndpoints[region]; ok {
-        return ep
-    }
-    return sfuEndpoints["eu-west"] // fallback
-}
-```
-
-**Local multi-device note:** when testing desktop + mobile against local Nakama/SFU, `SFU_ENDPOINT_EU` must be a LAN-reachable host (`ws://<lan-ip>:8443/ws`), not `localhost`. The SFU itself must also advertise a non-loopback ICE host candidate (`SFU_PUBLIC_IP=<lan-ip>`), or remote devices will connect signaling but fail media.
+**Local multi-device note:** when testing desktop + mobile against local Nakama/SFU, the endpoint in `SFU_REGIONS` must be a LAN-reachable host (`ws://<lan-ip>:8443/ws`), not `localhost`. The SFU itself must also advertise a non-loopback ICE host candidate (`SFU_PUBLIC_IP=<lan-ip>`), or remote devices will connect signaling but fail media.
 
 ### 2.3 `sfu_entitlement.go` - Crew Kill Switch and the Typed Error
 

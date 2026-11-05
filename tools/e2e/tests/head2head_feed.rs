@@ -448,8 +448,7 @@ fn session_titles_and_recap_belts_follow_the_activity_stats() {
         )
         .await;
 
-        // Voice. The call must take the SFU path, as the voice journeys in qa/
-        // do: a P2P join counts as a failure, because P2P is being removed.
+        // Voice. The call takes the SFU path, as the voice journeys in qa/ do.
         // This test has no client, so no media runs. It drives the server voice
         // state with voice_join and voice_leave, and checks the join answers in
         // SFU mode. A is the crew admin and switches the crew to the SFU first.
@@ -471,7 +470,7 @@ fn session_titles_and_recap_belts_follow_the_activity_stats() {
             let join = rpc_json(client, "voice_join", json!({"crew_id": cid})).await;
             assert_eq!(
                 join["mode"], "sfu",
-                "{name}: the voice join must use the SFU, not P2P: {join}"
+                "{name}: the voice join must use the SFU: {join}"
             );
             assert!(
                 join["sfu_token"].as_str().is_some_and(|t| !t.is_empty()),
