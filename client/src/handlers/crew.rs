@@ -7,9 +7,7 @@ use slint::Model;
 
 use crate::app_context::AppContext;
 use crate::converters::{apply_unread_to_crews, bento_bases, update_active_crew_card};
-use crate::{
-    ChatMessageData, CrewData, DiscoverCrewData, FeedCardData, SearchUserData, VoiceChannelData,
-};
+use crate::{ChatMessageData, CrewData, DiscoverCrewData, SearchUserData, VoiceChannelData};
 
 /// The crews that step 1 shows: one featured crew, and three in row 2. Row 1
 /// also holds the "Create your own crew" card and the invite-code card.
@@ -365,23 +363,16 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 ctx.app.set_has_new_messages(false);
             }
             ctx.live_games.borrow_mut().clear_others();
-            let empty_feed: Vec<FeedCardData> = vec![];
-            ctx.app
-                .set_feed_cards(Rc::new(slint::VecModel::from(empty_feed.clone())).into());
-            ctx.app
-                .set_memory_cards(Rc::new(slint::VecModel::from(empty_feed)).into());
-            ctx.app.set_memory_rows(0);
-            ctx.app.set_feed_cold_start(true);
-            ctx.app.set_feed_quiet(
-                Rc::new(slint::VecModel::from(Vec::<crate::JoinedRowData>::new())).into(),
-            );
-            ctx.app.set_feed_dormant(
-                Rc::new(slint::VecModel::from(Vec::<FeedCardData>::new())).into(),
-            );
+            // The feed of the old crew goes; the new one loads.
+            {
+                let mut last = ctx.last_feed.borrow_mut();
+                if last.as_ref().is_some_and(|f| f.crew_id != crew_id.as_str()) {
+                    *last = None;
+                    ctx.app.set_feed_zones(Default::default());
+                }
+            }
             ctx.app.set_feed_clip_count(0);
-            ctx.app.set_feed_has_more(false);
             crate::converters::set_active_crew(&ctx.app, crew_id.as_str());
-            super::clip::refresh_feed_skeletons(ctx);
             let empty_channels: Vec<VoiceChannelData> = vec![];
             ctx.app
                 .set_voice_channels(Rc::new(slint::VecModel::from(empty_channels)).into());

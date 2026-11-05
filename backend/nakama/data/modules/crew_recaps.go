@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -903,78 +902,3 @@ func generateDueRecaps(ctx context.Context, nk runtime.NakamaModule, logger runt
 // ---------------------------------------------------------------------------
 // CrewRecaps RPC — paginated durable recap history (newest first)
 // ---------------------------------------------------------------------------
-
-type RecapsPageRequest struct {
-	CrewID string `json:"crew_id"`
-	Cursor string `json:"cursor,omitempty"` // week_start of previous page's last item, as string
-	Limit  int    `json:"limit,omitempty"`
-}
-
-type RecapsPageResponse struct {
-	CrewID  string            `json:"crew_id"`
-	Recaps  []WeeklyRecapData `json:"recaps"`
-	Cursor  string            `json:"cursor,omitempty"`
-	HasMore bool              `json:"has_more"`
-}
-
-func CrewRecapsRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
-	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
-	if !ok {
-		return "", runtime.NewError("authentication required", 16)
-	}
-
-	var req RecapsPageRequest
-	if err := json.Unmarshal([]byte(payload), &req); err != nil {
-		return "", runtime.NewError("invalid request", 3)
-	}
-	if req.CrewID == "" {
-		return "", runtime.NewError("crew_id required", 3)
-	}
-	if !isCrewMember(ctx, nk, req.CrewID, userID) {
-		return "", runtime.NewError("not a crew member", 7)
-	}
-
-	limit := req.Limit
-	if limit <= 0 || limit > TimelinePageSize {
-		limit = TimelinePageSize
-	}
-
-	doc, _ := readRecapsDoc(ctx, nk, req.CrewID)
-	stampRecapWeeks(ctx, nk, req.CrewID, doc.Recaps)
-
-	sort.Slice(doc.Recaps, func(i, j int) bool {
-		return doc.Recaps[i].WeekStart > doc.Recaps[j].WeekStart
-	})
-
-	startIdx := 0
-	if req.Cursor != "" {
-		for i, r := range doc.Recaps {
-			if fmt.Sprintf("%d", r.WeekStart) == req.Cursor {
-				startIdx = i + 1
-				break
-			}
-		}
-	}
-
-	end := startIdx + limit
-	if end > len(doc.Recaps) {
-		end = len(doc.Recaps)
-	}
-
-	page := doc.Recaps[startIdx:end]
-
-	var cursor string
-	hasMore := end < len(doc.Recaps)
-	if hasMore && len(page) > 0 {
-		cursor = fmt.Sprintf("%d", page[len(page)-1].WeekStart)
-	}
-
-	resp := RecapsPageResponse{
-		CrewID:  req.CrewID,
-		Recaps:  page,
-		Cursor:  cursor,
-		HasMore: hasMore,
-	}
-	data, _ := json.Marshal(resp)
-	return string(data), nil
-}

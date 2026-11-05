@@ -1293,10 +1293,6 @@ impl Client {
             Command::StopClipPlayback => {
                 self.handle_stop_clip_playback();
             }
-            Command::LoadCrewTimeline { crew_id, cursor } => {
-                self.handle_load_crew_timeline(&crew_id, cursor.as_deref())
-                    .await;
-            }
             Command::LoadCrewFeed { crew_id } => {
                 self.handle_load_crew_feed(&crew_id).await;
             }

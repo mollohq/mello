@@ -84,19 +84,28 @@ fn open_feed(h: &mut Harness, feed: FeedResponse) {
     h.emit(Event::FeedLoaded { response: feed });
 }
 
-/// `(title, sealed, dot)` of the pair rows that carry a chip.
 fn ui(h: &Harness) -> crate::SealedUi<'_> {
     h.app().global::<crate::SealedUi>()
 }
 
-/// `(title, sealed, dot)` of the pair rows that carry a chip.
+/// `(title, sealed, dot)` of the belts on the board that moved.
 fn chips(h: &Harness) -> Vec<(String, bool, bool)> {
-    let pairs = first_card(h).head2head.pairs;
-    (0..pairs.row_count())
-        .filter_map(|i| pairs.row_data(i))
-        .filter(|p| p.has_chip)
-        .map(|p| (p.chip.title.to_string(), p.chip.belt.sealed, p.moved_recent))
+    h.app()
+        .get_feed_zones()
+        .titles
+        .iter()
+        .filter(|t| !t.belt.key.is_empty())
+        .map(|t| (t.belt.title.to_string(), t.belt.sealed, t.unread))
         .collect()
+}
+
+/// `(sealed, dot)` of the board belt with this title.
+fn chip(h: &Harness, title: &str) -> (bool, bool) {
+    chips(h)
+        .into_iter()
+        .find(|(t, _, _)| t == title)
+        .map(|(_, sealed, dot)| (sealed, dot))
+        .unwrap_or_else(|| panic!("no {title} on the board: {:?}", chips(h)))
 }
 
 fn stored_keys(h: &Harness) -> Vec<String> {
@@ -171,7 +180,6 @@ fn a_belt_that_moved_is_sealed_and_not_a_title_that_did_not() {
     assert!(c.iter().all(|(_, sealed, _)| *sealed), "{c:?}");
     assert_eq!(sealed_controls(&h), 2);
     assert_eq!(count_of(&h, "SealedChip"), 2);
-    assert_eq!(count_of(&h, "TitleChip"), 0, "a sealed chip draws no title");
     assert_eq!(ui(&h).get_active_kind().as_str(), "");
     assert_eq!(
         count_of(&h, "SealedStage"),
@@ -187,21 +195,18 @@ fn a_move_older_than_seven_days_is_open() {
     let c = chips(&h);
     assert!(c.iter().all(|(_, sealed, _)| !*sealed), "{c:?}");
     assert_eq!(sealed_controls(&h), 0);
-    assert_eq!(count_of(&h, "TitleChip"), 2);
+    assert_eq!(count_of(&h, "SealedChip"), 0);
 }
 
 #[test]
 fn a_click_sends_the_card_to_the_centre_and_a_click_on_the_scrim_brings_it_back_open() {
     let mut h = Harness::new();
     open_feed(&mut h, feed_with_belts_moved(2, 30));
-    assert_eq!(
-        chips(&h)[0],
-        ("Night Owl".to_string(), true, true),
-        "sealed and unread"
-    );
+    assert_eq!(chip(&h, "Night Owl"), (true, true), "sealed and unread");
+    assert_eq!(chip(&h, "The Carry"), (true, false), "sealed, a day old");
     at(&h, 0);
 
-    // The card of the Night Owl leaves its slot.
+    // The card of the first belt on the board, The Carry, leaves its slot.
     h.click_label("Sealed belt, open it");
     assert_eq!(ui(&h).get_active_kind().as_str(), "belt");
     assert_eq!(count_of(&h, "SealedStage"), 1);
@@ -211,7 +216,7 @@ fn a_click_sends_the_card_to_the_centre_and_a_click_on_the_scrim_brings_it_back_
         "the key is stored when the card leaves"
     );
     assert!(
-        stored_keys(&h)[0].starts_with("night_owl:"),
+        stored_keys(&h)[0].starts_with("the_carry:"),
         "{:?}",
         stored_keys(&h)
     );
@@ -253,23 +258,19 @@ fn a_click_sends_the_card_to_the_centre_and_a_click_on_the_scrim_brings_it_back_
         1,
         "{c:?}"
     );
-    assert_eq!(
-        c[0],
-        ("Night Owl".to_string(), false, false),
-        "open, and the dot is clear"
-    );
+    assert_eq!(chip(&h, "The Carry"), (false, false), "open");
+    assert_eq!(chip(&h, "Night Owl"), (true, true), "still sealed");
 }
 
 fn card_of_type(h: &Harness, card_type: &str) -> FeedCardData {
-    let feed = h.app().get_feed_cards();
-    (0..feed.row_count())
-        .filter_map(|i| feed.row_data(i))
+    zone_cards(h)
+        .into_iter()
         .find(|c| c.card_type == card_type)
         .unwrap_or_else(|| panic!("no {card_type} card"))
 }
 
-/// The same belt sits in a pair row and in the recap. Opening one opens both,
-/// and both slots draw the same code.
+/// The same belt is on the board and in the recap. Both carry one key and one
+/// code, and opening the board belt opens the recap row too.
 #[test]
 fn opening_a_belt_opens_it_in_every_slot() {
     let mut h = Harness::new();
@@ -288,16 +289,18 @@ fn opening_a_belt_opens_it_in_every_slot() {
         "belts_moved": [moved], "week_start": week_start, "week_end": now_ms(),
     })));
     open_feed(&mut h, feed_of(entries));
-    assert_eq!(sealed_controls(&h), 2, "the pair row and the recap row");
-    assert_eq!(count_of(&h, "SealedChip"), 2);
+    // The open recap is numbers on the board: only the board row is a slot.
+    assert_eq!(sealed_controls(&h), 1, "the board row");
+    assert_eq!(count_of(&h, "SealedChip"), 1);
 
     // One key, one code.
-    let in_cell = card_of_type(&h, "head2head")
-        .head2head
-        .pairs
-        .row_data(0)
-        .expect("row")
-        .chip
+    let in_cell = h
+        .app()
+        .get_feed_zones()
+        .titles
+        .iter()
+        .find(|t| t.belt.sealed)
+        .expect("the sealed board row")
         .belt;
     let in_recap = card_of_type(&h, "recap")
         .belts_moved
@@ -312,13 +315,12 @@ fn opening_a_belt_opens_it_in_every_slot() {
     );
     assert_eq!(in_cell.cells.row_count(), 90);
 
-    // While the card is in the centre, the other slot stays sealed and cannot be
-    // opened. When the card lands, both are open.
+    // When the card lands, the board row and the recap row are open.
     at(&h, 0);
     h.click_label("Sealed belt, open it");
     assert_eq!(
         count_of(&h, "SealedChip"),
-        1,
+        0,
         "the slot of the card is empty"
     );
     at(&h, 1500);
@@ -338,11 +340,6 @@ fn opening_a_belt_opens_it_in_every_slot() {
         "the open recap row has the sentence for its tooltip"
     );
     assert!(!row.stat_line.is_empty());
-    assert_eq!(
-        count_of(&h, "TitleChip"),
-        3,
-        "two pair rows and the recap row"
-    );
 }
 
 /// The recap is sealed by week: opening one week does not open another.
@@ -401,17 +398,16 @@ fn opening_the_recap_stores_the_week_and_the_card_returns_open() {
     at(&h, 2100);
     h.pump();
     assert_eq!(ui(&h).get_active_kind().as_str(), "");
-    assert_eq!(
-        (count_of(&h, "SealedRecap"), count_of(&h, "RecapCard")),
-        (0, 1)
-    );
-    // The card in the slot is the opened view: no full-screen recap.
+    // The opened week is numbers on the board, with no card in the slot.
+    assert_eq!(count_of(&h, "SealedRecap"), 0);
+    assert_eq!(h.app().get_feed_zones().board.as_str(), "tabs");
     assert_eq!(h.controls_labelled("See the week").len(), 0);
 }
 
-/// A belt that moved is sealed in the versus hero too, and the tally stays.
+/// A belt the viewer lost is on the Stage only once it is open: a sealed
+/// belt keeps its new holder hidden (SEALED-REVEAL.md).
 #[test]
-fn the_versus_hero_seals_its_moved_belt_and_keeps_its_tally() {
+fn a_sealed_belt_stays_off_the_stage_until_it_is_opened() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 2);
     set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
@@ -420,22 +416,23 @@ fn the_versus_hero_seals_its_moved_belt_and_keeps_its_tally() {
         "title_id": "the_collector", "holder_user_id": "u2", "value": 14, "unit": "installed",
         "since_ms": at_ms, "moved_at_ms": at_ms, "previous_holder_user_id": "user-1",
     });
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![h2h_entry(
-            2,
-            vec![moved.clone()],
-            vec![h2h_pair("u2", 0, 1)],
-            Some(moved),
-        )]),
-    });
-    assert_eq!(count_of(&h, "VersusHero"), 1);
-    assert_eq!(sealed_controls(&h), 1, "the moved chip is sealed");
-    let hero = first_card(&h).head2head;
+    let mut feed = feed_of(vec![h2h_entry(
+        2,
+        vec![moved.clone()],
+        vec![h2h_pair("u2", 0, 1)],
+        Some(moved),
+    )]);
+    feed.zones.stage.kind = "belt".into();
+    h.emit(Event::FeedLoaded { response: feed });
     assert_eq!(
-        (hero.left_score, hero.right_score),
-        (0, 1),
-        "the tally shows"
+        h.app().get_feed_zones().stage.as_str(),
+        "",
+        "the sealed belt is not on the Stage"
     );
+    assert_eq!(count_of(&h, "BeltHero"), 0);
+    assert_eq!(sealed_controls(&h), 1, "the board row is sealed");
+
+    at(&h, 0);
     h.click_label("Sealed belt, open it");
     assert_eq!(ui(&h).get_active_kind().as_str(), "belt");
     assert_eq!(
@@ -443,6 +440,14 @@ fn the_versus_hero_seals_its_moved_belt_and_keeps_its_tally() {
         "Jonas",
         "the card in the centre knows the new holder"
     );
+    at(&h, 1500);
+    h.click_label("Close");
+    at(&h, 2100);
+    h.pump();
+    let z = h.app().get_feed_zones();
+    assert_eq!(z.stage.as_str(), "card", "the open belt takes the Stage");
+    assert_eq!(z.stage_card.head2head.variant.as_str(), "belt");
+    assert_eq!(count_of(&h, "BeltHero"), 1);
 }
 
 /// The card in the centre is drawn at a fixed time of the manual clock: the
@@ -457,17 +462,19 @@ fn a_frame_at_a_fixed_clock_time_renders() {
     h.assert_not_blank();
     let texts = drawn_texts(&h);
     assert!(
-        texts.iter().any(|t| t == "Max"),
+        texts.iter().any(|t| t == "Jonas"),
         "the holder pops in: {texts:?}"
     );
-    assert!(texts.iter().any(|t| t == "Night Owl"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "The Carry"), "{texts:?}");
     assert!(texts.iter().any(|t| t == "took it from"), "{texts:?}");
     // The clock reads 1400 ms: 25 percent of the count-up is still to run.
-    let value = texts.iter().find(|t| t.contains(':') && t.len() == 5);
-    assert!(value.is_some(), "a clock value counts up: {texts:?}");
+    assert!(
+        !texts.iter().any(|t| t == "4,201"),
+        "the value still counts up: {texts:?}"
+    );
     at(&h, 2300);
     assert!(
-        drawn_texts(&h).iter().any(|t| t == "03:40"),
+        drawn_texts(&h).iter().any(|t| t == "4,201"),
         "the count ends at the value"
     );
 }
@@ -523,7 +530,11 @@ fn solo_feed(carry_h: f64) -> FeedResponse {
         {"title_id": "locked_in", "value": 4.6, "unit": "h", "display": "4.6"},
         {"title_id": "sampler", "value": 3, "unit": "games", "display": "3"},
     ]);
-    feed_of(vec![entry])
+    let mut feed = feed_of(vec![entry]);
+    feed.zones.stage.kind = "own_belts".into();
+    feed.zones.board.mode = "solo".into();
+    feed.zones.people.open_seats = 4;
+    feed
 }
 
 fn open_solo(h: &mut Harness, feed: FeedResponse) {
@@ -532,17 +543,18 @@ fn open_solo(h: &mut Harness, feed: FeedResponse) {
     h.emit(Event::FeedLoaded { response: feed });
 }
 
-/// `(key, sealed, own)` of the own chips of the wide card.
+/// `(key, sealed, own)` of the own chips on the Stage.
 fn own_chips(h: &Harness) -> Vec<(String, bool, bool)> {
-    let chips = first_card(h).head2head.chips;
-    (0..chips.row_count())
-        .filter_map(|i| chips.row_data(i))
+    h.app()
+        .get_feed_zones()
+        .own_chips
+        .iter()
         .map(|t| (t.belt.key.to_string(), t.belt.sealed, t.belt.own))
         .collect()
 }
 
-/// A new crew seals every own chip, each under its own key, and the card keeps
-/// its headline, the four open seats and the invite.
+/// A new crew seals every own chip, each under its own key. The Stage keeps
+/// its line, and the People zone the open seats and the invite.
 #[test]
 fn a_new_crew_seals_all_four_own_chips() {
     let mut h = Harness::new();
@@ -563,8 +575,7 @@ fn a_new_crew_seals_all_four_own_chips() {
     );
     assert_eq!(count_of(&h, "TitleChip"), 0, "the values are not drawn");
     let texts = drawn_texts(&h);
-    assert!(texts.iter().any(|t| t == "GO HEAD2HEAD WITH YOUR CREW"));
-    assert_eq!(texts.iter().filter(|t| t.as_str() == "OPEN").count(), 4);
+    assert!(texts.iter().any(|t| t == "Go head2head with your crew"));
     assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
     assert!(
         !texts.iter().any(|t| t == "4,167"),

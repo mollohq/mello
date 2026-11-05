@@ -1,12 +1,12 @@
 import { Theme } from "../theme.slint";
 import { H2hPerson, BeltReveal, RecapSeal, FeedCardData } from "../types.slint";
 import { SealedFixtures } from "./sealed_fixtures.slint";
-import { CrewFeedZones } from "../panels/crew_feed.slint";
+import { CrewFeed } from "../panels/crew_feed.slint";
 import { ControlBar } from "../panels/control_bar.slint";
 import { BoardStat, BoardGame, BoardTitle, ZonesData, HistoryWeek } from "../components/feed_board.slint";
 
 // ============================================================
-//  The zone feed matrix: the real CrewFeedZones panel with test data, one
+//  The zone feed matrix: the real CrewFeed panel with test data, one
 //  Preview for each crew case. The review gate for every feed change.
 //
 //  Members are fake. Avatars are DiceBear output from the approved styles
@@ -158,7 +158,7 @@ global Hist {
         game-record: "2W 1L", game-wins: 2, game-losses: 1, game-matches: 3, participant-count: 2,
         part0-initials: "MA", part0-avatar: Crew.max.avatar, part0-has-avatar: true,
         part1-initials: "TH", part1-avatar: Crew.theo.avatar, part1-has-avatar: true };
-    out property <FeedCardData> belt-hero: { id: "head2head-belt", card-type: "head2head", role: "hero",
+    out property <FeedCardData> belt-hero: { id: "head2head-belt", card-type: "head2head",
         head2head: { variant: "belt", belt: {
             title-id: "night_owl", title: "Night Owl", icon: Crew.i-owl, hue-index: Crew.sara.hue-index,
             prev: Crew.you, prev-value: "03:14", holder: Crew.sara, holder-value: "03:40",
@@ -197,7 +197,7 @@ component Panel inherits Rectangle {
     height: 865px;
     background: Theme.bg-app;
     VerticalLayout {
-        CrewFeedZones { vertical-stretch: 1; zones: root.zones; }
+        CrewFeed { vertical-stretch: 1; zones: root.zones; }
         ControlBar {
             height: Theme.control-bar-height;
             user-name: "b0bben";
@@ -223,7 +223,7 @@ global Base {
 export component PreviewFeedDay0 inherits Panel {
     zones: {
         you: Crew.bob,
-        stage: "own", own-belts: [Own.carry, Own.owl, Own.collector, Own.locked],
+        stage: "own", own-chips: [{ belt: Own.carry }, { belt: Own.owl }, { belt: Own.collector }, { belt: Own.locked }],
         board: "solo",
         solo-games: [
             { name: "Counter-Strike 2", art: Crew.cs2, count: "4,167 h" },

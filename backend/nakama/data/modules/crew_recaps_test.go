@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -266,38 +265,6 @@ func TestWeeklyRecapWithNoActivityStaysEmptyAndHasNoBelts(t *testing.T) {
 	}
 }
 
-func TestBuildThisWeek_SkipsEmptyRecap(t *testing.T) {
-	empty := typedCard("recap_1", "recap", "weekly_recap")
-	empty.data = WeeklyRecapData{WeekStart: 1}
-	full := typedCard("recap_2", "recap", "weekly_recap")
-	full.data = WeeklyRecapData{WeekStart: 2, TotalGameMin: 30, SessionCount: 1}
-
-	if e := findEntry(buildThisWeek([]feedCard{empty}, 0), "recap_1"); e != nil {
-		t.Error("empty recap offered in this_week")
-	}
-	if e := findEntry(buildThisWeek([]feedCard{full}, 0), "recap_2"); e == nil {
-		t.Error("recap with activity missing from this_week")
-	}
-}
-
-func TestBuildMemorySection_FiltersEmptyRecaps(t *testing.T) {
-	nk := newFakeGuestNk()
-	nk.put(CrewRecapsCollection, "c1", SystemUserID, CrewRecapsDoc{CrewID: "c1", Recaps: []WeeklyRecapData{
-		{WeekStart: 1, GeneratedAt: 1},
-		{WeekStart: 2, GeneratedAt: 2, TotalGameMin: 45, SessionCount: 1},
-		{WeekStart: 3, GeneratedAt: 3},
-	}})
-
-	entries := buildMemorySection(context.Background(), nk, "c1", -1, nil, nil)
-
-	if findEntry(entries, "recap_1") != nil || findEntry(entries, "recap_3") != nil {
-		t.Error("empty recap present in memory")
-	}
-	if findEntry(entries, "recap_2") == nil {
-		t.Error("recap with activity missing from memory")
-	}
-}
-
 func TestBuildGamesPlayedWithMinutes_EveryGameMostHoursFirst(t *testing.T) {
 	got := buildGamesPlayedWithMinutes(
 		map[string]int{"CS2": 30, "Rocket League": 80},
@@ -434,38 +401,6 @@ func TestRecapWeekNumberUnknownIsZero(t *testing.T) {
 
 func crewCreatedOn(nk *fakeGuestNk, id string, ms int64) {
 	nk.groups[id] = &api.Group{Id: id, CreateTime: timestamppb.New(time.UnixMilli(ms))}
-}
-
-// The memory section carries the number and the start of every recap, old
-// ones included (stored without either field).
-func TestMemoryRecapsCarryWeekNumberAndStart(t *testing.T) {
-	nk := newFakeGuestNk()
-	crewCreatedOn(nk, "c1", utcMs(2026, time.October, 7, 10))
-	w1, w3 := utcMs(2026, time.October, 5, 0), utcMs(2026, time.October, 19, 0)
-	nk.put(CrewRecapsCollection, "c1", SystemUserID, CrewRecapsDoc{CrewID: "c1", Recaps: []WeeklyRecapData{
-		{WeekStart: w1, GeneratedAt: 1, TotalGameMin: 45, SessionCount: 1},
-		{WeekStart: w3, GeneratedAt: 3, TotalGameMin: 45, SessionCount: 1},
-	}})
-
-	entries := buildMemorySection(context.Background(), nk, "c1", -1, nil, nil)
-
-	for id, want := range map[string]int{fmt.Sprintf("recap_%d", w1): 1, fmt.Sprintf("recap_%d", w3): 3} {
-		e := findEntry(entries, id)
-		if e == nil {
-			t.Fatalf("%s missing", id)
-		}
-		raw, _ := json.Marshal(e.Data)
-		var got struct {
-			WeekNumber  int   `json:"week_number"`
-			WeekStartMs int64 `json:"week_start_ms"`
-		}
-		if err := json.Unmarshal(raw, &got); err != nil {
-			t.Fatal(err)
-		}
-		if got.WeekNumber != want || got.WeekStartMs == 0 {
-			t.Errorf("%s: %+v, want week_number %d and a start", id, got, want)
-		}
-	}
 }
 
 // A crew the server cannot find leaves the number out: the client then shows

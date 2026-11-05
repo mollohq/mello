@@ -58,9 +58,11 @@ pub use stream::{Codec, QualityPreset, StreamConfig, StreamError};
 pub use voice::{AudioDevice, NsMode, VoiceMode};
 
 /// Protocol version this build speaks. Bump on breaking client↔server changes.
-pub const PROTOCOL_VERSION: u32 = 1;
+/// 2: `crew_feed` returns only the zones; `crew_timeline`, `crew_clips` and
+/// `crew_recaps` are gone.
+pub const PROTOCOL_VERSION: u32 = 2;
 /// Oldest server protocol this client can tolerate.
-pub const MIN_SERVER_PROTOCOL: u32 = 1;
+pub const MIN_SERVER_PROTOCOL: u32 = 2;
 
 pub mod prelude {
     pub use crate::{Client, Command, Config, Error, Event, Result};

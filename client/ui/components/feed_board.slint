@@ -4,8 +4,8 @@ import { UserAvatar } from "./avatar.slint";
 import { StatValue } from "./stat.slint";
 import { DotWaveform } from "./clip_wave.slint";
 import { StreamTag, PlayButton, FootageWash, MediaChip } from "./stream_hero.slint";
-import { CardLabel, OpenSeat, InviteButton } from "./head2head.slint";
-import { H2hPerson, BeltReveal, RecapSeal, FeedCardData, ChatFocus } from "../types.slint";
+import { CardLabel, OpenSeat, InviteButton, TitleChip, H2hHue } from "./head2head.slint";
+import { H2hPerson, BeltReveal, RecapSeal, FeedCardData, ChatFocus, TitleHeld } from "../types.slint";
 import { BeltSlot } from "./sealed.slint";
 import { CutButton } from "./cut.slint";
 import { GameClipCard } from "../panels/game_clip_card.slint";
@@ -1027,12 +1027,14 @@ component ZoneButton inherits Rectangle {
     /// "white": the one filled action. "red": a commit (join, invite).
     /// "line": a white outline action.
     in property <string> tone: "line";
+    /// The name a screen reader reads. Defaults to the label.
+    in property <string> a11y-label: root.label;
     callback clicked();
 
     width: btn-text.preferred-width + 36px;
     height: 36px;
     accessible-role: button;
-    accessible-label: root.label;
+    accessible-label: root.a11y-label;
 
     CutButton {
         width: parent.width; height: parent.height;
@@ -1075,6 +1077,8 @@ export component PeopleZone inherits BoardShell {
     in property <int> voice-more: 0;
     /// The joined card that Say hi greets (ChatFocus.say-hi). Empty: no button.
     in property <string> say-hi-card;
+    /// The member that Say hi greets.
+    in property <string> say-hi-name;
     in property <bool> said-hi: false;
     callback invite();
     callback voice-clicked();
@@ -1134,6 +1138,7 @@ export component PeopleZone inherits BoardShell {
             }
             if root.say-hi-card != "" && !root.said-hi: ZoneButton {
                 label: "SAY HI";
+                a11y-label: "Say hi to " + root.say-hi-name;
                 tone: "line";
                 clicked => { ChatFocus.say-hi(root.say-hi-card); }
             }
@@ -1185,7 +1190,9 @@ export component PeopleZone inherits BoardShell {
 /// belts arrive sealed (SEALED-REVEAL.md 9), so the stage is something to open.
 export component StageOwnBelts inherits BoardShell {
     in property <H2hPerson> you;
-    in property <[BeltReveal]> belts;
+    /// The viewer's own chips. Sealed for 7 days on a new crew; an opened one
+    /// shows its title and value.
+    in property <[TitleHeld]> chips;
 
     corner: "tr";
 
@@ -1211,13 +1218,21 @@ export component StageOwnBelts inherits BoardShell {
         Rectangle {
             vertical-stretch: 1;
             property <length> block: 72px * 2 + 14px;
-            for b[i] in root.belts: BeltSlot {
+            for t[i] in root.chips: BeltSlot {
                 x: Math.mod(i, 2) * (parent.width + 14px) / 2;
                 y: (parent.height - parent.block) / 2 + Math.floor(i / 2) * 86px;
                 width: (parent.width - 14px) / 2;
                 height: 72px;
-                belt: b;
-                slot-id: "stage:" + b.key;
+                belt: t.belt;
+                slot-id: "stage:" + t.belt.key;
+
+                TitleChip {
+                    x: 0px; y: (parent.height - self.height) / 2;
+                    width: parent.width;
+                    hue: H2hHue.of(t.hue-index);
+                    icon: t.icon; title: t.title; value: t.value; unit: t.unit;
+                    tip: t.stat-line;
+                }
             }
         }
         Text {
@@ -1345,7 +1360,7 @@ export struct ZonesData {
     stage: string,
     stage-card: FeedCardData,
     stage-short: bool,
-    own-belts: [BeltReveal],
+    own-chips: [TitleHeld],
     you: H2hPerson,
 
     // Board. "sealed": the sealed weekly recap (`recap-card`). "tabs",
@@ -1388,6 +1403,7 @@ export struct ZonesData {
     joined-line: string,
     joined-sub: string,
     say-hi-card: string,
+    say-hi-name: string,
     said-hi: bool,
     voice: string,
     channel: string,

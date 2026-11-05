@@ -174,62 +174,22 @@ pub struct UserGameStatsListResponse {
     pub games: Vec<UserGameStats>,
 }
 
-// --- Timeline (crew feed) ---
+// --- Crew feed (crew_feed) ---
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TimelineEntry {
-    pub id: String,
-    #[serde(rename = "type")]
-    pub entry_type: String,
-    #[serde(default)]
-    pub actor_id: String,
-    #[serde(default)]
-    pub ts: i64,
-    #[serde(default)]
-    pub score: i32,
-    #[serde(default)]
-    pub data: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TimelineResponse {
-    pub crew_id: String,
-    #[serde(default)]
-    pub entries: Vec<TimelineEntry>,
-    #[serde(default)]
-    pub cursor: Option<String>,
-    #[serde(default)]
-    pub has_more: bool,
-}
-
-// --- Curated feed (crew_feed) ---
-//
-// role/size/type stay plain strings so the server can ship new curation
-// treatments without a client release; unknown values degrade gracefully.
-
+/// One card of the zones. `type` stays a plain string: the client skips a
+/// type it does not know.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeedEntry {
     pub id: String,
     #[serde(rename = "type")]
     pub entry_type: String,
     #[serde(default)]
-    pub role: String,
-    #[serde(default)]
-    pub size: String,
-    #[serde(default)]
     pub ts: i64,
     #[serde(default)]
     pub data: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FeedSection {
-    pub id: String,
-    #[serde(default)]
-    pub entries: Vec<FeedEntry>,
-}
-
-/// A member who joined the crew in the last 24 hours (`FeedResponse::joined`),
+/// A member who joined the crew in the last 24 hours (`ZonePeople::joined`),
 /// from the member_joined events of the ledger. Newest first, at most three.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FeedJoin {
@@ -249,17 +209,12 @@ pub struct FeedJoin {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeedResponse {
     pub crew_id: String,
+    /// The zone feed (`crew_feed_zones.go`).
     #[serde(default)]
-    pub sections: Vec<FeedSection>,
-    #[serde(default)]
-    pub joined: Vec<FeedJoin>,
-    /// The zone feed (`crew_feed_zones.go`), when the request asked for it and
-    /// the server has it.
-    #[serde(default)]
-    pub zones: Option<FeedZones>,
+    pub zones: FeedZones,
 }
 
-// --- Zone feed (crew_feed with `zones: true`) ---
+// --- Zone feed ---
 //
 // Five fixed zones and Crew history. The server picks what each zone holds;
 // the client draws it and adds what is client state (live streams, live

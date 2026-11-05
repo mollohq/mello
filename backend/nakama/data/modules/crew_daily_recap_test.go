@@ -148,33 +148,6 @@ func TestDailyRecapBeltsAreTheDaysAndAreCapped(t *testing.T) {
 	}
 }
 
-// The daily recaps sit after the recap and the head2head entry and before the
-// sessions, as standard cells. Old catch-up events add no card.
-func TestDailyRecapsSitAfterTheRecapBeforeSessions(t *testing.T) {
-	cards := []feedCard{
-		recapAt("recap_1", dailyAt(0, 1)),
-		voiceAt("v-today", dailyAt(0, 9), 30, "u1"),
-		gameAt("g-today", dailyAt(0, 10), "Rocket League", "rocket-league", 60, "u1", "u2", "u3"),
-	}
-	cards[0].data = WeeklyRecapData{TotalHangoutMin: 90, ClipCount: 1}
-	entries := buildThisWeek(cards, dailyNow)
-	var order []string
-	for _, e := range entries {
-		order = append(order, e.Type)
-	}
-	if len(order) < 3 || order[0] != "recap" || order[1] != "daily-recap" {
-		t.Fatalf("order %v, want recap then daily-recap first", order)
-	}
-	if entries[1].Role != "standard" || entries[1].Size != "md" {
-		t.Fatalf("daily recap role/size %q/%q", entries[1].Role, entries[1].Size)
-	}
-	for _, e := range entries[2:] {
-		if e.Type == "daily-recap" {
-			t.Fatalf("a second daily recap with one active day: %v", order)
-		}
-	}
-}
-
 func TestDailyRecapTopGameTiesGoByName(t *testing.T) {
 	cards := []feedCard{
 		gameAt("g1", dailyAt(0, 9), "Valorant", "valorant", 30, "u1", "u2", "u3"),

@@ -1602,20 +1602,6 @@ impl NakamaClient {
         Ok(parsed)
     }
 
-    pub async fn crew_timeline(
-        &self,
-        crew_id: &str,
-        cursor: Option<&str>,
-    ) -> Result<crate::crew_events::TimelineResponse> {
-        let mut payload = serde_json::json!({ "crew_id": crew_id });
-        if let Some(c) = cursor {
-            payload["cursor"] = serde_json::json!(c);
-        }
-        let resp = self.rpc("crew_timeline", &payload).await?;
-        let parsed: crate::crew_events::TimelineResponse = serde_json::from_str(&resp)?;
-        Ok(parsed)
-    }
-
     /// The crew feed with its zones. `history_before` asks for the page of
     /// Crew history whose weeks start before it (zero: the first page).
     pub async fn crew_feed(
@@ -1623,7 +1609,7 @@ impl NakamaClient {
         crew_id: &str,
         history_before: i64,
     ) -> Result<crate::crew_events::FeedResponse> {
-        let mut payload = serde_json::json!({ "crew_id": crew_id, "zones": true });
+        let mut payload = serde_json::json!({ "crew_id": crew_id });
         if history_before > 0 {
             payload["history_before"] = serde_json::json!(history_before);
         }

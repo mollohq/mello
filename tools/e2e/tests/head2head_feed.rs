@@ -72,27 +72,15 @@ fn game(id: &str, name: &str, playtime_min: i64) -> Value {
     json!({"game_id": id, "name": name, "launcher": "steam", "playtime_min": playtime_min})
 }
 
-/// The `this_week` entry of a type, or `None`.
-fn this_week_entry(feed: &Value, entry_type: &str) -> Option<Value> {
-    feed["sections"]
-        .as_array()?
-        .iter()
-        .find(|s| s["id"] == "this_week")?["entries"]
-        .as_array()?
-        .iter()
-        .find(|e| e["type"] == entry_type)
-        .cloned()
-}
-
 async fn feed_as(client: &NakamaClient, crew_id: &str) -> Value {
     rpc_json(client, "crew_feed", json!({"crew_id": crew_id})).await
 }
 
 async fn head2head_of(client: &NakamaClient, crew_id: &str) -> Value {
     let feed = feed_as(client, crew_id).await;
-    this_week_entry(&feed, "head2head")
-        .unwrap_or_else(|| panic!("the feed has no head2head entry: {feed}"))["data"]
-        .clone()
+    let h2h = feed["zones"]["head2head"].clone();
+    assert!(h2h.is_object(), "the zones have no head2head: {feed}");
+    h2h
 }
 
 fn title<'a>(h2h: &'a Value, id: &str) -> Option<&'a Value> {
@@ -265,36 +253,6 @@ fn head2head_entry_follows_two_members_libraries_belts_and_sessions() {
             (carry_b["a_value"].as_f64(), carry_b["b_value"].as_f64()),
             (Some(20.0), Some(100.0))
         );
-
-        // ---- the recent games card shows the union of both libraries ----
-        let feed = feed_as(&a, &crew.id).await;
-        let recent = this_week_entry(&feed, "recent-games").expect("recent games card");
-        let mut got: Vec<String> = recent["data"]["games"]
-            .as_array()
-            .expect("games")
-            .iter()
-            .map(|g| g["game_id"].as_str().expect("game id").to_string())
-            .collect();
-        got.sort();
-        assert_eq!(
-            got,
-            [
-                "steam-100",
-                "steam-1000",
-                "steam-101",
-                "steam-200",
-                "steam-201",
-                "steam-202"
-            ],
-            "the union of the two libraries, the shared game once"
-        );
-        let shared = recent["data"]["games"]
-            .as_array()
-            .expect("games")
-            .iter()
-            .find(|g| g["game_id"] == "steam-1000")
-            .expect("shared tile");
-        assert_eq!(shared["member_ids"].as_array().expect("members").len(), 2);
 
         // ---- a belt moves: B takes the_carry ----
         // B reports 120 h in the shared game. The recompute sees the holder change.
@@ -585,8 +543,10 @@ fn session_titles_and_recap_belts_follow_the_activity_stats() {
             .await
             .expect("generate_recap");
         assert!(raw.contains("\"success\":true"), "generate_recap: {raw}");
-        let recaps = rpc_json(&a, "crew_recaps", json!({"crew_id": cid})).await;
-        let recap = recaps["recaps"][0].clone();
+        // The newest recap is the board's (zones.board.recap).
+        let feed = feed_as(&a, cid).await;
+        let recap = feed["zones"]["board"]["recap"]["data"].clone();
+        assert!(recap.is_object(), "the board has the recap: {feed}");
         // The crew voice_session event is unchanged: it spans the real wall
         // time of the session, a minute or so here, not the backdated stints.
         assert!(

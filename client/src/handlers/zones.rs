@@ -1,12 +1,13 @@
-//! The zone feed (prototype, `MELLO_FEED_ZONES=1`).
+//! The zone feed.
 //!
-//! The feed is five fixed zones: Stage, Board, Clips, People, Games. A zone
-//! with nothing to show collapses. This module folds the feed the client
-//! already has (the built cards, the raw `this_week` entries, live streams,
-//! voice channels, the quiet and dormant state) into one `ZonesData`. The
-//! server still sends the card list; nothing here changes it.
+//! The feed is five fixed zones and Crew history: Stage, Board, Clips,
+//! People, Sessions. The server picks what each zone holds (`crew_feed`,
+//! `FeedZones`); this module draws it into one `ZonesData` and adds what is
+//! client state: a live stream on the Stage, live sessions, voice, the sealed
+//! state of the recap and the unread order. A zone with nothing to show
+//! collapses.
 //!
-//! Previews: `client/ui/previews/feed_board_preview.slint` (`PreviewZones*`).
+//! Previews: `client/ui/previews/feed_board_preview.slint`.
 
 use std::rc::Rc;
 
@@ -21,41 +22,23 @@ use crate::{
 const BOARD_BELTS: usize = 7;
 /// People in the voice part before "+N".
 const VOICE_PEOPLE: usize = 5;
-/// Free is the last 7 days. Every week before it is m3llo+.
-const FREE_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 /// Locked teasers in a week row before "+N".
 const TEASERS: usize = 2;
 
-/// The crew has m3llo+ for this run (prototype; the server does not gate yet).
-pub(crate) fn plus_from_env() -> bool {
-    std::env::var("MELLO_PLUS").is_ok_and(|v| v == "1")
-}
-
-/// The zone feed is on for this run.
-pub(crate) fn enabled_from_env() -> bool {
-    std::env::var("MELLO_FEED_ZONES").is_ok_and(|v| v == "1")
-}
-
-/// Build the zones again from what the client holds now. A no-op while the
-/// zone feed is off.
+/// Build the zones again from the last feed of the active crew and the client
+/// state now. A poster that is on screen stays on its card (`keep_posters`).
 pub(crate) fn refresh(ctx: &AppContext) {
-    if !ctx.app.get_feed_zones_on() {
-        return;
-    }
+    let active = ctx.app.get_active_crew_id();
     let zones = ctx
         .last_feed
         .borrow()
         .as_ref()
-        .and_then(|f| f.zones.clone());
-    let z = match zones {
-        Some(zs) => build_from_zones(ctx, &zs),
-        None => {
-            // A server without the zones payload. The fold of the sections is
-            // for development against such a server and goes at release.
-            log::debug!("feed zones: no zones in the response, folding the sections");
-            build(ctx)
-        }
-    };
+        .filter(|f| f.crew_id == active.as_str())
+        .map(|f| f.zones.clone());
+    // Before the feed loads the zones still draw the client state: a live
+    // stream, live sessions, voice.
+    let mut z = build_from_zones(ctx, &zones.unwrap_or_default());
+    keep_posters(&ctx.app.get_feed_zones(), &mut z);
     log::debug!(
         "feed zones: stage={} board={} clips={} people={} sessions={} history={} plus={}",
         z.stage,
@@ -67,6 +50,90 @@ pub(crate) fn refresh(ctx: &AppContext) {
         z.plus
     );
     ctx.app.set_feed_zones(z);
+}
+
+/// Where a card of the zones is: its model and row. `None` for the Stage and
+/// the recap, which are not in a model.
+pub(crate) type CardAt = Option<(ModelRc<FeedCardData>, usize)>;
+
+/// Every card of the zones, with where it is.
+pub(crate) fn cards(z: &ZonesData) -> Vec<(CardAt, FeedCardData)> {
+    let mut out = vec![(None, z.stage_card.clone()), (None, z.recap_card.clone())];
+    let mut add = |m: &ModelRc<FeedCardData>| {
+        for i in 0..m.row_count() {
+            if let Some(c) = m.row_data(i) {
+                out.push((Some((m.clone(), i)), c));
+            }
+        }
+    };
+    add(&z.clips);
+    add(&z.sessions);
+    for w in z.history.iter() {
+        add(&w.clips);
+    }
+    out.retain(|(_, c)| !c.id.is_empty());
+    out
+}
+
+/// Change every card with this id, in its model or on the Stage or the
+/// board. The same entry can be on the Stage and in the sessions.
+pub(crate) fn update_cards(app: &crate::MainWindow, id: &str, f: impl Fn(&mut FeedCardData)) {
+    let mut z = app.get_feed_zones();
+    let mut whole = false;
+    for (at, mut c) in cards(&z) {
+        if c.id.as_str() != id {
+            continue;
+        }
+        f(&mut c);
+        match at {
+            Some((m, i)) => m.set_row_data(i, c),
+            None => whole = true,
+        }
+    }
+    if whole {
+        if z.stage_card.id.as_str() == id {
+            f(&mut z.stage_card);
+        }
+        if z.recap_card.id.as_str() == id {
+            f(&mut z.recap_card);
+        }
+        app.set_feed_zones(z);
+    }
+}
+
+/// A rebuild makes new cards. A card that held a poster, a playback frame or
+/// an error keeps it: the instance on screen may not ask again.
+fn keep_posters(old: &ZonesData, new: &mut ZonesData) {
+    let held: std::collections::HashMap<SharedString, FeedCardData> = cards(old)
+        .into_iter()
+        .map(|(_, c)| c)
+        .filter(|c| c.snapshot_poster_ready || c.snapshot_error || c.snapshot_playback_revision > 0)
+        .map(|c| (c.id.clone(), c))
+        .collect();
+    if held.is_empty() {
+        return;
+    }
+    let carry = |c: &mut FeedCardData| {
+        if let Some(o) = held.get(&c.id) {
+            c.snapshot_loading = o.snapshot_loading;
+            c.snapshot_poster = o.snapshot_poster.clone();
+            c.snapshot_poster_ready = o.snapshot_poster_ready;
+            c.snapshot_error = o.snapshot_error;
+            c.snapshot_playback_frame = o.snapshot_playback_frame.clone();
+            c.snapshot_playback_index = o.snapshot_playback_index;
+            c.snapshot_playback_revision = o.snapshot_playback_revision;
+        }
+    };
+    carry(&mut new.stage_card);
+    carry(&mut new.recap_card);
+    for (at, mut c) in cards(new) {
+        if let Some((m, i)) = at {
+            if held.contains_key(&c.id) {
+                carry(&mut c);
+                m.set_row_data(i, c);
+            }
+        }
+    }
 }
 
 fn rows<T: Clone + 'static>(m: &ModelRc<T>) -> Vec<T> {
@@ -134,361 +201,15 @@ fn names_line(names: &[String]) -> String {
     }
 }
 
-fn is_game_clip(c: &FeedCardData) -> bool {
-    c.card_type == "clip" && c.clip_kind == "game"
-}
-
-fn build(ctx: &AppContext) -> ZonesData {
-    let cards = rows(&ctx.app.get_feed_cards());
-    let memory = rows(&ctx.app.get_memory_cards());
-    let live = ctx.app.get_active_stream_cards().row_count() > 0;
-    let quiet = rows(&ctx.app.get_feed_quiet());
-    let dormant = rows(&ctx.app.get_feed_dormant());
-
-    let entries: Vec<mello_core::crew_events::FeedEntry> = ctx
-        .last_feed
-        .borrow()
-        .as_ref()
-        .and_then(|f| f.sections.iter().find(|s| s.id == "this_week"))
-        .map(|s| s.entries.clone())
-        .unwrap_or_default();
-    let memory_entries: Vec<mello_core::crew_events::FeedEntry> = ctx
-        .last_feed
-        .borrow()
-        .as_ref()
-        .and_then(|f| f.sections.iter().find(|s| s.id == "memory"))
-        .map(|s| s.entries.clone())
-        .unwrap_or_default();
-    // The time of every card, by id: the built cards carry only labels.
-    let ts_of: std::collections::HashMap<String, i64> = entries
-        .iter()
-        .chain(memory_entries.iter())
-        .map(|e| (e.id.clone(), e.ts))
-        .collect();
-    let now_ms = crate::converters::current_time_ms();
-    let is_free = |id: &str| {
-        ts_of
-            .get(id)
-            .is_none_or(|&t| t <= 0 || now_ms - t <= FREE_MS)
-    };
-
-    // Head2head: the crew's titles, members and seats, and the belt hero card.
-    let h2h = entries
-        .iter()
-        .find(|e| e.entry_type == "head2head")
-        .and_then(|e| super::clip::head2head_cards(ctx, e, &entries));
-    let (h2h_cards, h2h_data) = match h2h {
-        Some((_, cards, data)) => (cards, Some(data)),
-        None => (Vec::new(), None),
-    };
-    let solo = h2h_data.as_ref().is_some_and(|d| d.variant == "wide");
-
-    let (viewer, members) = super::clip::h2h_roster(ctx);
-    let you = super::clip::live_person(ctx, &viewer);
-
-    let mut z = ZonesData {
-        you: you.clone(),
-        ..Default::default()
-    };
-
-    // ── Stage: live streams, then game clips, then stream replays, then the
-    // belt hero of a quiet feed, then a crew of one's own belts.
-    let belt_card = h2h_cards
-        .iter()
-        .find(|c| c.card_type == "head2head" && c.head2head.variant == "belt")
-        .cloned();
-    let stage_card = if live {
-        None
-    } else {
-        cards
-            .iter()
-            .find(|c| c.is_hero && (is_game_clip(c) || c.card_type == "session-preview"))
-            .or_else(|| cards.iter().find(|c| is_game_clip(c)))
-            .or_else(|| cards.iter().find(|c| c.card_type == "session-preview"))
-            .cloned()
-            .map(|mut c| {
-                c.is_hero = true;
-                c
-            })
-            .or(belt_card.clone())
-            .or_else(|| {
-                memory
-                    .iter()
-                    .find(|c| c.card_type == "session-preview")
-                    .cloned()
-                    .map(|mut c| {
-                        c.is_hero = true;
-                        c
-                    })
-            })
-    };
-    let stage_id = stage_card.as_ref().map(|c| c.id.to_string());
-    if live {
-        z.stage = "live".into();
-    } else if let Some(c) = stage_card {
-        z.stage_short = c.card_type == "head2head";
-        z.stage_card = c;
-        z.stage = "card".into();
-    } else if solo {
-        let belts: Vec<crate::BeltReveal> = h2h_data
-            .as_ref()
-            .map(|d| rows(&d.chips))
-            .unwrap_or_default()
-            .into_iter()
-            .map(|t| t.belt)
-            .filter(|b| !b.key.is_empty())
-            .take(4)
-            .collect();
-        if !belts.is_empty() {
-            z.stage = "own".into();
-            z.own_belts = model(belts);
-        }
-    }
-
-    // ── Board.
-    let recap = cards
-        .iter()
-        .find(|c| c.card_type == "recap")
-        .or_else(|| memory.iter().find(|c| c.card_type == "recap"))
-        .cloned();
-    let recap_sealed = recap
-        .as_ref()
-        .is_some_and(|r| r.recap_seal.sealed && !r.recap_seal.key.is_empty());
-    z.board = if recap_sealed && cards.iter().any(|c| c.card_type == "recap") {
-        "sealed"
-    } else if !dormant.is_empty() {
-        "past"
-    } else if !quiet.is_empty() {
-        "quiet"
-    } else if solo {
-        "solo"
-    } else {
-        "tabs"
-    }
-    .into();
-    if let Some(r) = &recap {
-        z.recap_card = r.clone();
-        z.week_big = minutes_stat(i64::from(r.recap_hangout_min), "HANGOUT");
-        let games = rows(&r.recap_games);
-        z.week_stats = model(vec![
-            count_stat(i64::from(r.recap_clips), "CLIPS"),
-            minutes_stat(i64::from(r.recap_longest_min), "LONGEST"),
-            count_stat(games.len() as i64, "GAMES"),
-        ]);
-        z.week_has_top = !r.game_name.is_empty();
-        z.week_top = BoardGame {
-            name: r.game_name.clone(),
-            art: card_art(r),
-            count: SharedString::new(),
-        };
-        if !r.recap_active.name.is_empty() {
-            z.most_active = person_of_recap(&r.recap_active);
-            z.most_active_value = minutes_text(i64::from(r.recap_active.count)).into();
-        }
-        if !r.recap_clipped.name.is_empty() {
-            z.most_clipped = person_of_recap(&r.recap_clipped);
-            z.most_clipped_value = r.recap_clipped.count.to_string().into();
-        }
-        z.games_played = model(
-            games
-                .iter()
-                .take(3)
-                .map(|g| {
-                    if g.has_capsule {
-                        g.capsule.clone()
-                    } else {
-                        g.icon.clone()
-                    }
-                })
-                .collect(),
-        );
-        z.games_more = games.len().saturating_sub(3) as i32;
-        z.past_label = r.recap_week.to_uppercase().into();
-        z.past_age = r.age_label.clone();
-    } else {
-        z.week_big = minutes_stat(0, "HANGOUT");
-    }
-
-    // Today: the newest daily recap, when it is today.
-    let now = crate::converters::current_time_ms();
-    let today = entries.iter().find(|e| {
-        e.entry_type == "daily-recap"
-            && e.data
-                .get("day_start")
-                .and_then(|v| v.as_i64())
-                .is_some_and(|d| crate::feed_age::day_label(d, now) == "Today so far")
-    });
-    match today {
-        Some(e) => {
-            let d = &e.data;
-            let n = |k: &str| d.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
-            let on = d
-                .get("member_ids")
-                .and_then(|v| v.as_array())
-                .map_or(0, |a| a.len() as i64);
-            z.today_big = minutes_stat(n("total_min"), "HANGOUT");
-            z.today_stats = model(vec![
-                count_stat(n("clip_count"), "CLIPS"),
-                count_stat(n("session_count"), "SESSIONS"),
-                count_stat(on, "ON"),
-            ]);
-            if let Some(day) = cards.iter().find(|c| c.card_type == "daily-recap") {
-                z.today_has_top = !day.game_name.is_empty();
-                z.today_top = BoardGame {
-                    name: day.game_name.clone(),
-                    art: card_art(day),
-                    count: SharedString::new(),
-                };
-            }
-        }
-        None => {
-            z.today_empty = true;
-            z.today_big = minutes_stat(0, "HANGOUT");
-        }
-    }
-
-    if let Some(q) = quiet.first() {
-        let line = q.line.to_string();
-        match line.split_once(". ") {
-            Some((a, b)) => {
-                z.quiet_line = format!("{a}.").into();
-                z.quiet_sub = b.into();
-            }
-            None => z.quiet_line = line.into(),
-        }
-    }
-    if let Some(d) = dormant.first() {
-        z.dormant_line = d.title.clone();
-        z.dormant_age = d.timestamp.clone();
-    }
-
-    // Belts: the titles of the crew, a moved or sealed belt first.
-    if let Some(d) = &h2h_data {
-        board_belts(ctx, &mut z, d, &viewer, &you, &members);
-    }
-
-    // ── Clips: every clip, game footage first, unread first.
-    // The carousel holds every clip of the last 7 days: game footage first,
-    // unread first, then newest. Older clips are Crew history.
-    let mut clips: Vec<FeedCardData> = cards
-        .iter()
-        .chain(memory.iter())
-        .filter(|c| c.card_type == "clip")
-        .filter(|c| Some(c.id.to_string()) != stage_id)
-        .filter(|c| is_free(c.id.as_str()))
-        .cloned()
-        .collect();
-    let mut seen = std::collections::HashSet::new();
-    clips.retain(|c| seen.insert(c.id.to_string()));
-    let ts = |c: &FeedCardData| ts_of.get(c.id.as_str()).copied().unwrap_or(0);
-    clips.sort_by_key(|c| (!is_game_clip(c), !c.is_new, std::cmp::Reverse(ts(c))));
-    z.clips_more = 0;
-    z.clips = model(
-        clips
-            .into_iter()
-            .map(|mut c| {
-                c.is_hero = false;
-                c
-            })
-            .collect(),
-    );
-
-    // ── People: the first five, who joined, who is in voice.
-    if let Some(d) = &h2h_data {
-        z.open_seats = d.open_seats;
-        let m = rows(&d.members);
-        z.members = if m.is_empty() {
-            model(vec![you.clone()])
-        } else {
-            model(m)
-        };
-    }
-    let joined: Vec<FeedCardData> = cards
-        .iter()
-        .filter(|c| c.card_type == "joined")
-        .cloned()
-        .collect();
-    people_joined(&mut z, &joined);
-    let last_call = cards
-        .iter()
-        .find(|c| c.card_type == "voice-idle")
-        .map(|c| c.subtitle.to_string())
-        .unwrap_or_default();
-    people_voice(ctx, &mut z, &last_call);
-    z.people = z.open_seats > 0 || z.joined.row_count() > 0 || !z.voice.is_empty();
-
-    // ── Games: the sessions, or what the crew has installed on a quiet week.
-    let sessions: Vec<FeedCardData> = cards
-        .iter()
-        .filter(|c| c.card_type == "game-session")
-        .cloned()
-        .collect();
-    let no_sessions = sessions.is_empty();
-    z.sessions = model(sessions);
-    let tiles = cards
-        .iter()
-        .find(|c| c.card_type == "recent-games")
-        .map(|c| rows(&c.recent_games))
-        .unwrap_or_default();
-    let tile_art = |t: &crate::RecentGameTile| {
-        if t.has_capsule {
-            t.capsule.clone()
-        } else {
-            t.game_icon.clone()
-        }
-    };
-    if no_sessions && z.board == "quiet" {
-        let mut by_owners = tiles.clone();
-        by_owners.sort_by_key(|t| std::cmp::Reverse(t.owners.row_count()));
-        z.installed = model(
-            by_owners
-                .iter()
-                .take(3)
-                .map(|t| BoardGame {
-                    name: t.game_name.clone(),
-                    art: tile_art(t),
-                    count: t.owners.row_count().to_string().into(),
-                })
-                .collect(),
-        );
-    }
-    // ── Crew history: every week before the last 7 days, newest first.
-    z.plus = plus_from_env();
-    z.history = model(history_weeks(
-        &memory,
-        &memory_entries,
-        &ts_of,
-        now_ms,
-        z.plus,
-    ));
-
-    if solo {
-        z.solo_games = model(
-            tiles
-                .iter()
-                .take(4)
-                .map(|t| BoardGame {
-                    name: t.game_name.clone(),
-                    art: tile_art(t),
-                    count: t.hours.to_lowercase().into(),
-                })
-                .collect(),
-        );
-    }
-
-    z
-}
-
-/// The zones from the server's zones payload (`crew_feed` with `zones: true`).
+/// The zones from the server's zones payload (`crew_feed`).
 /// The client adds what is client state: a live stream on the Stage, live
 /// sessions, voice, the sealed state of the recap and the unread order.
 fn build_from_zones(ctx: &AppContext, zs: &mello_core::crew_events::FeedZones) -> ZonesData {
     use mello_core::crew_events::FeedEntry;
     let live = ctx.app.get_active_stream_cards().row_count() > 0;
     let now_ms = crate::converters::current_time_ms();
-    let card = |e: &FeedEntry| {
-        super::clip::build_feed_card(ctx, &e.id, &e.entry_type, &e.role, &e.size, &e.data, e.ts)
-    };
+    let card =
+        |e: &FeedEntry| super::clip::build_feed_card(ctx, &e.id, &e.entry_type, &e.data, e.ts);
     let (viewer, members) = super::clip::h2h_roster(ctx);
     let you = super::clip::live_person(ctx, &viewer);
     let mut z = ZonesData {
@@ -497,21 +218,14 @@ fn build_from_zones(ctx: &AppContext, zs: &mello_core::crew_events::FeedZones) -
         ..Default::default()
     };
 
-    // Head2head: the cards (belt hero) and the crew's data (belts, seats).
-    let h2h_entry = zs.head2head.as_ref().map(|d| FeedEntry {
-        id: "head2head".into(),
-        entry_type: "head2head".into(),
-        role: "standard".into(),
-        size: "lg".into(),
-        ts: 0,
-        data: d.clone(),
-    });
-    let (h2h_cards, h2h_data) = match h2h_entry
+    // Head2head: the crew's data (belts, seats) and the belt hero.
+    let (belt_hero, h2h_data) = match zs
+        .head2head
         .as_ref()
-        .and_then(|e| super::clip::head2head_cards(ctx, e, std::slice::from_ref(e)))
+        .and_then(|d| super::clip::head2head_zone(ctx, d))
     {
-        Some((_, cards, data)) => (cards, Some(data)),
-        None => (Vec::new(), None),
+        Some((hero, data)) => (hero, Some(data)),
+        None => (None, None),
     };
 
     // ── Stage. A live stream comes first; it is client state.
@@ -530,28 +244,34 @@ fn build_from_zones(ctx: &AppContext, zs: &mello_core::crew_events::FeedZones) -
                 }
             }
             "belt" => {
-                if let Some(c) = h2h_cards
-                    .iter()
-                    .find(|c| c.card_type == "head2head" && c.head2head.variant == "belt")
-                {
+                // A belt that is sealed on the board keeps its holder hidden:
+                // the Stage shows it only once it is open.
+                let sealed = |c: &FeedCardData| {
+                    let id = c.head2head.belt.title_id.as_str();
+                    h2h_data.as_ref().is_some_and(|d| {
+                        rows(&d.titles)
+                            .iter()
+                            .any(|t| t.belt.sealed && t.belt.key.split(':').next() == Some(id))
+                    })
+                };
+                if let Some(c) = belt_hero.as_ref().filter(|c| !sealed(c)) {
                     z.stage_card = c.clone();
                     z.stage_short = true;
                     z.stage = "card".into();
                 }
             }
             "own_belts" => {
-                let belts: Vec<crate::BeltReveal> = h2h_data
+                let chips: Vec<crate::TitleHeld> = h2h_data
                     .as_ref()
                     .map(|d| rows(&d.chips))
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|t| t.belt)
-                    .filter(|b| !b.key.is_empty())
+                    .filter(|t| !t.belt.key.is_empty())
                     .take(4)
                     .collect();
-                if !belts.is_empty() {
+                if !chips.is_empty() {
                     z.stage = "own".into();
-                    z.own_belts = model(belts);
+                    z.own_chips = model(chips);
                 }
             }
             _ => {}
@@ -670,8 +390,7 @@ fn build_from_zones(ctx: &AppContext, zs: &mello_core::crew_events::FeedZones) -
         let tiles = super::clip::extract_recent_game_tiles(
             ctx,
             &serde_json::json!({ "games": zs.installed }),
-        )
-        .tiles;
+        );
         let art = |t: &crate::RecentGameTile| {
             if t.has_capsule {
                 t.capsule.clone()
@@ -875,8 +594,7 @@ pub(crate) fn wire_history_paging(ctx: &AppContext) {
         let next = last_feed
             .borrow()
             .as_ref()
-            .and_then(|f| f.zones.as_ref())
-            .map_or(0, |z| z.history_next);
+            .map_or(0, |f| f.zones.history_next);
         let crew = app.get_active_crew_id().to_string();
         if next <= 0 || crew.is_empty() || pending.get() == next {
             return;
@@ -893,17 +611,13 @@ pub(crate) fn wire_history_paging(ctx: &AppContext) {
 /// A page of Crew history arrived: append its weeks, keep the rest of the feed.
 pub(crate) fn append_history(ctx: &AppContext, response: mello_core::crew_events::FeedResponse) {
     ctx.zones_history_pending.set(0);
-    let Some(page) = response.zones else {
-        return;
-    };
+    let page = response.zones;
     {
         let mut last = ctx.last_feed.borrow_mut();
         let Some(feed) = last.as_mut().filter(|f| f.crew_id == response.crew_id) else {
             return;
         };
-        let Some(zones) = feed.zones.as_mut() else {
-            return;
-        };
+        let zones = &mut feed.zones;
         let known: std::collections::HashSet<i64> =
             zones.history.iter().map(|w| w.week_start).collect();
         zones.history.extend(
@@ -994,6 +708,7 @@ fn people_joined(z: &mut ZonesData, joined: &[FeedCardData]) {
         );
         if let Some(c) = joined.iter().find(|c| !c.said_hi) {
             z.say_hi_card = c.id.clone();
+            z.say_hi_name = c.actor_name.clone();
         } else {
             z.said_hi = true;
         }
@@ -1038,160 +753,6 @@ fn people_voice(ctx: &AppContext, z: &mut ZonesData, last_call: &str) {
     }
 }
 
-/// Monday 00:00 UTC of the week of `ms`.
-fn week_start_of(ms: i64) -> i64 {
-    const DAY: i64 = 24 * 60 * 60 * 1000;
-    let day = ms.div_euclid(DAY);
-    // 1970-01-01 was a Thursday: day 0 is weekday 3 when Monday is 0.
-    let weekday = (day + 3).rem_euclid(7);
-    (day - weekday) * DAY
-}
-
-/// The past weeks of Crew history from the memory section. A recap names its
-/// week; a week without one is named by its start. Free users see every week
-/// sealed with teasers; m3llo+ sees the numbers and the clips.
-fn history_weeks(
-    memory: &[FeedCardData],
-    entries: &[mello_core::crew_events::FeedEntry],
-    ts_of: &std::collections::HashMap<String, i64>,
-    now_ms: i64,
-    plus: bool,
-) -> Vec<HistoryWeek> {
-    use std::collections::BTreeMap;
-    struct Week {
-        recap: Option<FeedCardData>,
-        items: Vec<FeedCardData>,
-    }
-    let mut weeks: BTreeMap<i64, Week> = BTreeMap::new();
-    for c in memory {
-        if c.card_type == "locked" {
-            continue;
-        }
-        let Some(&ts) = ts_of.get(c.id.as_str()) else {
-            continue;
-        };
-        let start = if c.card_type == "recap" {
-            entries
-                .iter()
-                .find(|e| e.id == c.id.as_str())
-                .and_then(|e| {
-                    e.data
-                        .get("week_start_ms")
-                        .or_else(|| e.data.get("week_start"))
-                        .and_then(|v| v.as_i64())
-                })
-                .unwrap_or_else(|| week_start_of(ts - FREE_MS))
-        } else {
-            if now_ms - ts <= FREE_MS {
-                continue;
-            }
-            week_start_of(ts)
-        };
-        let w = weeks.entry(start).or_insert(Week {
-            recap: None,
-            items: Vec::new(),
-        });
-        if c.card_type == "recap" {
-            w.recap = Some(c.clone());
-        } else if matches!(c.card_type.as_str(), "clip" | "session-preview") {
-            w.items.push(c.clone());
-        }
-    }
-    weeks
-        .into_iter()
-        .rev()
-        .filter(|(start, w)| *start > 0 && (w.recap.is_some() || !w.items.is_empty()))
-        .map(|(start, mut w)| {
-            w.items.sort_by_key(|c| {
-                (
-                    !is_game_clip(c),
-                    std::cmp::Reverse(ts_of.get(c.id.as_str()).copied().unwrap_or(0)),
-                )
-            });
-            let label = w
-                .recap
-                .as_ref()
-                .map(|r| r.recap_week.to_string())
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| crate::feed_age::week_of_label(start));
-            let mut h = HistoryWeek {
-                label: label.into(),
-                age: crate::feed_age::recap_age_label(start, now_ms).into(),
-                locked: !plus,
-                ..Default::default()
-            };
-            if let Some(r) = &w.recap {
-                h.big = minutes_stat(i64::from(r.recap_hangout_min), "HANGOUT");
-                h.stats = model(vec![
-                    count_stat(i64::from(r.recap_clips), "CLIPS"),
-                    minutes_stat(i64::from(r.recap_longest_min), "LONGEST"),
-                    count_stat(r.recap_games.row_count() as i64, "GAMES"),
-                ]);
-                h.has_top = !r.game_name.is_empty();
-                h.top = BoardGame {
-                    name: r.game_name.clone(),
-                    art: card_art(r),
-                    count: SharedString::new(),
-                };
-            } else {
-                h.big = count_stat(w.items.len() as i64, "CLIPS AND STREAMS");
-            }
-            if plus {
-                h.clips = model(w.items);
-            } else {
-                // The sealed look: the recap field of this week, its own key.
-                let seed = crate::sealed::recap_seed(start);
-                let levels = crate::sealed::recap_levels(seed);
-                let (bright, dim) = crate::sealed::recap_field(&levels);
-                h.seal = crate::RecapSeal {
-                    key: format!("plus:{start}").into(),
-                    sealed: true,
-                    seed,
-                    bright: bright.into(),
-                    dim: dim.into(),
-                    levels: model(levels),
-                };
-                h.more = w.items.len().saturating_sub(TEASERS) as i32;
-                h.teasers = model(
-                    w.items
-                        .iter()
-                        .take(TEASERS)
-                        .map(|c| {
-                            let seed = crate::sealed::recap_seed(
-                                ts_of.get(c.id.as_str()).copied().unwrap_or(start),
-                            );
-                            LockedTeaser {
-                                person: H2hPerson {
-                                    id: SharedString::new(),
-                                    name: c.actor_name.clone(),
-                                    initials: c.actor_initials.clone(),
-                                    hue_index: c.actor_hue_index,
-                                    avatar: c.actor_avatar.clone(),
-                                    has_avatar: c.actor_has_avatar,
-                                },
-                                kind: match (c.card_type.as_str(), c.clip_kind.as_str()) {
-                                    ("session-preview", _) => "STREAM",
-                                    (_, "game") => "CLIP",
-                                    _ => "VOICE",
-                                }
-                                .into(),
-                                duration: if c.duration.is_empty() {
-                                    c.duration_human.clone()
-                                } else {
-                                    c.duration.clone()
-                                },
-                                code: crate::sealed::cells_path(&crate::sealed::belt_cells(seed))
-                                    .into(),
-                            }
-                        })
-                        .collect(),
-                );
-            }
-            h
-        })
-        .collect()
-}
-
 fn person_of_recap(p: &crate::RecapPerson) -> H2hPerson {
     H2hPerson {
         id: SharedString::new(),
@@ -1220,15 +781,6 @@ mod tests {
             ("48", "min", "")
         );
         assert_eq!(minutes_text(1534), "25 h 34");
-    }
-
-    #[test]
-    fn a_week_starts_on_monday_utc() {
-        // Thursday 5 November 2026, 12:00 UTC.
-        let thu = 1_793_880_000_000;
-        // Monday 2 November 2026, 00:00 UTC.
-        assert_eq!(week_start_of(thu), 1_793_577_600_000);
-        assert_eq!(week_start_of(1_793_577_600_000), 1_793_577_600_000);
     }
 
     #[test]

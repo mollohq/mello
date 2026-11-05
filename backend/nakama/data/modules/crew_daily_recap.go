@@ -249,8 +249,6 @@ func buildDailyRecaps(cards []feedCard, belts []RecapBeltMoved, nowMs int64) []F
 		entries = append(entries, FeedEntry{
 			ID:   dailyRecapID(a.data.DayStart),
 			Type: "daily-recap",
-			Role: "standard",
-			Size: "md",
 			Ts:   ts,
 			Data: a.data,
 		})

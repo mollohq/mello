@@ -78,6 +78,10 @@ export component GameClipCard inherits Rectangle {
     changed near-view => {
         root.want-poster();
     }
+    // The Stage keeps its instance when a new clip takes it.
+    changed card-id => {
+        root.want-poster();
+    }
 
     property <length> edge: root.is-hero ? 18px : 10px;
 

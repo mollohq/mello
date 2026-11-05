@@ -7,8 +7,7 @@ import (
 
 // The zone feed: the crew feed as five fixed
 // zones (Stage, Board, Clips, People, Sessions) and Crew history, instead of a
-// card list with roles and sizes. A client asks for it with `zones: true` and
-// gets it next to the sections, so an old client sees no change.
+// card list with roles and sizes.
 //
 // Free is the last FreeDays days (feed config, default 7). Everything older is
 // Crew history and is m3llo+. The gate is per viewer: a viewer without m3llo+
@@ -409,7 +408,7 @@ func zoneSessions(in zonesInput, start int64, stageID string) []FeedEntry {
 	sort.SliceStable(cards, func(i, j int) bool { return cards[i].ts > cards[j].ts })
 	out := make([]FeedEntry, 0, len(cards))
 	for _, c := range cards {
-		out = append(out, feedEntryFromCard(c, "standard", "md"))
+		out = append(out, feedEntryFromCard(c))
 	}
 	return out
 }

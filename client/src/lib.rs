@@ -10,7 +10,6 @@ pub(crate) mod callbacks;
 mod chat_images;
 mod chat_ui;
 mod converters;
-mod day_card;
 #[cfg(target_os = "windows")]
 pub mod dcomp_presenter;
 mod deep_link;
@@ -20,7 +19,6 @@ mod e2e_state;
 mod edit_shortcuts;
 mod emoji_font;
 mod feed_age;
-mod feed_grid;
 #[cfg(test)]
 mod flow_catalogue;
 #[cfg(test)]
@@ -49,7 +47,6 @@ mod open_url;
 mod perf_mode;
 mod platform;
 mod poll_loop;
-mod quiet_row;
 mod recent_games;
 mod renderer_choice;
 mod say_hi;
@@ -436,21 +433,8 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = MainWindow::new()?;
     about::show_build(&app);
-    // The zone feed (prototype): MELLO_FEED_ZONES=1.
-    let zones_on = handlers::zones::enabled_from_env();
-    app.set_feed_zones_on(zones_on);
-    if zones_on {
-        log::info!(
-            "feed: zone layout on (MELLO_FEED_ZONES=1), m3llo+ {}",
-            if handlers::zones::plus_from_env() {
-                "on (MELLO_PLUS=1)"
-            } else {
-                "off"
-            }
-        );
-    }
     // m3llo+ has no purchase flow yet: the zone feed's locked weeks and strip
-    // only record the intent.
+    // open the coming soon modal and record the intent.
     app.on_zones_plus_clicked(|| log::info!("feed: m3llo+ clicked (no purchase flow yet)"));
     #[cfg(target_os = "windows")]
     platform::set_exe_icon(&app);

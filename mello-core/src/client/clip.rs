@@ -340,29 +340,13 @@ impl super::Client {
         unsafe { mello_sys::mello_clip_seek(self.voice.mello_ctx(), position_samples) };
     }
 
-    pub(super) async fn handle_load_crew_timeline(&self, crew_id: &str, cursor: Option<&str>) {
-        match self.nakama.crew_timeline(crew_id, cursor).await {
-            Ok(response) => {
-                log::info!(
-                    "Timeline loaded for crew {}: {} entries",
-                    crew_id,
-                    response.entries.len()
-                );
-                let _ = self.event_tx.send(Event::TimelineLoaded { response });
-            }
-            Err(e) => {
-                log::warn!("crew_timeline failed: {}", e);
-            }
-        }
-    }
-
     pub(super) async fn handle_load_crew_history(&self, crew_id: &str, before: i64) {
         match self.nakama.crew_feed(crew_id, before).await {
             Ok(response) => {
                 log::info!(
                     "Crew history loaded for crew {}: {} week(s) before {}",
                     crew_id,
-                    response.zones.as_ref().map_or(0, |z| z.history.len()),
+                    response.zones.history.len(),
                     before
                 );
                 let _ = self.event_tx.send(Event::FeedHistoryLoaded { response });
@@ -377,9 +361,11 @@ impl super::Client {
         match self.nakama.crew_feed(crew_id, 0).await {
             Ok(response) => {
                 log::info!(
-                    "Feed loaded for crew {}: {} sections",
+                    "Feed loaded for crew {}: stage {:?}, board {:?}, {} clip(s)",
                     crew_id,
-                    response.sections.len()
+                    response.zones.stage.kind,
+                    response.zones.board.mode,
+                    response.zones.clips.len()
                 );
                 let _ = self.event_tx.send(Event::FeedLoaded { response });
             }

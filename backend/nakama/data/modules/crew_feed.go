@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
+
 	"sort"
 	"strings"
 	"time"
@@ -12,42 +12,20 @@ import (
 	"github.com/heroiclabs/nakama-common/runtime"
 )
 
-// ---------------------------------------------------------------------------
-// Tunables (the curation experimentation surface)
-//
-// Changing these weights or what counts as quiet is a server config edit and a
-// redeploy, no client release. Order + role + section + size are the only knobs
-// that cross the boundary; layout, styling, and copy stay client-side.
-// ---------------------------------------------------------------------------
+// The crew feed RPC and the parts of the ledger it reads. The response is
+// the zone feed (crew_feed_zones.go): five fixed zones and Crew history.
 
 const (
-	feedFillerSlots    = 7 // grid slots after hero + recap (hero + recap + 7 = up to 9)
-	feedWideFillerIdx  = 5 // index within the fillers promoted to the wide (lg) cell
-	feedMemoryPageSize = 60
-
 	// feedMinQuality mirrors the Rust i32::MIN/2 sentinel for non-preview cards.
 	feedMinQuality = -(1 << 30)
 
-	// Game-session budget (spec 19 + game-surfacing B0): adaptive floor and cap
-	// scale with how many game_session cards are in the input week. Quiet crews
-	// may surface compact T0 cards for routine play; loud crews keep only the
-	// most notable sessions. The weekly recap remains the durable aggregate.
-	feedGameSessionMaxCards   = 2  // default cap when input has >5 game sessions
-	feedGameSessionNotableMin = 50 // default floor when input has >15 game sessions
-
-	// Hero priority (plans/next-gen-feed.md section 2): a stream preview, or a
-	// moved belt, leads only while it is this young.
+	// feedHeroFreshMs is how young a belt move is to count as recent
+	// (head2head belt_moved_recent).
 	feedHeroFreshMs = 24 * 60 * 60 * 1000
 
-	// Recent games card: tiles shown. The header counts every session.
+	// Recent games tiles: the most games the installed list reads.
 	feedRecentGamesMaxTiles = 6
 )
-
-// Quiet rows: a T0-only game session renders compact (quiet); a
-// telemetry-backed session that survives pruning is standard (spec 19 B2).
-// Clips are full cards. Joins, leaves, chat and moments have no card at all
-// (mapCardType). A voice session is a row of the day card, never a card
-// (dropVoiceSessions).
 
 // ---------------------------------------------------------------------------
 // Contract
@@ -55,8 +33,6 @@ const (
 
 type FeedRequest struct {
 	CrewID string `json:"crew_id"`
-	// Zones asks for the zone feed (crew_feed_zones.go) next to the sections.
-	Zones bool `json:"zones,omitempty"`
 	// HistoryBefore pages Crew history: the weeks that start before it. Zero
 	// for the first page.
 	HistoryBefore int64 `json:"history_before,omitempty"`
@@ -64,9 +40,7 @@ type FeedRequest struct {
 
 type FeedEntry struct {
 	ID   string      `json:"id"`
-	Type string      `json:"type"` // clip | recap | daily-recap | session-preview | session | recent-games | head2head
-	Role string      `json:"role"` // hero | standard | quiet | recap | locked
-	Size string      `json:"size"` // sm | md | lg
+	Type string      `json:"type"` // clip | recap | daily-recap | session-preview | session
 	Ts   int64       `json:"ts"`
 	Data interface{} `json:"data"`
 }
@@ -102,11 +76,6 @@ type RecentGamesData struct {
 	PCCount      int              `json:"pc_count"`
 }
 
-type FeedSection struct {
-	ID      string      `json:"id"` // this_week | memory
-	Entries []FeedEntry `json:"entries"`
-}
-
 // FeedJoin is one member who joined the crew in the last 24 hours, for the
 // joined line at the top of the feed. It comes from the member_joined events
 // of the ledger. Names are the ones the event stored. InvitedBy is empty when
@@ -120,13 +89,8 @@ type FeedJoin struct {
 }
 
 type FeedResponse struct {
-	CrewID   string        `json:"crew_id"`
-	Sections []FeedSection `json:"sections"`
-	// Joined holds the members who joined in the last 24 hours, newest first,
-	// at most feedJoinedMax. One row each on the client.
-	Joined []FeedJoin `json:"joined,omitempty"`
-	// Zones is the zone feed, when the request asked for it.
-	Zones *FeedZones `json:"zones,omitempty"`
+	CrewID string    `json:"crew_id"`
+	Zones  FeedZones `json:"zones"`
 }
 
 const (
@@ -275,137 +239,6 @@ func decodeGameSessionData(raw interface{}) (GameSessionData, bool) {
 		return GameSessionData{}, false
 	}
 	return d, true
-}
-
-// gameSessionT0Score awards duration and co-play signals that need no telemetry.
-func gameSessionT0Score(d GameSessionData) int {
-	score := 0
-	switch {
-	case d.DurationMin >= 240:
-		score += 40
-	case d.DurationMin >= 120:
-		score += 25
-	case d.DurationMin >= 30:
-		score += 10
-	}
-	coBonus := 0
-	if n := len(d.PlayerIDs); n > 0 {
-		coBonus = (n - 1) * 20
-		if coBonus > 60 {
-			coBonus = 60
-		}
-	}
-	return score + coBonus
-}
-
-// gameSessionNotableFloor returns the quality floor for game_session pruning
-// based on how many game_session cards are in the input week.
-func gameSessionNotableFloor(gameSessionCount int) int {
-	switch {
-	case gameSessionCount <= 5:
-		return 10
-	case gameSessionCount <= 15:
-		return 30
-	default:
-		return feedGameSessionNotableMin
-	}
-}
-
-// gameSessionCardCap returns how many game_session cards may survive pruning.
-func gameSessionCardCap(gameSessionCount int) int {
-	if gameSessionCount <= 5 {
-		return 4
-	}
-	return feedGameSessionMaxCards
-}
-
-// gameSessionQuality scores a game_session card's notability (spec 19 + B0).
-// Every session gets a T0 base; telemetry bonuses stack on top when present.
-func gameSessionQuality(c feedCard) int {
-	if c.backendType != "game_session" {
-		return feedMinQuality
-	}
-	d, ok := decodeGameSessionData(c.data)
-	if !ok {
-		return 0
-	}
-	score := gameSessionT0Score(d)
-	matches := d.Wins + d.Losses + d.Draws
-	if matches == 0 {
-		return score
-	}
-	streak := d.StreakAfter
-	if streak < 0 {
-		streak = -streak
-	}
-	switch {
-	case streak >= 5:
-		score += 120
-	case streak >= 3:
-		score += 80
-	}
-	if d.Wins >= 3 && d.Losses == 0 {
-		score += 70 // flawless night
-	}
-	if d.Losses >= 5 && d.Wins == 0 {
-		score += 50 // rough night (sympathy card)
-	}
-	switch {
-	case matches >= 8:
-		score += 50
-	case matches >= 5:
-		score += 20
-	}
-	return score
-}
-
-// pruneGameSessions drops low-scoring game_session cards and keeps only the
-// most notable ones (above an adaptive floor, capped by volume). Non-game cards
-// pass through untouched and in order. Successfully decoded pruned sessions are
-// returned separately. Pure, so the budget is testable.
-func pruneGameSessions(cards []feedCard) (remaining []feedCard, pruned []feedCard) {
-	gameSessionCount := 0
-	for _, c := range cards {
-		if c.backendType == "game_session" {
-			gameSessionCount++
-		}
-	}
-	floor := gameSessionNotableFloor(gameSessionCount)
-	cap := gameSessionCardCap(gameSessionCount)
-
-	type scored struct {
-		card feedCard
-		q    int
-	}
-	out := make([]feedCard, 0, len(cards))
-	notable := make([]scored, 0)
-	for _, c := range cards {
-		if c.backendType != "game_session" {
-			out = append(out, c)
-			continue
-		}
-		if q := gameSessionQuality(c); q >= floor {
-			notable = append(notable, scored{c, q})
-		}
-	}
-	sort.SliceStable(notable, func(a, b int) bool { return notable[a].q > notable[b].q })
-	if len(notable) > cap {
-		notable = notable[:cap]
-	}
-	kept := make(map[string]bool, len(notable))
-	for _, s := range notable {
-		kept[s.card.id] = true
-		out = append(out, s.card)
-	}
-	for _, c := range cards {
-		if c.backendType != "game_session" || kept[c.id] {
-			continue
-		}
-		if _, ok := decodeGameSessionData(c.data); ok {
-			pruned = append(pruned, c)
-		}
-	}
-	return out, pruned
 }
 
 // reportableMinutes picks the play figure a surface may claim, applying the
@@ -644,158 +477,6 @@ func buildRecentGames(cards []feedCard, libs map[string]*LibraryDoc) (feedCard, 
 	}, true
 }
 
-func fillerPriority(c feedCard) int {
-	switch c.feedType {
-	case "clip":
-		return 10000
-	case "session-preview":
-		return sessionPreviewQuality(c)
-	case "session":
-		if c.backendType == "game_session" {
-			q := gameSessionQuality(c)
-			if q < 0 {
-				q = 0
-			}
-			if q > 100 {
-				q = 100
-			}
-			return 100 + q
-		}
-		return 100
-	case "recent-games":
-		return 150
-	default:
-		return 0
-	}
-}
-
-// feedBestIndex returns the unused card of feedType with the highest score.
-// Ties resolve to the last such card, matching Rust's max_by_key. -1 if none.
-func feedBestIndex(cards []feedCard, used []bool, feedType string, score func(feedCard) int) int {
-	best := -1
-	for i, c := range cards {
-		if used[i] || c.feedType != feedType {
-			continue
-		}
-		if best == -1 || score(c) >= score(cards[best]) {
-			best = i
-		}
-	}
-	return best
-}
-
-func feedFirstIndexOfType(cards []feedCard, used []bool, feedType string) int {
-	for i, c := range cards {
-		if !used[i] && c.feedType == feedType {
-			return i
-		}
-	}
-	return -1
-}
-
-// pickFillerIndices picks up to feedFillerSlots indices: one of each present
-// type first (diversity), then by filler priority desc. Mutates used.
-func pickFillerIndices(cards []feedCard, used []bool) []int {
-	picks := make([]int, 0, feedFillerSlots)
-
-	for _, ft := range []string{"clip", "session", "recent-games", "session-preview"} {
-		if len(picks) >= feedFillerSlots {
-			break
-		}
-		idx := -1
-		if ft == "session-preview" {
-			idx = feedBestIndex(cards, used, "session-preview", sessionPreviewQuality)
-		} else {
-			idx = feedFirstIndexOfType(cards, used, ft)
-		}
-		if idx >= 0 {
-			picks = append(picks, idx)
-			used[idx] = true
-		}
-	}
-
-	remaining := make([]int, 0)
-	for i := range cards {
-		if !used[i] {
-			remaining = append(remaining, i)
-		}
-	}
-	sort.SliceStable(remaining, func(a, b int) bool {
-		return fillerPriority(cards[remaining[a]]) > fillerPriority(cards[remaining[b]])
-	})
-
-	for _, i := range remaining {
-		if len(picks) >= feedFillerSlots {
-			break
-		}
-		picks = append(picks, i)
-		used[i] = true
-	}
-
-	return picks
-}
-
-// promoteWideSlot swaps the best session-preview filler into the wide cell
-// position. A voice clip never takes the wide cell (plans/next-gen-feed.md
-// section 2), so clips are not candidates here.
-func promoteWideSlot(cards []feedCard, picks []int) {
-	if len(picks) <= feedWideFillerIdx {
-		return
-	}
-	from := -1
-	bestScore := 0
-	for pos, i := range picks {
-		if cards[i].feedType != "session-preview" {
-			continue
-		}
-		s := sessionPreviewQuality(cards[i])
-		if from == -1 || s >= bestScore {
-			from = pos
-			bestScore = s
-		}
-	}
-	if from >= 0 {
-		picks[from], picks[feedWideFillerIdx] = picks[feedWideFillerIdx], picks[from]
-	}
-	keepClipOutOfWideSlot(cards, picks)
-}
-
-// hoistRecentGames puts the recent games card first among the fillers, so it
-// is on the first screen for every crew size, next to the hero or in the
-// second row of a plain grid. The wide-slot swap above can push a card back
-// to a late position, and clips (priority 10000) fill the slots around it. The
-// client lays the card on its slot (client/src/feed_grid.rs).
-func hoistRecentGames(cards []feedCard, picks []int) {
-	for pos, i := range picks {
-		if cards[i].feedType != "recent-games" {
-			continue
-		}
-		copy(picks[1:pos+1], picks[:pos])
-		picks[0] = i
-		return
-	}
-}
-
-// keepClipOutOfWideSlot moves a clip off the wide cell position by swapping it
-// with the nearest non-clip filler (not the recent games card), later positions first. If every filler is a
-// clip there is nothing to swap with and the clip stays, capped at the standard
-// size by buildThisWeek.
-func keepClipOutOfWideSlot(cards []feedCard, picks []int) {
-	if len(picks) <= feedWideFillerIdx || cards[picks[feedWideFillerIdx]].feedType != "clip" {
-		return
-	}
-	for step := 1; step < len(picks); step++ {
-		for _, pos := range []int{feedWideFillerIdx + step, feedWideFillerIdx - step} {
-			// The recent games card keeps its place at the front.
-			if pos < 0 || pos >= len(picks) || cards[picks[pos]].feedType == "clip" || cards[picks[pos]].feedType == "recent-games" {
-				continue
-			}
-			picks[pos], picks[feedWideFillerIdx] = picks[feedWideFillerIdx], picks[pos]
-			return
-		}
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Empty-card rule (plans/next-gen-feed.md section 2, principle 1)
 // ---------------------------------------------------------------------------
@@ -887,258 +568,9 @@ func dropEmptyCards(cards []feedCard) []feedCard {
 	return out
 }
 
-// appendEntryIfContent appends e to a section unless it has no content.
-func appendEntryIfContent(entries []FeedEntry, e FeedEntry, backendType string) []FeedEntry {
-	if !cardHasContent(e.Type, backendType, e.Data) {
-		return entries
-	}
-	return append(entries, e)
-}
-
-// ---------------------------------------------------------------------------
-// this_week assembly
-// ---------------------------------------------------------------------------
-
-func feedEntryFromCard(c feedCard, role, size string) FeedEntry {
-	return FeedEntry{ID: c.id, Type: c.feedType, Role: role, Size: size, Ts: c.ts, Data: c.data}
-}
-
-// fillerRole assigns standard vs quiet. Quiet: T0-only game sessions and
-// short/weak session-previews. Everything else (clips, strong previews,
-// moments) is standard.
-func fillerRole(c feedCard) string {
-	if c.feedType == "recent-games" {
-		return "standard"
-	}
-	if c.backendType == "game_session" {
-		if d, ok := decodeGameSessionData(c.data); ok {
-			if d.Wins+d.Losses+d.Draws == 0 {
-				return "quiet"
-			}
-		}
-	}
-	if c.feedType == "session-preview" && sessionPreviewQuality(c) < 0 {
-		return "quiet"
-	}
-	return "standard"
-}
-
-// Hero priority, plans/next-gen-feed.md section 2:
-//
-//  1. a live stream. The feed builder cannot see live streams: they are client
-//     state from crew_state. The client shows a live stream above this_week, so
-//     this list starts at the next item.
-//  2. a belt that moved in the last 24 h (the head2head card, see beltMovedHeroIndex)
-//  3. a stream preview (session-preview) from the last 24 h
-//  4. a game clip with a poster from the last 24 h (CLIPS.md 15.6)
-//  5. a real recap, on Monday
-//  6. the best session
-//
-// A voice clip is never the hero.
-
-// freshPreviewHeroIndex returns the best session-preview younger than
-// feedHeroFreshMs, or -1.
-func freshPreviewHeroIndex(cards []feedCard, nowMs int64) int {
-	best := -1
-	for i, c := range cards {
-		if c.feedType != "session-preview" || nowMs-c.ts > feedHeroFreshMs {
-			continue
-		}
-		if best == -1 || sessionPreviewQuality(c) >= sessionPreviewQuality(cards[best]) {
-			best = i
-		}
-	}
-	return best
-}
-
-// freshGameClipHeroIndex returns the newest game clip with a poster younger
-// than feedHeroFreshMs, or -1. A voice clip never qualifies, and a game clip
-// with no poster has nothing to show yet.
-func freshGameClipHeroIndex(cards []feedCard, nowMs int64) int {
-	best := -1
-	for i, c := range cards {
-		if c.feedType != "clip" || nowMs-c.ts > feedHeroFreshMs {
-			continue
-		}
-		clip, ok := decodeCardData[StoredClip](c.data)
-		if !ok || clip.ClipType != clipTypeGame || clip.PosterURL == "" {
-			continue
-		}
-		if best == -1 || c.ts > cards[best].ts {
-			best = i
-		}
-	}
-	return best
-}
-
-// beltMovedHeroIndex is the slot for "a belt moved in the last 24 h". The
-// head2head card joins the list only when a title moved in that time, so the
-// first head2head card in the list is the one. It returns -1 when none moved.
-func beltMovedHeroIndex(cards []feedCard, nowMs int64) int {
-	for i, c := range cards {
-		if c.feedType != head2headFeedID {
-			continue
-		}
-		if d, ok := c.data.(*Head2headFeedData); ok && d.BeltMovedRecent != nil && nowMs-d.BeltMovedRecent.MovedAtMs <= feedHeroFreshMs {
-			return i
-		}
-	}
-	return -1
-}
-
-// mondayRecapHeroIndex returns the recap to lead with on a Monday (UTC), the
-// day the weekly job runs, while that recap is under 24 h old. Empty recaps
-// never reach here: buildThisWeek drops them first. Otherwise -1.
-func mondayRecapHeroIndex(cards []feedCard, nowMs int64) int {
-	if time.UnixMilli(nowMs).UTC().Weekday() != time.Monday {
-		return -1
-	}
-	best := -1
-	for i, c := range cards {
-		if c.feedType != "recap" || nowMs-c.ts > feedHeroFreshMs {
-			continue
-		}
-		if best == -1 || c.ts > cards[best].ts {
-			best = i
-		}
-	}
-	return best
-}
-
-// bestSessionHeroIndex returns the strongest session-preview of any age, or -1.
-func bestSessionHeroIndex(cards []feedCard) int {
-	used := make([]bool, len(cards))
-	return feedBestIndex(cards, used, "session-preview", sessionPreviewQuality)
-}
-
-// heroIndex applies the hero priority above. Pure, so the order is testable.
-func heroIndex(cards []feedCard, nowMs int64) int {
-	if i := beltMovedHeroIndex(cards, nowMs); i >= 0 {
-		return i
-	}
-	if i := freshPreviewHeroIndex(cards, nowMs); i >= 0 {
-		return i
-	}
-	if i := freshGameClipHeroIndex(cards, nowMs); i >= 0 {
-		return i
-	}
-	if i := mondayRecapHeroIndex(cards, nowMs); i >= 0 {
-		return i
-	}
-	return bestSessionHeroIndex(cards)
-}
-
-// buildThisWeek curates the recent feed: the hero (see heroIndex), the latest
-// recap, then diversity+priority fillers capped at feedFillerSlots with the
-// wide-slot promotion. A clip filler is a standard card, never wide. Only a
-// fresh game clip with a poster can be the hero; a voice clip never is.
-// Pure given its inputs.
-//
-// Live streams are not surfaced here. They are client state (crew_state), so
-// the client shows them first and this list starts at the next hero choice.
-func buildThisWeek(cards []feedCard, nowMs int64) []FeedEntry {
-	return buildThisWeekWithLibraries(cards, nowMs, nil)
-}
-
-// buildThisWeekWithLibraries is buildThisWeek with the crew members' library
-// documents (by user id) feeding the recent games card.
-func buildThisWeekWithLibraries(cards []feedCard, nowMs int64, libs map[string]*LibraryDoc) []FeedEntry {
-	return buildThisWeekFull(cards, nowMs, libs, nil)
-}
-
-// buildThisWeekFull adds the head2head entry. A nil h2h means no entry. The
-// entry is not a ledger card. It is the hero when a title moved in the last
-// 24 h and nothing ranks above it. Otherwise it follows the hero and the
-// recap, and it never takes a filler slot.
-// dropVoiceSessions leaves the voice sessions out: the day card lists them.
-func dropVoiceSessions(cards []feedCard) []feedCard {
-	out := make([]feedCard, 0, len(cards))
-	for _, c := range cards {
-		if c.backendType == "voice_session" {
-			continue
-		}
-		out = append(out, c)
-	}
-	return out
-}
-
-func buildThisWeekFull(cards []feedCard, nowMs int64, libs map[string]*LibraryDoc, h2h *Head2headFeedData) []FeedEntry {
-	return buildThisWeekDaily(cards, nowMs, libs, h2h, nil)
-}
-
-// buildThisWeekDaily adds the daily recaps of the last three days (see
-// buildDailyRecaps). belts are the belts moved, from the holders doc. The
-// daily recaps are standard cells after the recap and the head2head entry and
-// before the sessions. They never take a filler slot.
-func buildThisWeekDaily(cards []feedCard, nowMs int64, libs map[string]*LibraryDoc, h2h *Head2headFeedData, belts []RecapBeltMoved) []FeedEntry {
-	// Empty-card rule first, so an empty card never takes a slot or a count.
-	cards = dropEmptyCards(cards)
-
-	// The daily recaps count every session of their day, before pruning, as
-	// the recent games card does.
-	dailies := buildDailyRecaps(cards, belts, nowMs)
-
-	// The recent games card counts every game session in the window, before
-	// pruning, so its header matches the week and not only the pruned part.
-	recent, hasRecent := buildRecentGames(cards, libs)
-
-	// A voice session is a row of the day card, never a card of its own (spec
-	// 19 section 3.5a). It stays in the counts above.
-	cards = dropVoiceSessions(cards)
-
-	// Budget game sessions first: adaptive floor/cap decides which earn a card.
-	// Pruned sessions are not carded; the recent games card carries their time.
-	cards, _ = pruneGameSessions(cards)
-	if hasRecent {
-		cards = append(cards, recent)
-	}
-
-	h2hCard := -1
-	if h2h != nil {
-		h2hCard = len(cards)
-		ts := h2h.UpdatedAt
-		if h2h.BeltMovedRecent != nil {
-			ts = h2h.BeltMovedRecent.MovedAtMs
-		}
-		cards = append(cards, feedCard{id: head2headFeedID, feedType: head2headFeedID, ts: ts, data: h2h})
-	}
-
-	used := make([]bool, len(cards))
-	entries := make([]FeedEntry, 0, feedFillerSlots+3)
-
-	if hi := heroIndex(cards, nowMs); hi >= 0 {
-		used[hi] = true
-		entries = append(entries, feedEntryFromCard(cards[hi], "hero", "lg"))
-	}
-
-	if ri := feedFirstIndexOfType(cards, used, "recap"); ri >= 0 {
-		used[ri] = true
-		entries = append(entries, feedEntryFromCard(cards[ri], "recap", "md"))
-	}
-
-	if h2hCard >= 0 && !used[h2hCard] {
-		used[h2hCard] = true
-		entries = append(entries, feedEntryFromCard(cards[h2hCard], "standard", "lg"))
-	}
-
-	entries = append(entries, dailies...)
-
-	fillers := pickFillerIndices(cards, used)
-	hoistRecentGames(cards, fillers)
-	promoteWideSlot(cards, fillers)
-	for pos, i := range fillers {
-		role := fillerRole(cards[i])
-		size := "md"
-		if role == "quiet" {
-			size = "sm"
-		}
-		if pos == feedWideFillerIdx && cards[i].feedType != "clip" {
-			size = "lg" // the wide grid cell, ported from the desktop promotion
-		}
-		entries = append(entries, feedEntryFromCard(cards[i], role, size))
-	}
-
-	return entries
+// feedEntryFromCard is the wire form of a card in the zones.
+func feedEntryFromCard(c feedCard) FeedEntry {
+	return FeedEntry{ID: c.id, Type: c.feedType, Ts: c.ts, Data: c.data}
 }
 
 // ---------------------------------------------------------------------------
@@ -1162,50 +594,21 @@ func CrewFeedRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 		return "", runtime.NewError("not a crew member", 7)
 	}
 
-	// this_week: curated recent feed.
 	timeline := buildMergedTimeline(ctx, nk, req.CrewID)
-	cards := mergedToCards(timeline)
 	nowMs := time.Now().UnixMilli()
 	h2h := crewHead2headForViewer(ctx, logger, nk, req.CrewID, userID, nowMs)
-	thisWeek := buildThisWeekDaily(cards, nowMs, crewLibraryDocs(ctx, nk, req.CrewID), h2h,
-		crewBeltsMovedSince(ctx, nk, req.CrewID, nowMs-int64(feedDailyRecapDays)*dayMs))
-
-	// Items shown in this_week are excluded from the memory spine.
-	shownClipIDs := map[string]bool{}
-	shownSessionIDs := map[string]bool{}
-	shownRecapWeekStart := int64(-1)
-	for _, e := range thisWeek {
-		switch e.Type {
-		case "clip":
-			shownClipIDs[e.ID] = true
-		case "session", "session-preview":
-			shownSessionIDs[e.ID] = true
-		case "recap":
-			fmt.Sscanf(e.ID, "recap_%d", &shownRecapWeekStart)
-		}
-	}
-
-	memory := buildMemorySection(ctx, nk, req.CrewID, shownRecapWeekStart, shownClipIDs, shownSessionIDs)
-	// The locked card is the m3llo+ upsell pinned at the end of memory. Gating is
-	// not enforced yet, so IsUserPremium is always false and everyone sees it.
-	memory = appendLockedCard(memory, !IsUserPremium(userID))
-
-	updateLastSeen(ctx, nk, userID, req.CrewID)
-
 	joins := feedJoinsFor(ctx, nk, req.CrewID, timeline, userID, nowMs)
-	resp := FeedResponse{
-		CrewID: req.CrewID,
-		Sections: []FeedSection{
-			{ID: "this_week", Entries: thisWeek},
-			{ID: "memory", Entries: memory},
-		},
-		Joined: joins,
+	zones := crewFeedZones(ctx, logger, nk, req, userID, timeline, h2h, joins, nowMs)
+
+	// The first page is a visit to the feed; a history page is not.
+	if req.HistoryBefore <= 0 {
+		updateLastSeen(ctx, nk, userID, req.CrewID)
 	}
-	if req.Zones {
-		zones := crewFeedZones(ctx, logger, nk, req, userID, timeline, h2h, joins, nowMs)
-		resp.Zones = &zones
+
+	data, err := json.Marshal(FeedResponse{CrewID: req.CrewID, Zones: zones})
+	if err != nil {
+		return "", runtime.NewError("encode failed", 13)
 	}
-	data, _ := json.Marshal(resp)
 	return string(data), nil
 }
 
@@ -1286,88 +689,4 @@ func crewLibraryDocs(ctx context.Context, nk runtime.NakamaModule, crewID string
 		}
 	}
 	return readLibraryDocs(ctx, nk, ids)
-}
-
-// buildMemorySection assembles the durable spine: recaps (newest first),
-// older clips, and stream replays, excluding whatever this_week already shows,
-// sorted by timestamp descending and capped at feedMemoryPageSize.
-func buildMemorySection(ctx context.Context, nk runtime.NakamaModule, crewID string, shownRecapWeekStart int64, shownClipIDs, shownSessionIDs map[string]bool) []FeedEntry {
-	entries := make([]FeedEntry, 0, feedMemoryPageSize)
-
-	recapsDoc, _ := readRecapsDoc(ctx, nk, crewID)
-	stampRecapWeeks(ctx, nk, crewID, recapsDoc.Recaps)
-	for _, r := range recapsDoc.Recaps {
-		if r.WeekStart == shownRecapWeekStart || isEmptyRecap(r) {
-			continue
-		}
-		entries = appendEntryIfContent(entries, FeedEntry{
-			ID:   fmt.Sprintf("recap_%d", r.WeekStart),
-			Type: "recap",
-			Role: "recap",
-			Size: "md",
-			Ts:   r.GeneratedAt,
-			Data: r,
-		}, "weekly_recap")
-	}
-
-	clipsDoc, _ := readClipsDoc(ctx, nk, crewID)
-	for _, c := range clipsDoc.Clips {
-		if shownClipIDs[c.EventID] {
-			continue
-		}
-		entries = appendEntryIfContent(entries, FeedEntry{
-			ID:   c.EventID,
-			Type: "clip",
-			Role: "standard",
-			Size: "md",
-			Ts:   c.Ts,
-			Data: c,
-		}, "clip")
-	}
-
-	// Stream replays are durable memories too: a session-preview when snapshots
-	// were captured, otherwise a plain session card.
-	streamDoc, _ := readStreamSessionsDoc(ctx, nk, crewID)
-	for _, s := range streamDoc.Sessions {
-		if shownSessionIDs[s.EventID] {
-			continue
-		}
-		feedType := "session"
-		if len(s.SnapshotURLs) > 0 {
-			feedType = "session-preview"
-		}
-		entries = appendEntryIfContent(entries, FeedEntry{
-			ID:   s.EventID,
-			Type: feedType,
-			Role: "standard",
-			Size: "md",
-			Ts:   s.Ts,
-			Data: s,
-		}, "stream_session")
-	}
-
-	sort.SliceStable(entries, func(i, j int) bool {
-		return entries[i].Ts > entries[j].Ts
-	})
-
-	if len(entries) > feedMemoryPageSize {
-		entries = entries[:feedMemoryPageSize]
-	}
-
-	return entries
-}
-
-// appendLockedCard pins the m3llo+ upsell at the end of the memory spine when
-// include is true. The card carries no data; clients own the upsell copy and
-// visual. Kept pure so the placement is unit-testable.
-func appendLockedCard(entries []FeedEntry, include bool) []FeedEntry {
-	if !include {
-		return entries
-	}
-	return append(entries, FeedEntry{
-		ID:   "locked",
-		Type: "locked",
-		Role: "locked",
-		Size: "md",
-	})
 }

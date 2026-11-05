@@ -847,10 +847,10 @@ func validTzOffset(v *int) *int {
 // Feed payload
 // ---------------------------------------------------------------------------
 
-// head2headFeedID is the id and type of the head2head entry in this_week.
+// head2headFeedID is the id and type of the head2head entry (zones.head2head).
 const head2headFeedID = "head2head"
 
-// Head2headFeedData is the data of the head2head entry in this_week. The feed
+// Head2headFeedData is the zones.head2head payload. The feed
 // builds it for every crew. It is not a ledger event. The client renders it.
 //
 //   - Titles: every contested title, so the client can draw the belt row.

@@ -538,13 +538,7 @@ pub enum Command {
         position_ms: u32,
     },
     StopClipPlayback,
-    LoadCrewTimeline {
-        crew_id: String,
-        #[serde(default)]
-        cursor: Option<String>,
-    },
-    // Server-curated feed (this_week + memory sections). Primary feed load;
-    // LoadCrewTimeline stays for later deep-scroll pagination.
+    /// The crew feed: the zones and the first page of Crew history.
     LoadCrewFeed {
         crew_id: String,
     },

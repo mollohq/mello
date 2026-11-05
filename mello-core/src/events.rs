@@ -779,11 +779,7 @@ pub enum Event {
     },
     /// Clip playback finished (reached end or stopped).
     ClipPlaybackFinished,
-    /// Crew feed timeline loaded.
-    TimelineLoaded {
-        response: crate::crew_events::TimelineResponse,
-    },
-    /// Server-curated feed loaded (sectioned: this_week + memory).
+    /// The crew feed loaded (`Command::LoadCrewFeed`).
     FeedLoaded {
         response: crate::crew_events::FeedResponse,
     },

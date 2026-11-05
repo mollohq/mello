@@ -195,9 +195,7 @@ fn dispatch(ctx: &AppContext, event: Event) {
         | Event::ClipPlaybackProgress { .. }
         | Event::ClipPlaybackFinished
         | Event::FeedLoaded { .. }
-        | Event::FeedHistoryLoaded { .. }
-        // Raw timeline is kept for later deep-scroll; no UI handler yet.
-        | Event::TimelineLoaded { .. } => clip::handle(ctx, event),
+        | Event::FeedHistoryLoaded { .. } => clip::handle(ctx, event),
 
         // Game clips (F8)
         Event::GameClipStateChanged { .. }

@@ -7,10 +7,6 @@ use crate::snapshot_loader;
 use crate::{FeedView, MainWindow};
 
 pub fn wire(ctx: &AppContext) {
-    ctx.app.on_feed_show_more_clicked(|| {
-        log::debug!("UI: feed show more (premium pagination — not implemented)");
-    });
-
     // The zone feed scrolled near the end of Crew history.
     crate::handlers::zones::wire_history_paging(ctx);
 

@@ -353,28 +353,4 @@ pub fn wire(ctx: &AppContext) {
             }
         });
     }
-    {
-        let app_weak = ctx.app.as_weak();
-        let settings = ctx.settings.clone();
-        ctx.app.on_hide_invite_card(move || {
-            let Some(app) = app_weak.upgrade() else {
-                return;
-            };
-            let crew_id = app.get_active_crew_id().to_string();
-            if crew_id.is_empty() {
-                return;
-            }
-            log::info!("[invite] hiding invite card for crew {}", crew_id);
-
-            // Take the invite line off the feed now.
-            app.set_feed_invite_line(false);
-
-            // Persist the preference
-            let mut s = settings.borrow_mut();
-            if !s.hidden_invite_crew_ids.contains(&crew_id) {
-                s.hidden_invite_crew_ids.push(crew_id);
-            }
-            s.save();
-        });
-    }
 }

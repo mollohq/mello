@@ -22,7 +22,6 @@ import (
 const (
 	ClipMaxDurationSec   = 60
 	ClipMaxPerUserPerDay = 50
-	TimelinePageSize     = 20
 
 	CrewClipsCollection = "crew_clips"
 	// CrewClipsMaxRetained caps the per-crew clips document. Clips live in a
@@ -353,12 +352,6 @@ func PostClipRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 // CrewTimeline RPC — paginated feed of all crew events (newest first)
 // ---------------------------------------------------------------------------
 
-type TimelineRequest struct {
-	CrewID string `json:"crew_id"`
-	Cursor string `json:"cursor,omitempty"`
-	Limit  int    `json:"limit,omitempty"`
-}
-
 type TimelineEntry struct {
 	ID      string      `json:"id"`
 	Type    string      `json:"type"`
@@ -368,17 +361,10 @@ type TimelineEntry struct {
 	Data    interface{} `json:"data"`
 }
 
-type TimelineResponse struct {
-	CrewID  string          `json:"crew_id"`
-	Entries []TimelineEntry `json:"entries"`
-	Cursor  string          `json:"cursor,omitempty"`
-	HasMore bool            `json:"has_more"`
-}
-
 // buildMergedTimeline merges three bounded sources into the live feed: the
 // 7-day ledger, recent durable clips (last 7 days), and the single latest
 // recap. Result is sorted by timestamp descending (newest first). Durable
-// history beyond this window is reached through crew_clips / crew_recaps.
+// history beyond this window is the zones history (crewFeedZones).
 func buildMergedTimeline(ctx context.Context, nk runtime.NakamaModule, crewID string) []TimelineEntry {
 	ledger, _ := readLedger(ctx, nk, crewID)
 
@@ -434,67 +420,6 @@ func buildMergedTimeline(ctx context.Context, nk runtime.NakamaModule, crewID st
 	})
 
 	return all
-}
-
-func CrewTimelineRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
-	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
-	if !ok {
-		return "", runtime.NewError("authentication required", 16)
-	}
-
-	var req TimelineRequest
-	if err := json.Unmarshal([]byte(payload), &req); err != nil {
-		return "", runtime.NewError("invalid request", 3)
-	}
-	if req.CrewID == "" {
-		return "", runtime.NewError("crew_id required", 3)
-	}
-	if !isCrewMember(ctx, nk, req.CrewID, userID) {
-		return "", runtime.NewError("not a crew member", 7)
-	}
-
-	limit := req.Limit
-	if limit <= 0 || limit > TimelinePageSize {
-		limit = TimelinePageSize
-	}
-
-	all := buildMergedTimeline(ctx, nk, req.CrewID)
-
-	// Cursor-based pagination: cursor is the entry ID of the last item on the previous page
-	startIdx := 0
-	if req.Cursor != "" {
-		for i, e := range all {
-			if e.ID == req.Cursor {
-				startIdx = i + 1
-				break
-			}
-		}
-	}
-
-	end := startIdx + limit
-	if end > len(all) {
-		end = len(all)
-	}
-
-	entries := all[startIdx:end]
-
-	var cursor string
-	hasMore := end < len(all)
-	if hasMore && len(entries) > 0 {
-		cursor = entries[len(entries)-1].ID
-	}
-
-	// Update last_seen for the user
-	updateLastSeen(ctx, nk, userID, req.CrewID)
-
-	resp := TimelineResponse{
-		CrewID:  req.CrewID,
-		Entries: entries,
-		Cursor:  cursor,
-		HasMore: hasMore,
-	}
-	data, _ := json.Marshal(resp)
-	return string(data), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -643,77 +568,3 @@ func ClipUploadCompleteRPC(ctx context.Context, logger runtime.Logger, db *sql.D
 // ---------------------------------------------------------------------------
 // CrewClips RPC — paginated durable clip history (newest first)
 // ---------------------------------------------------------------------------
-
-type ClipsPageRequest struct {
-	CrewID string `json:"crew_id"`
-	Cursor string `json:"cursor,omitempty"` // last EventID of previous page
-	Limit  int    `json:"limit,omitempty"`
-}
-
-type ClipsPageResponse struct {
-	CrewID  string       `json:"crew_id"`
-	Clips   []StoredClip `json:"clips"`
-	Cursor  string       `json:"cursor,omitempty"`
-	HasMore bool         `json:"has_more"`
-}
-
-func CrewClipsRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
-	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
-	if !ok {
-		return "", runtime.NewError("authentication required", 16)
-	}
-
-	var req ClipsPageRequest
-	if err := json.Unmarshal([]byte(payload), &req); err != nil {
-		return "", runtime.NewError("invalid request", 3)
-	}
-	if req.CrewID == "" {
-		return "", runtime.NewError("crew_id required", 3)
-	}
-	if !isCrewMember(ctx, nk, req.CrewID, userID) {
-		return "", runtime.NewError("not a crew member", 7)
-	}
-
-	limit := req.Limit
-	if limit <= 0 || limit > TimelinePageSize {
-		limit = TimelinePageSize
-	}
-
-	doc, _ := readClipsDoc(ctx, nk, req.CrewID)
-
-	sort.Slice(doc.Clips, func(i, j int) bool {
-		return doc.Clips[i].Ts > doc.Clips[j].Ts
-	})
-
-	startIdx := 0
-	if req.Cursor != "" {
-		for i, c := range doc.Clips {
-			if c.EventID == req.Cursor {
-				startIdx = i + 1
-				break
-			}
-		}
-	}
-
-	end := startIdx + limit
-	if end > len(doc.Clips) {
-		end = len(doc.Clips)
-	}
-
-	page := doc.Clips[startIdx:end]
-
-	var cursor string
-	hasMore := end < len(doc.Clips)
-	if hasMore && len(page) > 0 {
-		cursor = page[len(page)-1].EventID
-	}
-
-	resp := ClipsPageResponse{
-		CrewID:  req.CrewID,
-		Clips:   page,
-		Cursor:  cursor,
-		HasMore: hasMore,
-	}
-	data, _ := json.Marshal(resp)
-	return string(data), nil
-}
