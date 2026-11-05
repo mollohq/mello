@@ -108,7 +108,7 @@ Read `TESTING.md` before adding tests. In short:
 ## Scale & Performance Mindset
 - Target metrics are hard constraints, not aspirations (see Architecture §2 and §13).
   - Client: <100MB install, <100MB RAM, <3s cold start.
-  - P2P: <50ms voice latency, >90% NAT traversal success.
+  - Voice: <50ms latency through the SFU in the same region, >90% NAT traversal success.
 - Before adding a dependency: will it fit inside the size/RAM budget? Check binary size impact.
 
 ## The Design System

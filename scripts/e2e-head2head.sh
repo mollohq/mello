@@ -62,10 +62,9 @@ else
     PORT="${H2H_NAKAMA_PORT:-17350}"
     TMP="$(mktemp -d)"
     PROJECT=mello-h2h
-    # Voice joins in the test must take the SFU path (P2P is being removed).
-    # SFU mode needs a signing key on Nakama. A throwaway key is enough: the
-    # test makes no media connection. The endpoint is the local SFU, never the
-    # production one that the compose file defaults to.
+    # Voice joins need a signing key on Nakama. A throwaway key is enough: the
+    # test makes no media connection. The endpoint is the local SFU (SFU_REGIONS
+    # below), never the production one.
     # 8443 is signaling, 8080 is the SFU health and admin port. The SFU runs in
     # Docker from the mello-sfu compose.
     if ! curl -sf -o /dev/null --max-time 3 "http://127.0.0.1:8080/health"; then

@@ -127,7 +127,7 @@ File: `libmello/src/video/capture_process.cpp`, `video_pipeline.cpp`, `mello-cor
 ### 3.2 Signal + audio
 
 - New control-channel pause/resume message on the reliable channel (same channel as cursor `0x04/0x02` + 2 s ping). New subtype, tiny payload: paused flag + reason (minimized / zero-size / stall).
-- Fan out P2P per-viewer and SFU host→viewers. Verify SFU forwards host control to viewers; if not, add forwarding (control-only channel exists both legs).
+- Fan out SFU host→viewers. Verify SFU forwards host control to viewers; if not, add forwarding (control-only channel exists both legs).
 - Host sends current pause state on every viewer join (like IDR replay), so late joiners land on the pause screen, not a black frame.
 - On pause: host stops `send_audio` (mutes game audio now, not after a playout timeout). Voice path untouched. On resume: force IDR, resume audio.
 
