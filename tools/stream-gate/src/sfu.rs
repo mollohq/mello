@@ -16,11 +16,12 @@
 //!
 //! | Variable | Value | Why |
 //! |---|---|---|
-//! | `SFU_ADMIN_PASSWORD` | random per run | test-mode join (01-SFU.md section 5.1) |
+//! | `SFU_TEST_PASSWORD` | random per run | test-mode join (01-SFU.md section 5.1); with no JWT key it is also what lets the SFU start |
+//! | `SFU_ADMIN_PASSWORD` | the same value | the admin API |
 //! | `SFU_PUBLIC_IP` | `127.0.0.2` | ICE-lite and the UDP mux on `0.0.0.0:10000`; the one candidate is the shim |
 //! | `SFU_ICE_TCP_PORT` | `0` | no ICE-TCP candidate: UDP only, through the shim |
 //! | `SFU_ADDR`, `SFU_ADMIN_ADDR` | free loopback ports | signaling and `/health` |
-//! | metering, R2, JWT, TLS, peers | removed | nothing leaves the machine |
+//! | R2, JWT, TLS, peers, dev mode | removed | nothing leaves the machine; no JWT is accepted |
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -126,10 +127,12 @@ impl Sfu {
             "SFU_PEERS",
             "SFU_STATS_TOKEN",
             "SFU_ADMIN_IPS",
+            "SFU_DEV_MODE",
         ] {
             cmd.env_remove(k);
         }
-        cmd.env("SFU_ADMIN_PASSWORD", &password)
+        cmd.env("SFU_TEST_PASSWORD", &password)
+            .env("SFU_ADMIN_PASSWORD", &password)
             .env("SFU_PUBLIC_IP", SHIM_IP)
             .env("SFU_ICE_TCP_PORT", "0")
             .env("SFU_ADDR", format!("127.0.0.1:{ws_port}"))
