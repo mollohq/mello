@@ -32,7 +32,7 @@ export async function bobWithSeededCrew(ctx: JourneyContext, seeded: number): Pr
   let bobCreds = { email: "", password: "" };
   await step("setup: bob creates a crew and reads the invite link", async () => {
     bobCreds = await onboardWithNewCrew(bob, crew, `bob${runId}`, "Public");
-    await bob.waitFor("the head2head card of a crew of one", (s) => s.head2head.present, 30_000);
+    await bob.waitFor("the solo board of a crew of one", (s) => s.feed_zones.board === "solo", 30_000);
     code = await readInviteCode(bob);
   });
   await step("setup: bob has played a few sessions, so his pairs contest more than the library titles", async () => {
@@ -65,15 +65,20 @@ export async function bobWithSeededCrew(ctx: JourneyContext, seeded: number): Pr
   return { bob, crew, code, members };
 }
 
-/** The holder of the_carry in bob's head2head card, by name. */
+/** The belt of the_carry on bob's board. */
+export function carryBelt(s: AppState): AppState["feed_zones"]["belts"][number] | undefined {
+  return s.feed_zones.belts.find((t) => t.title === "THE CARRY");
+}
+
+/** The holder of the_carry on bob's board, by name. */
 function carryHolder(s: AppState): string | undefined {
-  return s.head2head.titles.find((t) => t.title_id === "the_carry")?.holder_name;
+  return carryBelt(s)?.holder_name;
 }
 
 /**
  * Seeded members re-report their libraries until the last move of the_carry is
- * between two members other than bob: no versus hero, and the pair of bob and
- * the new holder wears the unread dot. Returns the new holder.
+ * between two members other than bob: the belt of the board is sealed and
+ * unread, and the Stage has no belt of bob's. Returns the new holder.
  *
  * bob's app reports the library of the machine it runs on. With more Counter-
  * Strike 2 hours there than any seeded member has, bob holds the_carry, and
@@ -114,107 +119,87 @@ export function between(events: AppEvent[], from: string, to: string): number | 
   return a && b ? b.ts_ms - a.ts_ms : null;
 }
 
+/** Every card of the zones: the Stage, the clips and the sessions. */
+export function zoneCards(s: AppState): AppState["feed_zones"]["clips"] {
+  const z = s.feed_zones;
+  return [...(z.stage_card ? [z.stage_card] : []), ...z.clips, ...z.sessions];
+}
+
 /**
  * Wait for the feed a crew of two or more shows once the library report and
- * the contested titles have arrived: head2head, recent games tiles, titles and
- * the skeleton trio of the stage. `present` alone comes first and lags the
- * content. The trio stays through two members (frame B2) and goes from three
- * (frame C): pass `skeletons: 3` for a crew of two.
+ * the contested titles have arrived: the board with its belts. The board
+ * comes first and the belts lag it.
  */
 export async function waitForFullFeed(
   app: { waitFor: (label: string, p: (s: AppState) => boolean, ms: number) => Promise<AppState> },
-  opts: { skeletons?: number } = {},
 ): Promise<AppState> {
-  const trio = opts.skeletons ?? 0;
   return app.waitFor(
-    `the full feed: head2head with titles, recent_games tiles, skeleton_trio ${trio}`,
-    (s) => s.head2head.present && s.head2head.titles.length > 0 && s.recent_games.tiles.length > 0 && s.skeleton_trio === trio,
+    "the full feed: the board with belts",
+    (s) => s.feed_zones.board !== "" && s.feed_zones.board !== "solo" && s.feed_zones.belts.length > 0,
     15_000,
   );
 }
 
-/** The checks that every stage from two members on shares: the stage's skeleton trio, no empty card. */
-export function expectFullFeed(s: AppState, expect: (c: unknown, m: string) => void, opts: { skeletons?: number } = {}): void {
-  const trio = opts.skeletons ?? 0;
-  expect(s.skeleton_trio === trio, `skeleton_trio is ${trio} at this crew size, got ${s.skeleton_trio}`);
-  for (const c of s.feed_cards) {
-    expect(c.card_type !== "", `feed card ${c.id} has a type`);
-    expect(c.title !== "" || c.actor_name !== "" || c.card_type === "head2head" || c.card_type === "invite" || c.card_type === "recent-games" || c.card_type === "voice-idle",
-      `feed card ${c.id} (${c.card_type}) is not empty`);
+/** The checks that every stage from two members on shares: the board and its belts, no empty card. */
+export function expectFullFeed(s: AppState, expect: (c: unknown, m: string) => void): void {
+  const z = s.feed_zones;
+  expect(z.board !== "" && z.board !== "solo", `the board of a crew shows, got "${z.board}"`);
+  expect(z.belts.length > 0, "contested titles exist");
+  expect(z.belts.every((b) => b.holder_name !== ""), "every belt names its holder");
+  for (const c of zoneCards(s)) {
+    expect(c.card_type !== "", `card ${c.id} has a type`);
+    expect(c.title !== "" || c.actor_name !== "" || c.game_name !== "" || c.card_type === "head2head",
+      `card ${c.id} (${c.card_type}) is not empty`);
   }
-  expect(s.head2head.present, "the head2head card is there");
-  expect(s.recent_games.tiles.length > 0, "the recent games card has tiles");
-  expect(s.head2head.titles.length > 0, "contested titles exist");
 }
 
 export { crewFeed };
 
 /**
- * A crew of `seeded + 1` (ten or more): head2head is the wide card with no seats that
- * draws the viewer's six closest pairs, three in each column, with "+N more" in the last
- * row, there is no invite card, recent games keeps six tiles, and the feed loads
- * in under three seconds. Plan next-gen-feed.md section 3 and spec HEAD2HEAD
- * section 5, rules for large crews.
+ * A crew of `seeded + 1` (ten or more): the People zone has no open seats and
+ * no invite, the board holds the belts (seven at most), the clips are one
+ * carousel, and the feed loads in under three seconds. Spec
+ * features/CREW-FEED-ZONES.md.
  */
 export async function bigCrewStage(ctx: JourneyContext, seeded: number, label: string): Promise<void> {
   const { step, expect } = ctx;
   const total = seeded + 1;
   const { bob, members } = await bobWithSeededCrew(ctx, seeded);
 
-  await step(`head2head is the wide card with no seats over ${total} members and ${total - 1} pairs`, async () => {
-    const s = await bob.waitFor(
-      `head2head for ${total} members`,
-      (st) => st.head2head.member_count === total && st.head2head.pairs_count === total - 1,
-      30_000,
-    );
-    const h = s.head2head;
-    expect(h.placement === "wide" || h.placement === "versus", `placement is wide or versus, got ${h.placement}`);
-    expect(h.open_seats === 0, `open_seats is 0, got ${h.open_seats}`);
-    if (h.placement === "wide") {
-      expect(h.pair_rows === 6, `the wide card draws the six closest pairs, got ${h.pair_rows}`);
-      expect(h.more_pairs === total - 1 - 6, `the +N more line says ${total - 7}, got ${h.more_pairs}`);
-      expect((await bob.find(`+${total - 7} more`, 0, 20_000)).role === "Button", "the +N more line is a control");
-    }
-  });
-
-  await step("there is no invite card from ten members", async () => {
+  await step(`the board holds the belts of ${total} members, seven at most`, async () => {
     const s = await waitForFullFeed(bob);
-    expect(!s.invite_card.present, "the invite card is not emitted");
-    expect(!s.feed_cards.some((c) => c.card_type === "invite"), "no invite card in the feed");
-  });
-
-  await step("recent games stays at six tiles at most, and no card is empty", async () => {
-    const s = await waitForFullFeed(bob);
-    expect(s.recent_games.tiles.length >= 1 && s.recent_games.tiles.length <= 6, `at most six tiles, got ${s.recent_games.tiles.length}`);
+    const z = s.feed_zones;
+    expect(z.belts.length >= 1 && z.belts.length <= 7, `one to seven belts on the board, got ${z.belts.length}`);
+    expect(z.belt_count >= z.belts.length, `belt_count counts every belt, got ${z.belt_count}`);
     expectFullFeed(s, expect);
   });
 
-  await step("recent games is in the first three rows, wide, and no clip is in a wide slot", async () => {
+  await step("no open seat and no invite from ten members", async () => {
     const s = await bob.state();
-    const cards = s.feed_cards.map((c) => `${c.card_type}@${c.row}${c.wide ? "w" : ""}`);
-    const games = s.feed_cards.find((c) => c.card_type === "recent-games");
-    // The grid takes the first wide slot after head2head, the recap and the
-    // day card (client/src/feed_grid.rs): row 2, or row 3 under a day card.
-    expect(games !== undefined, `a recent games card: ${cards.join(",")}`);
-    expect(games!.row >= 1 && games!.row <= 3, `recent games in the first three rows, in row ${games!.row} of ${cards.join(",")}`);
-    expect(games!.wide, `recent games holds a wide slot: ${cards.join(",")}`);
-    const clip = s.feed_cards.find((c) => c.card_type === "clip" && c.wide);
-    expect(clip === undefined, `no clip in a wide slot: ${cards.join(",")}`);
+    expect(s.feed_zones.people.open_seats === 0, `no open seat, got ${s.feed_zones.people.open_seats}`);
+    expect(s.feed_zones.people.members <= 5, `the first five at most, got ${s.feed_zones.people.members}`);
+    const labels = (await bob.controls()).map((c) => c.label);
+    expect(!labels.includes("Invite your crew"), "no red invite in the feed");
+  });
+
+  await step("the clips of the crew are one carousel", async () => {
+    const s = await bob.waitFor("the clips", (st) => st.feed_zones.clips.length > 0 || st.feed_zones.stage === "card", 30_000);
+    for (const c of s.feed_zones.clips) expect(c.card_type === "clip", `the carousel holds clips, got ${c.card_type}`);
   });
 
   await step("the feed loads in under three seconds", async () => {
     const events = await bob.events();
     // From the crew list (the app knows the crew) to the last of the feed and
-    // the member list, which together draw the full head2head and invite cards.
+    // the member list, which together draw the board and the People zone.
     const t0 = events.find((e) => e.type === "CrewsLoaded")?.ts_ms;
     const t1 = Math.max(...events.filter((e) => e.type === "FeedLoaded" || e.type === "CrewStateLoaded").map((e) => e.ts_ms));
     const ms = t0 === undefined || !Number.isFinite(t1) ? null : t1 - t0;
     const viewer = members[0];
     const crewId = (await bob.state()).active_crew_id;
     const rpc = await crewFeed(viewer.token, crewId);
-    const h2h = rpc.feed.sections.flatMap((x: any) => x.entries).find((e: any) => e.type === "head2head");
+    const pairs = rpc.feed.zones?.head2head?.pairs?.length ?? 0;
     console.log(
-      `${label}: crew_feed RPC ${rpc.ms} ms, ${h2h?.data?.pairs?.length ?? 0} pairs in the payload, ` +
+      `${label}: crew_feed RPC ${rpc.ms} ms, ${pairs} pairs in the payload, ` +
         `app CrewsLoaded to the last FeedLoaded or CrewStateLoaded ${ms ?? "n/a"} ms`,
     );
     expect(rpc.ms < 3000, `crew_feed takes ${rpc.ms} ms, over 3000`);

@@ -16,8 +16,8 @@ import (
 // Durable stream-session store — separate per-crew document, outside the
 // ledger trim. Stream replays (snapshot session-previews) are first-class
 // memories and must survive the 7-day ledger window like clips and recaps.
-// The ledger still owns the recent window (this_week); this store owns the
-// long-term spine (memory).
+// The ledger owns the recent window; this store owns the long-term record
+// (the zones history).
 // ---------------------------------------------------------------------------
 
 const (
@@ -37,7 +37,7 @@ const (
 // session. ViewerIDs are intentionally dropped (not needed to render a replay
 // card and unbounded in size); PeakViewers is kept.
 type StoredStreamSession struct {
-	EventID      string   `json:"event_id"` // ledger event ID, for de-dup vs this_week
+	EventID      string   `json:"event_id"` // ledger event ID, for de-dup vs the ledger
 	SessionID    string   `json:"session_id"`
 	StreamerID   string   `json:"streamer_id"`
 	StreamerName string   `json:"streamer_name"`

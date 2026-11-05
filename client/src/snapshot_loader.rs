@@ -86,10 +86,7 @@ impl SnapshotLoader {
         };
         // A feed rebuild gives a card new rows and a new instance, which
         // reports again: look at the row, not at what was asked before.
-        let row = card_models(&app)
-            .iter()
-            .find_map(|cards| find_card_row(cards, &card_id).and_then(|i| cards.row_data(i)));
-        let Some(row) = row else {
+        let Some(row) = find_card(&app, &card_id) else {
             return;
         };
         if !wanted {
@@ -291,60 +288,50 @@ impl SnapshotLoader {
         });
     }
 
-    /// After the feed is set: disk-prefetch frame 0 for session-preview and
-    /// game clip cards in both the this_week grid and the memory band. The
+    /// After the feed is set: disk-prefetch frame 0 for the session-preview
+    /// and game clip cards of the zones. The
     /// posters decode when the cards ask for them (`poster_wanted`); a game
     /// clip with its poster on this PC decodes that file.
     pub fn load_session_preview_cards(&self, app_weak: Weak<MainWindow>, gen: u32) {
         self.wanted.lock().unwrap().clear();
-        if let Some(app) = app_weak.upgrade() {
-            for cards in card_models(&app) {
-                for i in 0..cards.row_count() {
-                    let Some(mut card) = cards.row_data(i) else {
-                        continue;
-                    };
-                    let game_clip =
-                        card.card_type.as_str() == "clip" && card.clip_kind.as_str() == "game";
-                    if card.card_type.as_str() != "session-preview" && !game_clip {
-                        continue;
-                    }
-                    let local = card.clip_poster_path.to_string();
-                    let url = first_snapshot_url(&card);
-                    if local.is_empty() && url.is_none() {
-                        continue;
-                    }
-
-                    card.snapshot_loading = true;
-                    card.snapshot_poster_ready = false;
-                    card.snapshot_error = false;
-                    cards.set_row_data(i, card.clone());
-
-                    if let (true, Some(url)) = (local.is_empty(), url) {
-                        self.prefetch_disk(url, gen);
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Session-previews live in both the this_week grid (feed_cards) and the memory
-/// band (memory_cards); snapshot work must reach either.
-fn card_models(app: &MainWindow) -> [slint::ModelRc<FeedCardData>; 2] {
-    [app.get_feed_cards(), app.get_memory_cards()]
-}
-
-/// Find the card by id across both models and mutate it in place.
-fn update_card<F: FnOnce(&mut FeedCardData)>(app: &MainWindow, card_id: &str, f: F) {
-    for cards in card_models(app) {
-        if let Some(i) = find_card_row(&cards, card_id) {
-            if let Some(mut card) = cards.row_data(i) {
-                f(&mut card);
-                cards.set_row_data(i, card);
-            }
+        let Some(app) = app_weak.upgrade() else {
             return;
+        };
+        for (_, card) in crate::handlers::zones::cards(&app.get_feed_zones()) {
+            let game_clip = card.card_type.as_str() == "clip" && card.clip_kind.as_str() == "game";
+            if card.card_type.as_str() != "session-preview" && !game_clip {
+                continue;
+            }
+            let local = card.clip_poster_path.to_string();
+            let url = first_snapshot_url(&card);
+            if local.is_empty() && url.is_none() {
+                continue;
+            }
+            // A card that kept its poster through the rebuild stays as it is.
+            if !card.snapshot_poster_ready && !card.snapshot_loading {
+                update_card(&app, card.id.as_str(), |c| {
+                    c.snapshot_loading = true;
+                    c.snapshot_error = false;
+                });
+            }
+            if let (true, Some(url)) = (local.is_empty(), url) {
+                self.prefetch_disk(url, gen);
+            }
         }
     }
+}
+
+/// The card with this id on the zone feed.
+fn find_card(app: &MainWindow, card_id: &str) -> Option<FeedCardData> {
+    crate::handlers::zones::cards(&app.get_feed_zones())
+        .into_iter()
+        .map(|(_, c)| c)
+        .find(|c| c.id.as_str() == card_id)
+}
+
+/// Change every card with this id on the zone feed.
+fn update_card<F: Fn(&mut FeedCardData)>(app: &MainWindow, card_id: &str, f: F) {
+    crate::handlers::zones::update_cards(app, card_id, f);
 }
 
 fn first_snapshot_url(card: &FeedCardData) -> Option<String> {
@@ -355,14 +342,10 @@ fn first_snapshot_url(card: &FeedCardData) -> Option<String> {
     urls.row_data(0).map(|u| u.to_string())
 }
 
-fn find_card_row(cards: &slint::ModelRc<FeedCardData>, card_id: &str) -> Option<usize> {
-    (0..cards.row_count()).find(|&i| cards.row_data(i).is_some_and(|c| c.id.as_str() == card_id))
-}
-
 fn apply_poster(app: &MainWindow, card_id: &str, img: slint::Image) {
     update_card(app, card_id, |card| {
         card.snapshot_loading = false;
-        card.snapshot_poster = img;
+        card.snapshot_poster = img.clone();
         card.snapshot_poster_ready = true;
         card.snapshot_error = false;
     });
@@ -380,7 +363,7 @@ fn set_card_error(app: &MainWindow, card_id: &str) {
 
 fn apply_playback_frame(app: &MainWindow, card_id: &str, index: i32, img: slint::Image) {
     update_card(app, card_id, |card| {
-        card.snapshot_playback_frame = img;
+        card.snapshot_playback_frame = img.clone();
         card.snapshot_playback_index = index;
         card.snapshot_playback_revision += 1;
     });
@@ -388,16 +371,10 @@ fn apply_playback_frame(app: &MainWindow, card_id: &str, index: i32, img: slint:
 }
 
 pub fn snapshot_url_for_card(app: &MainWindow, card_id: &str, index: usize) -> Option<String> {
-    for cards in card_models(app) {
-        let Some(i) = find_card_row(&cards, card_id) else {
-            continue;
-        };
-        let card = cards.row_data(i)?;
-        let urls = &card.snapshot_urls;
-        if index >= urls.row_count() {
-            return None;
-        }
-        return urls.row_data(index).map(|u| u.to_string());
+    let card = find_card(app, card_id)?;
+    let urls = &card.snapshot_urls;
+    if index >= urls.row_count() {
+        return None;
     }
-    None
+    urls.row_data(index).map(|u| u.to_string())
 }

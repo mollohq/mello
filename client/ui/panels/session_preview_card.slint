@@ -84,6 +84,17 @@ export component SessionPreviewCard inherits Rectangle {
     init => {
         root.want-poster();
     }
+    // The Stage keeps its instance when a new stream replay takes it.
+    changed session-id => {
+        root.playing = false;
+        root.paused = false;
+        root.finished = false;
+        root.fading = false;
+        root.has-current = false;
+        root.current-image = root.no-image;
+        root.next-image = root.no-image;
+        root.want-poster();
+    }
     changed near-view => {
         if !root.near-view {
             // Stop a slideshow and let go of its images, so that the pixels

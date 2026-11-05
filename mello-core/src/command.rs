@@ -538,15 +538,15 @@ pub enum Command {
         position_ms: u32,
     },
     StopClipPlayback,
-    LoadCrewTimeline {
-        crew_id: String,
-        #[serde(default)]
-        cursor: Option<String>,
-    },
-    // Server-curated feed (this_week + memory sections). Primary feed load;
-    // LoadCrewTimeline stays for later deep-scroll pagination.
+    /// The crew feed: the zones and the first page of Crew history.
     LoadCrewFeed {
         crew_id: String,
+    },
+    /// The next page of Crew history of the zone feed: the weeks that start
+    /// before `before` (`FeedZones::history_next`).
+    LoadCrewHistory {
+        crew_id: String,
+        before: i64,
     },
     /// The server pushed "feed changed" for a crew. The core loads the feed of
     /// the active crew again, at most once every five seconds

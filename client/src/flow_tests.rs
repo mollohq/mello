@@ -9,7 +9,7 @@ use std::ops::ControlFlow;
 
 use base64::Engine as _;
 use i_slint_backend_testing::ElementHandle;
-use mello_core::crew_events::{FeedEntry, FeedResponse, FeedSection};
+use mello_core::crew_events::{FeedEntry, FeedResponse};
 use mello_core::{decode_clip_waveform, Command, Event, VoiceMode};
 use slint::{ComponentHandle as _, Model};
 
@@ -5018,15 +5018,12 @@ fn a_game_clip_in_the_feed_is_a_footage_card() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as i64;
-    let feed = |media_url: &str| FeedResponse {
-        crew_id: "crew-1".into(),
-        sections: vec![FeedSection {
-            id: "this_week".into(),
-            entries: vec![FeedEntry {
+    let feed = |media_url: &str| {
+        feed_for(
+            "crew-0",
+            vec![FeedEntry {
                 id: "evt-game".into(),
                 entry_type: "clip".into(),
-                role: "standard".into(),
-                size: "md".into(),
                 ts: now_ms,
                 data: serde_json::json!({
                     "clip_id": "game_clip_9",
@@ -5041,12 +5038,11 @@ fn a_game_clip_in_the_feed_is_a_footage_card() {
                     "media_url": media_url,
                 }),
             }],
-        }],
-        joined: vec![],
+        )
     };
 
     h.emit(Event::FeedLoaded { response: feed("") });
-    let card = find_clip_card(&h.app().get_feed_cards()).expect("the game clip card");
+    let card = find_clip_card(&zone_model(&h)).expect("the game clip card");
     assert_eq!(card.clip_kind.as_str(), "game");
     assert!(card.clip_uploading && !card.clip_can_play);
     assert!(
@@ -5059,7 +5055,7 @@ fn a_game_clip_in_the_feed_is_a_footage_card() {
     h.emit(Event::FeedLoaded {
         response: feed("http://127.0.0.1:9/game_clip_9.mp4"),
     });
-    let card = find_clip_card(&h.app().get_feed_cards()).expect("the game clip card");
+    let card = find_clip_card(&zone_model(&h)).expect("the game clip card");
     assert!(!card.clip_uploading && card.clip_can_play);
     assert_eq!(
         card.clip_path.as_str(),
@@ -5740,7 +5736,7 @@ fn clip_captured_populates_feed_card_waveform() {
         waveform: b64,
     });
 
-    let card = find_clip_card(&h.app().get_feed_cards()).expect("clip card in feed");
+    let card = find_clip_card(&zone_model(&h)).expect("clip card in feed");
     let peaks = waveform_peaks(&card.waveform);
     assert_eq!(peaks.len(), 64);
     assert_eq!(peaks, expected);
@@ -5750,6 +5746,7 @@ fn clip_captured_populates_feed_card_waveform() {
 #[test]
 fn feed_loaded_decodes_clip_waveform() {
     let mut h = Harness::new();
+    logged_in_app(&mut h);
     let (b64, expected) = sample_waveform_b64();
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -5757,29 +5754,23 @@ fn feed_loaded_decodes_clip_waveform() {
         .as_millis() as i64;
 
     h.emit(Event::FeedLoaded {
-        response: FeedResponse {
-            crew_id: "crew-1".into(),
-            sections: vec![FeedSection {
-                id: "this_week".into(),
-                entries: vec![FeedEntry {
-                    id: "feed-clip-1".into(),
-                    entry_type: "clip".into(),
-                    role: "standard".into(),
-                    size: "md".into(),
-                    ts: now_ms,
-                    data: serde_json::json!({
-                        "waveform": b64,
-                        "duration_seconds": 30.0,
-                        "media_url": "/clips/test.wav",
-                        "clipper_name": "alice",
-                    }),
-                }],
+        response: feed_for(
+            "crew-0",
+            vec![FeedEntry {
+                id: "feed-clip-1".into(),
+                entry_type: "clip".into(),
+                ts: now_ms,
+                data: serde_json::json!({
+                    "waveform": b64,
+                    "duration_seconds": 30.0,
+                    "media_url": "/clips/test.wav",
+                    "clipper_name": "alice",
+                }),
             }],
-            joined: vec![],
-        },
+        ),
     });
 
-    let card = find_clip_card(&h.app().get_feed_cards()).expect("clip card from feed");
+    let card = find_clip_card(&zone_model(&h)).expect("clip card from feed");
     let peaks = waveform_peaks(&card.waveform);
     assert_eq!(peaks.len(), 64);
     assert_eq!(peaks, expected);
@@ -5819,13 +5810,20 @@ fn seek_clip_forwards_absolute_position_ms() {
     );
 }
 
+/// The app on a crew whose zones hold these cards: a clip in the clips, any
+/// other card in the sessions.
 fn setup_crew_feed(h: &mut Harness, cards: Vec<FeedCardData>) {
     h.app().set_logged_in(true);
     h.app().set_onboarding_step(0);
     h.app().set_show_discover(false);
     h.app().set_active_crew_id("crew-1".into());
-    h.app()
-        .set_feed_cards(slint::ModelRc::new(slint::VecModel::from(cards)));
+    let (clips, sessions): (Vec<_>, Vec<_>) =
+        cards.into_iter().partition(|c| c.card_type == "clip");
+    h.app().set_feed_zones(crate::ZonesData {
+        clips: slint::ModelRc::new(slint::VecModel::from(clips)),
+        sessions: slint::ModelRc::new(slint::VecModel::from(sessions)),
+        ..Default::default()
+    });
     h.pump();
 }
 
@@ -5907,102 +5905,6 @@ fn clip_card_wave_band_fills_tall_side_cell() {
     );
 }
 
-/// ★ Regression: full-width hero clip row uses the same stretch composition.
-#[test]
-fn hero_clip_card_wave_band_fills_full_width_row() {
-    let mut h = Harness::new();
-    setup_crew_feed(
-        &mut h,
-        vec![FeedCardData {
-            id: "hero-clip".into(),
-            card_type: "clip".into(),
-            is_hero: true,
-            title: "ostkatt clutch ace".into(),
-            actor_name: "ostkatt".into(),
-            actor_initials: "os".into(),
-            duration: "0:30".into(),
-            duration_ms: 30_000,
-            timestamp: "2 hours ago".into(),
-            ..Default::default()
-        }],
-    );
-
-    let heroes: Vec<_> =
-        ElementHandle::find_by_element_type_name(h.app(), "HeroClipCard").collect();
-    assert_eq!(heroes.len(), 1, "expected one HeroClipCard");
-
-    let card = &heroes[0];
-    assert!(
-        card.size().height >= 220.0,
-        "hero clip row should be ~240px, got {}",
-        card.size().height
-    );
-
-    let mut wave_height = 0.0f32;
-    card.visit_descendants(|el| {
-        if el.type_name().as_deref() == Some("DotWaveform") {
-            wave_height = wave_height.max(el.size().height);
-        }
-        ControlFlow::<()>::Continue(())
-    });
-
-    assert!(
-        wave_height >= 100.0,
-        "hero wave band should grow in 240px row (height {wave_height})"
-    );
-}
-
-/// ★ Regression: the hero play ring declared no explicit `x`, so Slint's
-/// default (children narrower than their parent are horizontally centered)
-/// dropped it mid-waveform instead of pinning it left of the band.
-#[test]
-fn hero_clip_play_ring_sits_left_of_wave_band() {
-    let mut h = Harness::new();
-    setup_crew_feed(
-        &mut h,
-        vec![FeedCardData {
-            id: "hero-clip".into(),
-            card_type: "clip".into(),
-            is_hero: true,
-            title: "ostkatt clutch ace".into(),
-            actor_name: "ostkatt".into(),
-            actor_initials: "os".into(),
-            duration: "0:30".into(),
-            duration_ms: 30_000,
-            timestamp: "2 hours ago".into(),
-            ..Default::default()
-        }],
-    );
-
-    let heroes: Vec<_> =
-        ElementHandle::find_by_element_type_name(h.app(), "HeroClipCard").collect();
-    assert_eq!(heroes.len(), 1, "expected one HeroClipCard");
-
-    // The ring must sit entirely LEFT of the wave band, like the mockup's
-    // wave-row ([play button][wave]) — not floating over the dots.
-    let card = &heroes[0];
-    let mut ring_right_edge = 0.0f32;
-    let mut wave_left_edge = f32::MAX;
-    card.visit_descendants(|el| {
-        match el.type_name().as_deref() {
-            Some("ClipPlayRing") => {
-                let pos = el.absolute_position();
-                ring_right_edge = pos.x + el.size().width;
-            }
-            Some("DotWaveform") => {
-                wave_left_edge = wave_left_edge.min(el.absolute_position().x);
-            }
-            _ => {}
-        }
-        ControlFlow::<()>::Continue(())
-    });
-
-    assert!(
-        ring_right_edge <= wave_left_edge,
-        "play ring right edge ({ring_right_edge}) must be <= wave band left edge ({wave_left_edge})"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // Feed — game session cards (GAME-SURFACING C1)
 // ---------------------------------------------------------------------------
@@ -6014,7 +5916,17 @@ fn logged_in_app(h: &mut Harness) {
     h.emit(Event::CrewsLoaded {
         crews: sample_crews(1),
     });
+    // The feed draws the zones of the active crew only.
+    crate::converters::set_active_crew(h.app(), "crew-0");
     assert_eq!(visible_screens(h), vec![Screen::App]);
+}
+
+/// A window tall enough for the Sessions zone under the board: an element
+/// outside the feed's clip is absent from queries.
+fn tall_window(h: &Harness) {
+    h.app()
+        .window()
+        .set_size(slint::PhysicalSize::new(1600, 1800));
 }
 
 fn zero_telemetry_game_session_feed() -> mello_core::crew_events::FeedResponse {
@@ -6022,29 +5934,23 @@ fn zero_telemetry_game_session_feed() -> mello_core::crew_events::FeedResponse {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
-    mello_core::crew_events::FeedResponse {
-        crew_id: "crew-0".into(),
-        sections: vec![mello_core::crew_events::FeedSection {
-            id: "this_week".into(),
-            entries: vec![mello_core::crew_events::FeedEntry {
-                id: "gs-t0-1".into(),
-                entry_type: "session".into(),
-                role: "quiet".into(),
-                size: "sm".into(),
-                ts,
-                data: serde_json::json!({
-                    "game_name": "Valorant",
-                    "player_names": ["ostkatt"],
-                    "player_ids": ["user-a"],
-                    "duration_min": 252,
-                    "wins": 0,
-                    "losses": 0,
-                    "draws": 0,
-                }),
-            }],
+    feed_for(
+        "crew-0",
+        vec![mello_core::crew_events::FeedEntry {
+            id: "gs-t0-1".into(),
+            entry_type: "session".into(),
+            ts,
+            data: serde_json::json!({
+                "game_name": "Valorant",
+                "player_names": ["ostkatt"],
+                "player_ids": ["user-a"],
+                "duration_min": 252,
+                "wins": 0,
+                "losses": 0,
+                "draws": 0,
+            }),
         }],
-        joined: vec![],
-    }
+    )
 }
 
 /// Zero-telemetry sessions must render the compact card shell, not empty W/L
@@ -6052,6 +5958,7 @@ fn zero_telemetry_game_session_feed() -> mello_core::crew_events::FeedResponse {
 #[test]
 fn zero_telemetry_game_session_renders_compact_card_without_record() {
     let mut h = Harness::new();
+    tall_window(&h);
     logged_in_app(&mut h);
 
     h.emit(Event::FeedLoaded {
@@ -6078,36 +5985,6 @@ fn zero_telemetry_game_session_renders_compact_card_without_record() {
         record.is_empty(),
         "zero-telemetry sessions must not render W/L record stat slots"
     );
-}
-
-fn recent_games_feed() -> mello_core::crew_events::FeedResponse {
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
-    mello_core::crew_events::FeedResponse {
-        crew_id: "crew-0".into(),
-        sections: vec![mello_core::crew_events::FeedSection {
-            id: "this_week".into(),
-            entries: vec![mello_core::crew_events::FeedEntry {
-                id: "recent_games".into(),
-                entry_type: "recent-games".into(),
-                role: "standard".into(),
-                size: "md".into(),
-                ts,
-                data: serde_json::json!({
-                    "session_count": 14,
-                    "total_min": 1860,
-                    "games": [
-                        { "game_id": "valorant", "game_name": "Valorant", "minutes": 600 },
-                        { "game_id": "minecraft", "game_name": "Minecraft", "minutes": 240 },
-                        { "game_id": "counter-strike-2", "game_name": "Counter-Strike 2", "minutes": 180 }
-                    ]
-                }),
-            }],
-        }],
-        joined: vec![],
-    }
 }
 
 /// The stats strip names a game from the catalogue. An id that nothing can
@@ -6137,182 +6014,6 @@ fn stats_strip_names_a_game_from_the_catalogue_and_never_shows_a_raw_id() {
     assert!(!strip.short_name.as_str().contains("4999999"));
 }
 
-/// The Crew play rollup is gone. Its session count and total time are the
-/// header of the recent games card, which lists the games as tiles.
-#[test]
-fn recent_games_card_carries_header_and_tiles() {
-    let mut h = Harness::new();
-    logged_in_app(&mut h);
-
-    h.emit(Event::FeedLoaded {
-        response: recent_games_feed(),
-    });
-
-    let cards: Vec<_> =
-        ElementHandle::find_by_element_type_name(h.app(), "RecentGamesCard").collect();
-    assert!(!cards.is_empty(), "expected a RecentGamesCard in the feed");
-    assert!(
-        ElementHandle::find_by_element_type_name(h.app(), "GameRollupCard")
-            .next()
-            .is_none(),
-        "the Crew play card must not exist"
-    );
-
-    let tiles: Vec<_> =
-        ElementHandle::find_by_element_type_name(h.app(), "RecentGameTileCell").collect();
-    assert_eq!(tiles.len(), 3, "one tile per game");
-
-    let card = h.app().get_feed_cards().row_data(0).expect("feed card");
-    assert_eq!(card.card_type.as_str(), "recent-games");
-    assert_eq!(card.subtitle.as_str(), "14 sessions, 31 h this week");
-}
-
-fn recent_games_entry(games: serde_json::Value) -> FeedEntry {
-    feed_entry(
-        "recent_games",
-        "recent-games",
-        serde_json::json!({ "session_count": 0, "total_min": 0, "games": games }),
-    )
-}
-
-/// A crew of two with a title that moved: the versus hero, then the recent
-/// games card, built from `games`, each with the members who own it.
-fn two_member_feed_with_games(games: serde_json::Value, pc_count: Option<i64>) -> FeedResponse {
-    let moved = serde_json::json!({
-        "title_id": "the_collector", "holder_user_id": "u2", "value": 14, "unit": "installed",
-        "since_ms": 5_000, "moved_at_ms": 5_000, "previous_holder_user_id": "user-1",
-    });
-    let mut data = serde_json::json!({ "session_count": 1, "total_min": 85, "games": games });
-    if let Some(n) = pc_count {
-        data["pc_count"] = serde_json::json!(n);
-    }
-    feed_of(vec![
-        h2h_entry(
-            2,
-            vec![
-                h2h_title("the_carry", "user-1", serde_json::json!(4167.0), "h"),
-                moved.clone(),
-            ],
-            vec![h2h_pair("u2", 1, 1)],
-            Some(moved),
-        ),
-        feed_entry("recent_games", "recent-games", data),
-    ])
-}
-
-/// Frame B2: two members own games, so the recent games card is a poster
-/// grid of at most five tiles, two columns wide, under the versus hero. Each
-/// poster carries the pips of the members who own the game.
-#[test]
-fn recent_games_is_a_poster_grid_when_two_members_own_games() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 2);
-    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
-    let both = serde_json::json!(["user-1", "u2"]);
-    h.emit(Event::FeedLoaded {
-        response: two_member_feed_with_games(
-            serde_json::json!([
-                { "game_id": "steam-730", "game_name": "Counter-Strike 2", "minutes": 250_020, "member_ids": both },
-                { "game_id": "steam-252950", "game_name": "Rocket League", "minutes": 4_000, "member_ids": both },
-                { "game_id": "steam-2300340", "game_name": "Night Stones", "minutes": 756, "member_ids": ["user-1"] },
-                { "game_id": "valorant", "game_name": "Valorant", "minutes": 300, "member_ids": ["u2"] },
-                { "game_id": "steam-1097150", "game_name": "Fall Guys", "minutes": 100, "member_ids": ["u2"] },
-                { "game_id": "steam-1", "game_name": "Sixth Game", "minutes": 10, "member_ids": ["u2"] }
-            ]),
-            None,
-        ),
-    });
-
-    let feed = h.app().get_feed_cards();
-    let types: Vec<String> = (0..feed.row_count())
-        .map(|i| feed.row_data(i).unwrap().card_type.to_string())
-        .collect();
-    assert_eq!(types[..2], ["head2head", "recent-games"], "{types:?}");
-    let card = feed.row_data(1).unwrap();
-    assert_eq!(card.recent_pc_count, 2, "two members own games");
-    assert_eq!(
-        card.subtitle.as_str(),
-        "1 session, 1 h this week",
-        "the week's line, not a note about the PCs"
-    );
-    assert_eq!(card.recent_games.row_count(), 5, "capped at five tiles");
-    let first = card.recent_games.row_data(0).unwrap();
-    assert_eq!(first.owners.row_count(), 2, "Bob and Jonas own it");
-    assert_eq!(
-        card.recent_games.row_data(2).unwrap().owners.row_count(),
-        1,
-        "one owner, one pip"
-    );
-
-    assert_eq!(
-        count_of(&h, "RecentGamePoster"),
-        5,
-        "five posters in one row"
-    );
-    assert_eq!(count_of(&h, "RecentGameTileCell"), 0, "no list rows");
-}
-
-/// Frame A and the list: when the viewer is the only owner the card stays the
-/// narrow list of three rows, even under a versus hero.
-#[test]
-fn recent_games_stays_a_list_when_the_viewer_is_the_only_owner() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 2);
-    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
-    let me = serde_json::json!(["user-1"]);
-    h.emit(Event::FeedLoaded {
-        response: two_member_feed_with_games(
-            serde_json::json!([
-                { "game_id": "steam-730", "game_name": "Counter-Strike 2", "minutes": 250_020, "member_ids": me },
-                { "game_id": "steam-252950", "game_name": "Rocket League", "minutes": 4_000, "member_ids": me },
-                { "game_id": "steam-2300340", "game_name": "Night Stones", "minutes": 756, "member_ids": me },
-                { "game_id": "valorant", "game_name": "Valorant", "minutes": 300, "member_ids": me }
-            ]),
-            None,
-        ),
-    });
-
-    let card = h
-        .app()
-        .get_feed_cards()
-        .iter()
-        .find(|c| c.card_type.as_str() == "recent-games")
-        .expect("a recent games card");
-    assert_eq!(card.recent_pc_count, 1);
-    assert_ne!(card.subtitle.as_str(), "From 2 PCs");
-    assert_eq!(count_of(&h, "RecentGamePoster"), 0, "no poster grid");
-    assert_eq!(
-        count_of(&h, "RecentGameTileCell"),
-        3,
-        "the list shows three"
-    );
-}
-
-/// A server that sends `pc_count` is believed, and one that does not still
-/// gives the right shape from the tiles' owners.
-#[test]
-fn the_server_pc_count_wins_over_the_tile_owners() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 2);
-    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
-    h.emit(Event::FeedLoaded {
-        response: two_member_feed_with_games(
-            serde_json::json!([
-                { "game_id": "steam-730", "game_name": "Counter-Strike 2", "minutes": 250_020, "member_ids": ["user-1"] }
-            ]),
-            Some(2),
-        ),
-    });
-    let card = h
-        .app()
-        .get_feed_cards()
-        .iter()
-        .find(|c| c.card_type.as_str() == "recent-games")
-        .expect("a recent games card");
-    assert_eq!(card.recent_pc_count, 2);
-    assert_eq!(count_of(&h, "RecentGamePoster"), 1);
-}
-
 fn join_of(
     id: &str,
     name: &str,
@@ -6333,29 +6034,17 @@ fn join_of(
     }
 }
 
+/// The joins of the last day, in the People zone (`zones.people.joined`).
 fn feed_with_joins(joined: Vec<mello_core::crew_events::FeedJoin>) -> FeedResponse {
-    let mut feed = two_member_feed_with_games(
-        serde_json::json!([
-            { "game_id": "steam-730", "game_name": "Counter-Strike 2", "minutes": 600, "member_ids": ["user-1", "u2"] }
-        ]),
-        None,
-    );
-    feed.joined = joined;
+    let mut feed = feed_of(vec![]);
+    feed.zones.people.joined = joined;
     feed
 }
 
-fn joined_cards(h: &Harness) -> Vec<FeedCardData> {
-    h.app()
-        .get_feed_cards()
-        .iter()
-        .filter(|c| c.card_type == "joined")
-        .collect()
-}
-
-/// A join is a card in the grid, not a row above it. The joiner's octagon, "Jonas
-/// joined" in Oxanium, who invited and when, and a "Say hi" action.
+/// A join is in the People zone: the joiner's octagon, "Jonas joined", who
+/// invited and when, and a "Say hi" action.
 #[test]
-fn a_joiner_is_a_card_with_the_inviter_the_time_and_say_hi() {
+fn a_joiner_is_in_the_people_zone_with_the_inviter_the_time_and_say_hi() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 2);
     set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
@@ -6363,53 +6052,26 @@ fn a_joiner_is_a_card_with_the_inviter_the_time_and_say_hi() {
         response: feed_with_joins(vec![join_of("u2", "Jonas", "b0bben", 5 * 60_000)]),
     });
 
-    let cards = joined_cards(&h);
-    assert_eq!(cards.len(), 1);
-    let c = &cards[0];
-    assert_eq!(c.title.as_str(), "Jonas joined");
-    assert_eq!(c.subtitle.as_str(), "invited by b0bben");
+    let z = h.app().get_feed_zones();
+    assert!(z.people, "the People zone shows");
+    assert_eq!(z.joined.row_count(), 1);
+    assert_eq!(z.joined_line.as_str(), "Jonas joined");
+    let sub = z.joined_sub.to_string();
     assert!(
-        c.timestamp.starts_with("Today ") || c.timestamp.starts_with("Yesterday "),
-        "{}",
-        c.timestamp
+        sub.starts_with("invited by b0bben, Today ")
+            || sub.starts_with("invited by b0bben, Yesterday "),
+        "{sub}"
     );
-    assert_eq!(count_of(&h, "JoinedCard"), 1);
     let texts = drawn_texts(&h);
-    for want in ["Jonas joined", "invited by b0bben", "SAY HI"] {
+    for want in ["Jonas joined", "SAY HI"] {
         assert!(texts.iter().any(|t| t == want), "missing {want}: {texts:?}");
     }
-    assert!(
-        !texts.iter().any(|t| t.contains("joined, invited by")),
-        "the old row is gone: {texts:?}"
-    );
-}
-
-/// The card stands in the grid flow: after the first row, before the sessions.
-#[test]
-fn the_join_card_stands_after_the_first_row_and_before_the_session() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 2);
-    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
-    h.emit(Event::FeedLoaded {
-        response: feed_with_joins(vec![join_of("u2", "Jonas", "", 5 * 60_000)]),
-    });
-    let types: Vec<String> = h
-        .app()
-        .get_feed_cards()
-        .iter()
-        .map(|c| c.card_type.to_string())
-        .collect();
-    let at = |t: &str| types.iter().position(|x| x == t);
-    let joined = at("joined").expect("a join card");
-    assert!(joined > at("head2head").unwrap(), "{types:?}");
-    if let Some(session) = at("game-session") {
-        assert!(joined < session, "before the sessions: {types:?}");
-    }
+    assert_eq!(h.controls_labelled("Say hi to Jonas").len(), 1);
 }
 
 /// "Say hi" sends a greeting to the crew chat at once. The click is the intent:
 /// nothing is typed into the input first. The greeting mentions the new member
-/// in the form the chat uses, and the card then reads "Said hi" and is off.
+/// in the form the chat uses, and the button then goes.
 #[test]
 fn say_hi_sends_a_greeting_that_mentions_the_joiner_and_a_second_click_does_nothing() {
     let mut h = Harness::new();
@@ -6420,10 +6082,6 @@ fn say_hi_sends_a_greeting_that_mentions_the_joiner_and_a_second_click_does_noth
     });
     h.commands();
     assert_eq!(h.controls_labelled("Say hi to Jonas").len(), 1);
-    assert_eq!(
-        h.controls_labelled("Say hi to Jonas")[0].accessible_enabled(),
-        Some(true)
-    );
 
     h.click_label("Say hi to Jonas");
     let sent: Vec<_> = h
@@ -6455,24 +6113,8 @@ fn say_hi_sends_a_greeting_that_mentions_the_joiner_and_a_second_click_does_noth
     );
     assert_eq!(h.app().get_chat_input_text().as_str(), "", "no draft");
 
-    // The button reads "Said hi" and is off. A second click sends nothing.
-    let said = h.controls_labelled("Said hi to Jonas");
-    assert_eq!(said.len(), 1);
-    assert_eq!(said[0].accessible_enabled(), Some(false));
+    // The button goes. A second greeting sends nothing.
     assert!(h.controls_labelled("Say hi to Jonas").is_empty());
-    assert!(
-        drawn_texts(&h).iter().any(|t| t == "SAID HI"),
-        "{:?}",
-        drawn_texts(&h)
-    );
-    said[0].mock_single_click(slint::platform::PointerEventButton::Left);
-    h.pump();
-    assert!(
-        !h.commands()
-            .iter()
-            .any(|c| matches!(c, Command::SendMessage { .. })),
-        "a second click does nothing"
-    );
     // The invoke path is guarded too, not only the control.
     h.app()
         .global::<crate::ChatFocus>()
@@ -6503,11 +6145,12 @@ fn said_hi_survives_a_restart_and_is_once_for_each_joiner() {
         Some(&vec!["u2".to_string()])
     );
 
-    // The same feed again, as after a restart: Jonas stays off, Max is open.
+    // The same feed again, as after a restart: Jonas stays greeted, Max is
+    // the one to greet.
     h.emit(Event::FeedLoaded {
         response: feed.clone(),
     });
-    assert_eq!(h.controls_labelled("Said hi to Jonas").len(), 1);
+    assert!(h.controls_labelled("Say hi to Jonas").is_empty());
     assert_eq!(h.controls_labelled("Say hi to Max").len(), 1);
     h.commands();
     h.click_label("Say hi to Max");
@@ -6524,7 +6167,7 @@ fn said_hi_survives_a_restart_and_is_once_for_each_joiner() {
 }
 
 #[test]
-fn the_join_cards_keep_three_newest_and_drop_old_and_own_joins() {
+fn the_joins_keep_three_newest_and_drop_old_and_own_joins() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 5);
     set_roster(
@@ -6548,182 +6191,26 @@ fn the_join_cards_keep_three_newest_and_drop_old_and_own_joins() {
             join_of("u6", "Gus", "", 10 * hour),
         ]),
     });
-    let titles: Vec<String> = joined_cards(&h)
-        .iter()
-        .map(|c| c.title.to_string())
-        .collect();
-    assert_eq!(titles, ["Jonas joined", "Max joined", "Gus joined"]);
-    assert_eq!(count_of(&h, "JoinedCard"), 3);
+    let z = h.app().get_feed_zones();
+    let names: Vec<String> = z.joined.iter().map(|p| p.name.to_string()).collect();
+    assert_eq!(names, ["Jonas", "Max", "Gus"]);
+    assert_eq!(z.joined_line.as_str(), "Jonas, Max and Gus joined");
 }
 
 #[test]
-fn no_join_in_the_last_day_gives_no_join_card() {
+fn no_join_in_the_last_day_gives_no_join() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 2);
     set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
     h.emit(Event::FeedLoaded {
         response: feed_with_joins(vec![join_of("u2", "Jonas", "", 25 * 3_600_000)]),
     });
-    assert!(joined_cards(&h).is_empty());
-    assert_eq!(count_of(&h, "JoinedCard"), 0);
+    assert_eq!(h.app().get_feed_zones().joined.row_count(), 0);
+    assert!(h.controls_labelled("Say hi to Jonas").is_empty());
 }
 
-/// The list row caption reads the hours, the launcher when the hours are
-/// unknown, and a two-letter monogram for a game with no art. No row says
-/// TRACKED. Never the name clipped into a badge.
-#[test]
-fn recent_games_tiles_read_like_the_mockup() {
-    let mut h = Harness::new();
-    // A narrow window clips the right edge of the card, and clipped elements
-    // are absent from queries.
-    h.app()
-        .window()
-        .set_size(slint::PhysicalSize::new(1600, 1000));
-    logged_in_app(&mut h);
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![recent_games_entry(serde_json::json!([
-            { "game_id": "steam-730", "game_name": "Counter-Strike 2", "minutes": 250_020, "launcher": "steam" },
-            { "game_id": "epic-zzunknown", "game_name": "Zz Unknown Game", "minutes": 0, "launcher": "epic" },
-            { "game_id": "steam-4999999", "game_name": "Night Stones", "minutes": 756 }
-        ]))]),
-    });
-    let texts = drawn_texts(&h);
-    for want in ["4,167 h", "Epic", "13 h", "ZU", "NS", "RECENT GAMES"] {
-        assert!(texts.iter().any(|t| t == want), "missing {want}: {texts:?}");
-    }
-    assert!(
-        !texts.iter().any(|t| t.eq_ignore_ascii_case("TRACKED")),
-        "no row says TRACKED: {texts:?}"
-    );
-    assert!(
-        !texts.iter().any(|t| t == "From this PC"),
-        "nothing is installed here: {texts:?}"
-    );
-}
-
-/// The list: a square 48 px icon slot, the name on one line with the whole
-/// column to itself ("Counter-Strike 2" is not elided at 1440 or 2000 px),
-/// no TRACKED text, and three rows that share their columns.
-#[test]
-fn the_recent_games_list_has_a_square_icon_slot_and_aligned_columns() {
-    for width in [1440u32, 2000] {
-        let mut h = Harness::new();
-        h.app()
-            .window()
-            .set_size(slint::PhysicalSize::new(width, 900));
-        app_with_crew_of(&mut h, 1);
-        set_roster(&h, &[("user-1", "Test User")]);
-        h.emit(Event::FeedLoaded {
-            response: feed_of(vec![
-                h2h_entry(
-                    1,
-                    vec![h2h_title("the_carry", "user-1", serde_json::json!(4167.0), "h")],
-                    vec![],
-                    None,
-                ),
-                recent_games_entry(serde_json::json!([
-                    { "game_id": "steam-730", "game_name": "Counter-Strike 2", "minutes": 250_020, "launcher": "steam", "last_played": crate::converters::current_time_ms() - 2 * 86_400_000 },
-                    { "game_id": "epic-zzunknown", "game_name": "Zz Unknown Game", "minutes": 240, "launcher": "epic", "member_ids": ["user-1"] },
-                    { "game_id": "steam-4999999", "game_name": "Night Stones", "minutes": 756 }
-                ])),
-            ]),
-        });
-        let texts = drawn_texts(&h);
-        assert!(
-            !texts.iter().any(|t| t.eq_ignore_ascii_case("TRACKED")),
-            "{width}: no TRACKED: {texts:?}"
-        );
-        assert!(
-            texts.iter().any(|t| t == "2 days ago, 4,167 h"),
-            "{width}: caption on one line: {texts:?}"
-        );
-
-        let cells: Vec<_> =
-            ElementHandle::find_by_element_type_name(h.app(), "RecentGameTileCell").collect();
-        assert_eq!(cells.len(), 3, "{width}: three rows");
-        let arts: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), "GameArt").collect();
-        assert_eq!(arts.len(), 3, "{width}: one icon slot per row");
-        for a in &arts {
-            assert_eq!(
-                (a.size().width, a.size().height),
-                (48.0, 48.0),
-                "{width}: the icon slot is square"
-            );
-        }
-        let name = |label: &str| {
-            ElementHandle::find_by_element_type_name(h.app(), "Text")
-                .find(|e| e.accessible_label().is_some_and(|l| l == label))
-                .unwrap_or_else(|| panic!("{label} is drawn"))
-        };
-        let names = [
-            name("Counter-Strike 2"),
-            name("Zz Unknown Game"),
-            name("Night Stones"),
-        ];
-        let x0 = names[0].absolute_position().x;
-        for n in &names {
-            assert_eq!(
-                n.absolute_position().x,
-                x0,
-                "{width}: the name column aligns"
-            );
-        }
-        let ax0 = arts[0].absolute_position().x;
-        assert!(
-            arts.iter().all(|a| a.absolute_position().x == ax0),
-            "{width}: icons align"
-        );
-        let ys: Vec<f32> = cells.iter().map(|c| c.absolute_position().y).collect();
-        assert_eq!(ys[1] - ys[0], ys[2] - ys[1], "{width}: even row pitch");
-        // The row without owners gives the name the whole column beside the icon.
-        let room = cells[0].size().width - 48.0 - 12.0;
-        assert!(
-            (names[0].size().width - room).abs() < 1.0,
-            "{width}: the name has {} px of {room} px",
-            names[0].size().width
-        );
-    }
-}
-
-/// The header of the recent games card is the week's line or nothing. It never
-/// says where the games come from.
-#[test]
-fn recent_games_header_is_the_sessions_line_even_when_all_tiles_are_installed() {
-    let mut h = Harness::new();
-    logged_in_app(&mut h);
-    h.emit(Event::InstalledGames {
-        games: vec![
-            installed_game("steam-730", "Counter-Strike 2", false),
-            installed_game("epic-rl", "Rocket League", false),
-        ],
-    });
-    let games = serde_json::json!([
-        { "game_id": "counter-strike-2", "game_name": "Counter-Strike 2", "minutes": 600 },
-        { "game_id": "epic-rl", "game_name": "Rocket League", "minutes": 0 }
-    ]);
-    let mut entry = recent_games_entry(games);
-    entry.data["session_count"] = serde_json::json!(14);
-    entry.data["total_min"] = serde_json::json!(1860);
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![entry]),
-    });
-    assert_eq!(
-        first_card(&h).subtitle.as_str(),
-        "14 sessions, 31 h this week"
-    );
-
-    // A card with no sessions has no line, and still no note.
-    let games = serde_json::json!([
-        { "game_id": "counter-strike-2", "game_name": "Counter-Strike 2", "minutes": 600 }
-    ]);
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![recent_games_entry(games)]),
-    });
-    assert_eq!(first_card(&h).subtitle.as_str(), "");
-}
-
-/// No card draws a note that explains it. The recap, the recent games card and
-/// the quiet row state data, a label, a state or an action.
+/// No card draws a note that explains it. The recap states data, a label, a
+/// state or an action.
 #[test]
 fn no_card_draws_a_commentary_note() {
     let removed = [
@@ -6740,36 +6227,13 @@ fn no_card_draws_a_commentary_note() {
         "belts_held": belts_held(),
         "week_end": now_ms(),
     }));
+    recap_in_the_centre(&h);
     let texts = drawn_texts(&h);
     for want in ["WEEKLY RECAP", "BELTS MOVED", "BELTS HELD"] {
         assert!(texts.iter().any(|t| t == want), "missing {want}: {texts:?}");
     }
     for note in removed {
         assert!(!texts.iter().any(|t| t == note), "recap draws {note}");
-    }
-
-    for pc_count in [None, Some(2)] {
-        let mut h = Harness::new();
-        app_with_crew_of(&mut h, 2);
-        set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
-        let both = serde_json::json!(["user-1", "u2"]);
-        h.emit(Event::FeedLoaded {
-            response: two_member_feed_with_games(
-                serde_json::json!([
-                    { "game_id": "steam-730", "game_name": "Counter-Strike 2", "minutes": 600, "member_ids": both },
-                    { "game_id": "steam-252950", "game_name": "Rocket League", "minutes": 400, "member_ids": both }
-                ]),
-                pc_count,
-            ),
-        });
-        let texts = drawn_texts(&h);
-        assert!(texts.iter().any(|t| t == "RECENT GAMES"), "{texts:?}");
-        for note in removed {
-            assert!(
-                !texts.iter().any(|t| t == note),
-                "recent games draws {note} for {pc_count:?}: {texts:?}"
-            );
-        }
     }
 }
 
@@ -6791,180 +6255,56 @@ fn app_with_crew_of(h: &mut Harness, members: i32) {
     assert_eq!(visible_screens(h), vec![Screen::App]);
 }
 
+/// A feed with these entries spread over the zones by type, where the
+/// server puts them: a clip in the clips, a session in the sessions, the
+/// head2head data, and the recap and the day on the board.
 fn feed_of(entries: Vec<FeedEntry>) -> FeedResponse {
-    FeedResponse {
-        crew_id: "crew-0".into(),
-        sections: vec![FeedSection {
-            id: "this_week".into(),
-            entries,
-        }],
-        joined: vec![],
+    feed_for("crew-0", entries)
+}
+
+/// `feed_of` for another crew.
+fn feed_for(crew_id: &str, entries: Vec<FeedEntry>) -> FeedResponse {
+    let mut z = mello_core::crew_events::FeedZones::default();
+    for e in entries {
+        match e.entry_type.as_str() {
+            "clip" => z.clips.push(e),
+            "session" | "session-preview" => z.sessions.push(e),
+            "head2head" => z.head2head = Some(e.data),
+            "recap" => z.board.recap = Some(e),
+            "daily-recap" => z.board.today = Some(e),
+            other => panic!("no zone holds a {other} entry"),
+        }
     }
+    FeedResponse {
+        crew_id: crew_id.into(),
+        zones: z,
+    }
+}
+
+/// The zone cards as one model.
+fn zone_model(h: &Harness) -> slint::ModelRc<FeedCardData> {
+    slint::ModelRc::new(slint::VecModel::from(zone_cards(h)))
+}
+
+/// Every card of the zone feed: the Stage, the recap, the clips, the
+/// sessions and the open weeks of Crew history.
+fn zone_cards(h: &Harness) -> Vec<FeedCardData> {
+    crate::handlers::zones::cards(&h.app().get_feed_zones())
+        .into_iter()
+        .map(|(_, c)| c)
+        .collect()
 }
 
 fn feed_entry(id: &str, entry_type: &str, data: serde_json::Value) -> FeedEntry {
     FeedEntry {
         id: id.into(),
         entry_type: entry_type.into(),
-        role: "standard".into(),
-        size: "md".into(),
         ts: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0),
         data,
     }
-}
-
-fn skeleton_cells(h: &Harness) -> usize {
-    ElementHandle::find_by_element_type_name(h.app(), "SkeletonCell").count()
-}
-
-/// A new empty crew shows exactly three skeletons (stream, voice clip, Monday
-/// recap) and no card of any kind: no empty recap, no empty session.
-#[test]
-fn new_empty_crew_shows_three_skeletons_and_no_cards() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 1);
-
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![]),
-    });
-
-    assert_eq!(skeleton_cells(&h), 3, "stream, voice clip, recap");
-    assert!(h.app().get_feed_skeleton_stream());
-    assert!(h.app().get_feed_skeleton_voice_clip());
-    assert!(h.app().get_feed_skeleton_recap());
-    assert_eq!(
-        h.app().get_feed_cards().row_count(),
-        0,
-        "skeletons are not cards: nothing may reach the hero slot"
-    );
-    assert!(
-        h.app().get_feed_invite_line(),
-        "the invite line sits under the trio"
-    );
-    for card in ["RecapCard", "SessionCard", "SessionPreviewCard", "ClipCard"] {
-        assert!(
-            ElementHandle::find_by_element_type_name(h.app(), card)
-                .next()
-                .is_none(),
-            "an empty crew must not render {card}"
-        );
-    }
-}
-
-/// A stream preview is the real stream card: its skeleton goes, two remain.
-#[test]
-fn stream_preview_removes_the_stream_skeleton() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 1);
-
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![feed_entry(
-            "evt-stream-1",
-            "session-preview",
-            serde_json::json!({
-                "streamer_name": "ostkatt",
-                "title": "Ranked",
-                "duration_min": 30,
-                "snapshot_urls": ["https://example.invalid/a.jpg"]
-            }),
-        )]),
-    });
-
-    assert_eq!(skeleton_cells(&h), 2, "voice clip and recap remain");
-    assert!(!h.app().get_feed_skeleton_stream());
-    assert!(h.app().get_feed_skeleton_voice_clip());
-    assert!(h.app().get_feed_skeleton_recap());
-}
-
-/// Two members and a real card of another type keep the whole trio (frame B2).
-#[test]
-fn two_members_and_a_daily_recap_keep_every_skeleton() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 2);
-
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![feed_entry(
-            "daily_0",
-            "daily-recap",
-            serde_json::json!({ "day_start": 1, "total_min": 40, "session_count": 1 }),
-        )]),
-    });
-
-    assert_eq!(skeleton_cells(&h), 3);
-}
-
-/// At two members a cell still goes when its own card type arrives.
-#[test]
-fn two_members_lose_a_skeleton_when_its_card_arrives() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 2);
-
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![feed_entry(
-            "evt-stream-1",
-            "session-preview",
-            serde_json::json!({
-                "streamer_name": "ostkatt",
-                "title": "Ranked",
-                "duration_min": 30,
-                "snapshot_urls": ["https://example.invalid/a.jpg"]
-            }),
-        )]),
-    });
-
-    assert_eq!(skeleton_cells(&h), 2, "voice clip and recap remain");
-    assert!(!h.app().get_feed_skeleton_stream());
-}
-
-/// From three members on the crew is no longer new: no skeleton, with or
-/// without a real card (frame C).
-#[test]
-fn three_members_hide_every_skeleton() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 3);
-
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![]),
-    });
-
-    assert_eq!(skeleton_cells(&h), 0);
-    assert!(!h.app().get_feed_invite_line());
-}
-
-/// A solo crew with one real card keeps the skeletons of the types it lacks.
-#[test]
-fn solo_crew_keeps_skeletons_for_missing_card_types() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 1);
-
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![feed_entry(
-            "daily_0",
-            "daily-recap",
-            serde_json::json!({ "day_start": 1, "total_min": 40, "session_count": 1 }),
-        )]),
-    });
-
-    assert_eq!(skeleton_cells(&h), 3);
-}
-
-/// Hiding the invite takes the line away and leaves the trio.
-#[test]
-fn hiding_the_invite_removes_the_line_not_the_trio() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 1);
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![]),
-    });
-    assert!(h.app().get_feed_invite_line());
-
-    h.app().invoke_hide_invite_card();
-
-    assert!(!h.app().get_feed_invite_line());
-    assert_eq!(skeleton_cells(&h), 3);
 }
 
 // ---------------------------------------------------------------------------
@@ -7033,151 +6373,15 @@ fn h2h_entry(
 }
 
 fn first_card(h: &Harness) -> FeedCardData {
-    h.app().get_feed_cards().row_data(0).expect("a feed card")
-}
-
-fn invoke_invite_and_expect_code_request(h: &mut Harness, label: &str) {
-    h.click_label(label);
-    assert!(
-        h.commands()
-            .iter()
-            .any(|c| matches!(c, Command::CreateInviteCode { crew_id } if crew_id == "crew-0")),
-        "{label} asks for an invite code, the same action as the invite line"
-    );
-}
-
-/// A crew of one: head2head takes the wide slot with the viewer's titles,
-/// four open seats and the red invite inside the card. The trio stays under
-/// it and the invite line gives way, so the surface has one red button.
-#[test]
-fn crew_of_one_shows_the_wide_card_with_four_seats_and_the_invite() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 1);
-    set_roster(&h, &[("user-1", "Test User")]);
-
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![h2h_entry(
-            1,
-            vec![
-                h2h_title("the_carry", "user-1", serde_json::json!(4167.0), "h"),
-                h2h_title("night_owl", "user-1", serde_json::json!("03:14"), ""),
-                h2h_title("the_collector", "user-1", serde_json::json!(5), "installed"),
-                h2h_title("locked_in", "user-1", serde_json::json!(4.6), "h"),
-            ],
-            vec![],
-            None,
-        )]),
-    });
-
-    assert_eq!(count_of(&h, "Head2headCardWide"), 1);
-    assert_eq!(count_of(&h, "Head2headCell"), 0);
-    assert_eq!(count_of(&h, "VersusHero"), 0);
-    assert_eq!(
-        count_of(&h, "OpenSeat"),
-        4,
-        "the first five seats, one taken"
-    );
-    assert_eq!(count_of(&h, "TitleChip"), 4, "the viewer's four titles");
-    assert_eq!(first_card(&h).head2head.variant.as_str(), "wide");
-    assert_eq!(skeleton_cells(&h), 3, "the trio stays below");
-    assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
-    assert!(
-        h.controls_labelled("Share invite link").is_empty(),
-        "one red button: the invite line gives way"
-    );
-    assert!(!h.app().get_feed_invite_line());
-    invoke_invite_and_expect_code_request(&mut h, "Invite your crew");
-}
-
-/// A crew of one with no contested title: the server sends `own_values` and
-/// the card draws the viewer's four first values as chips, four open seats
-/// each labelled "OPEN", and the invite.
-#[test]
-fn solo_card_shows_four_own_value_chips_and_four_open_labels() {
-    let mut h = Harness::new();
-    // The chips of a new crew are sealed (day 0). This test reads the values,
-    // so the four are opened first.
-    h.settings().borrow_mut().sealed_opened.insert(
-        "crew-0".into(),
-        ["the_carry", "night_owl", "the_collector", "locked_in"]
-            .iter()
-            .map(|t| crate::sealed::own_key(t, "crew-0"))
-            .collect(),
-    );
-    app_with_crew_of(&mut h, 1);
-    set_roster(&h, &[("user-1", "Test User")]);
-
-    let mut entry = h2h_entry(1, vec![], vec![], None);
-    entry.data["own_values"] = serde_json::json!([
-        {"title_id": "the_carry", "value": 4167.0, "unit": "h", "display": "4,167"},
-        {"title_id": "night_owl", "value": "03:14", "unit": "", "display": "03:14"},
-        {"title_id": "the_collector", "value": 5, "unit": "installed", "display": "5"},
-        {"title_id": "locked_in", "value": 4.6, "unit": "h", "display": "4.6"},
-        {"title_id": "sampler", "value": 3, "unit": "games", "display": "3"},
-    ]);
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![entry]),
-    });
-
-    assert_eq!(count_of(&h, "Head2headCardWide"), 1);
-    assert_eq!(count_of(&h, "TitleChip"), 4, "the first four own values");
-    let texts = drawn_texts(&h);
-    assert_eq!(
-        texts.iter().filter(|t| t.as_str() == "OPEN").count(),
-        4,
-        "every seat is labelled"
-    );
-    for want in ["4,167", "03:14", "5", "4.6", "GO HEAD2HEAD WITH YOUR CREW"] {
-        assert!(texts.iter().any(|t| t == want), "missing {want}: {texts:?}");
-    }
-    assert!(
-        !texts.iter().any(|t| t == "3"),
-        "the fifth value is not drawn"
-    );
-    assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
-}
-
-/// Two members and no move in the last 24 h: the head2head card, two columns
-/// wide, with the one pair and the seats that are left, not a hero.
-#[test]
-fn crew_of_two_without_a_move_shows_the_wide_card_with_one_pair_and_three_seats() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 2);
-    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
-
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![h2h_entry(
-            2,
-            vec![
-                h2h_title("the_carry", "user-1", serde_json::json!(4167.0), "h"),
-                h2h_title("the_collector", "u2", serde_json::json!(14), "installed"),
-            ],
-            vec![h2h_pair("u2", 1, 1)],
-            None,
-        )]),
-    });
-
-    assert_eq!(count_of(&h, "Head2headCardPairs"), 1);
-    assert_eq!(count_of(&h, "VersusHero"), 0);
-    assert_eq!(count_of(&h, "Head2headCardWide"), 0);
-    assert_eq!(count_of(&h, "PairRow"), 1);
-    let card = first_card(&h);
-    assert_eq!(card.head2head.variant.as_str(), "pairs");
-    assert_eq!(card.head2head.open_seats, 3);
-    // The card is wide: all three seats fit one line.
-    assert_eq!(count_of(&h, "OpenSeat"), 3);
-    assert_eq!(count_of(&h, "OpenSeatStrip"), 1);
-    assert_two_columns_wide(&h, "Head2headCardPairs");
-    assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
+    zone_cards(h).into_iter().next().expect("a feed card")
 }
 
 const TEST_AVATAR_SVG: &str = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'><rect width='8' height='8' fill='#c33'/></svg>";
 
-/// The octagons of the head2head cell show the avatar the app loaded for the
-/// user id, and initials for a user with none. An avatar that arrives after
-/// the feed patches the card.
+/// The octagons of the zones wear the avatar that loaded, before or after the
+/// feed, and initials without one.
 #[test]
-fn head2head_octagons_show_the_loaded_avatar_and_initials_without_one() {
+fn zone_octagons_show_the_loaded_avatar_and_initials_without_one() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 3);
     set_roster(
@@ -7192,25 +6396,29 @@ fn head2head_octagons_show_the_loaded_avatar_and_initials_without_one() {
     h.emit(Event::FeedLoaded {
         response: feed_of(vec![h2h_entry(
             3,
-            vec![h2h_title("the_carry", "u2", serde_json::json!(4167.0), "h")],
+            vec![
+                h2h_title("the_carry", "u2", serde_json::json!(4167.0), "h"),
+                h2h_title("night_owl", "u3", serde_json::json!("03:40"), ""),
+            ],
             vec![h2h_pair("u2", 1, 1), h2h_pair("u3", 0, 2)],
             None,
         )]),
     });
-    let rows = first_card(&h).head2head.pairs;
-    let row = |i: usize| rows.row_data(i).expect("pair row");
-    let by_name = |n: &str| {
-        (0..rows.row_count())
-            .map(row)
-            .find(|r| r.name == n)
-            .unwrap()
+    let holder = |h: &Harness, name: &str| {
+        h.app()
+            .get_feed_zones()
+            .titles
+            .iter()
+            .find(|t| t.person.name == name)
+            .unwrap_or_else(|| panic!("{name} holds a belt"))
+            .person
     };
     assert!(
-        by_name("Jonas").has_avatar,
+        holder(&h, "Jonas").has_avatar,
         "the loaded avatar is on the row"
     );
-    assert!(!by_name("Max").has_avatar, "no avatar, initials");
-    assert!(!by_name("Max").you_has_avatar);
+    assert!(!holder(&h, "Max").has_avatar, "no avatar, initials");
+    assert!(!h.app().get_feed_zones().you.has_avatar);
 
     // Max and the viewer arrive after the feed.
     h.emit(Event::UserAvatarLoaded {
@@ -7221,92 +6429,14 @@ fn head2head_octagons_show_the_loaded_avatar_and_initials_without_one() {
         user_id: "user-1".into(),
         data: TEST_AVATAR_SVG.into(),
     });
-    let card = first_card(&h);
-    assert!(card.head2head.left_has_avatar, "the viewer octagon");
-    let rows = card.head2head.pairs;
-    for i in 0..rows.row_count() {
-        let r = rows.row_data(i).unwrap();
-        assert!(r.has_avatar && r.you_has_avatar, "{} wears images", r.name);
-    }
-}
-
-/// A belt that moved in the last 24 h puts the versus card in the hero slot,
-/// led by the moved title. The trio stays beside it (frame B2).
-#[test]
-fn a_recent_belt_move_puts_the_versus_card_in_the_hero_slot() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 2);
-    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
-    let moved = serde_json::json!({
-        "title_id": "the_collector", "holder_user_id": "u2", "value": 14, "unit": "installed",
-        "since_ms": 5_000, "moved_at_ms": 5_000, "previous_holder_user_id": "user-1",
-    });
-
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![
-            feed_entry(
-                "daily_0",
-                "daily-recap",
-                serde_json::json!({ "day_start": 1, "total_min": 40, "session_count": 1 }),
-            ),
-            h2h_entry(
-                2,
-                vec![
-                    h2h_title("the_carry", "user-1", serde_json::json!(4167.0), "h"),
-                    moved.clone(),
-                ],
-                vec![h2h_pair("u2", 1, 1)],
-                Some(moved),
-            ),
-        ]),
-    });
-
-    assert_eq!(count_of(&h, "VersusHero"), 1);
-    assert_eq!(count_of(&h, "Head2headCell"), 0);
-    let hero = first_card(&h);
-    assert_eq!(hero.card_type.as_str(), "head2head", "first in the feed");
-    assert_eq!(hero.head2head.variant.as_str(), "versus");
-    assert_eq!(hero.head2head.right_name.as_str(), "Jonas");
-    // The hero has room for every open seat: three for a crew of two.
-    assert_eq!(count_of(&h, "OpenSeat"), 3);
-    assert!(!drawn_texts(&h).iter().any(|t| t.starts_with('+')));
-    assert_eq!(
-        hero.head2head.chips.row_data(0).unwrap().id.as_str(),
-        "the_collector",
-        "the moved title leads the chips"
+    assert!(
+        holder(&h, "Max").has_avatar,
+        "a late avatar reaches the row"
     );
-    // The button says INVITE on the versus card (frame B2), and keeps the
-    // long name for a screen reader and for the harness.
-    assert!(drawn_texts(&h).iter().any(|t| t == "INVITE"));
-    assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
-}
-
-/// A five member crew: u2 took the_carry from u3 two hours ago, u4 took
-/// night_owl from u5 thirty hours ago. Neither belt is the viewer's, so no
-/// hero: the cell carries them. The dot marks the pair with u2 and sorts it
-/// first, though its tally is the widest.
-fn feed_with_moved_belts() -> FeedResponse {
-    let now = crate::head2head::now_ms();
-    let moved = |id: &str, holder: &str, prev: &str, ago_h: i64| {
-        let at = now - ago_h * 3_600_000;
-        serde_json::json!({
-            "title_id": id, "holder_user_id": holder, "value": 10, "unit": "h",
-            "since_ms": at, "moved_at_ms": at, "previous_holder_user_id": prev,
-        })
-    };
-    let recent = moved("the_carry", "u2", "u3", 2);
-    let old = moved("night_owl", "u4", "u5", 30);
-    feed_of(vec![h2h_entry(
-        5,
-        vec![recent.clone(), old],
-        vec![
-            h2h_pair("u3", 2, 2),
-            h2h_pair("u4", 3, 3),
-            h2h_pair("u5", 4, 4),
-            h2h_pair("u2", 1, 6),
-        ],
-        Some(recent),
-    )])
+    assert!(
+        h.app().get_feed_zones().you.has_avatar,
+        "the viewer octagon"
+    );
 }
 
 fn open_crew_feed_fresh(h: &mut Harness) {
@@ -7317,178 +6447,13 @@ fn open_crew_feed_fresh(h: &mut Harness) {
     });
 }
 
-fn dot_names(h: &Harness) -> Vec<(String, bool)> {
-    let rows = first_card(h).head2head.pairs;
-    (0..rows.row_count())
-        .map(|i| {
-            let r = rows.row_data(i).unwrap();
-            (r.name.to_string(), r.moved_recent)
-        })
-        .collect()
-}
-
-/// A pair whose belt moved in the last 24 h wears the red dot and leads. A
-/// belt that moved 30 h ago does not. Opening the feed again clears it.
-#[test]
-fn a_pair_row_with_a_belt_moved_today_wears_a_dot_until_the_feed_is_opened_again() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 5);
-    set_roster(
-        &h,
-        &[
-            ("user-1", "Test User"),
-            ("u2", "Jonas"),
-            ("u3", "Sara"),
-            ("u4", "Max"),
-            ("u5", "Leo"),
-        ],
-    );
-    open_crew_feed_fresh(&mut h);
-    h.emit(Event::FeedLoaded {
-        response: feed_with_moved_belts(),
-    });
-    assert_eq!(
-        first_card(&h).head2head.variant.as_str(),
-        "pairs",
-        "no hero"
-    );
-    // u2 holds the 2 h belt: only the pair with u2 wears the dot, and it
-    // leads. Max holds a 30 h belt: no dot.
-    let rows = dot_names(&h);
-    assert_eq!(
-        rows,
-        vec![
-            ("Jonas".to_string(), true),
-            ("Sara".to_string(), false),
-            ("Max".to_string(), false),
-            ("Leo".to_string(), false),
-        ]
-    );
-
-    // The viewer leaves and opens the feed again: read.
-    h.emit(Event::CrewJoined {
-        crew_id: "crew-1".into(),
-    });
-    h.emit(Event::CrewJoined {
-        crew_id: "crew-0".into(),
-    });
-    h.emit(Event::FeedLoaded {
-        response: feed_with_moved_belts(),
-    });
-    assert!(dot_names(&h).iter().all(|(_, dot)| !dot), "the dot cleared");
-}
-
-/// A live stream holds the hero and sends the first cards to the side column,
-/// one column wide. Head2head is always two columns wide, so it never stands in
-/// the column: it leads the grid beside the stream, wide, with all four seats.
-#[test]
-fn the_wide_card_stays_two_columns_wide_beside_a_live_stream() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 1);
-    set_roster(&h, &[("user-1", "Test User")]);
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![h2h_entry(
-            1,
-            vec![h2h_title(
-                "the_carry",
-                "user-1",
-                serde_json::json!(4167.0),
-                "h",
-            )],
-            vec![],
-            None,
-        )]),
-    });
-
-    assert_eq!(count_of(&h, "Head2headCardWide"), 1, "no stream: wide slot");
-    assert_eq!(count_of(&h, "OpenSeat"), 4);
-
-    h.app()
-        .set_active_stream_cards(slint::ModelRc::new(slint::VecModel::from(vec![
-            crate::StreamCardData {
-                host_id: "u2".into(),
-                streamer_name: "alice".into(),
-                can_watch: true,
-                ..Default::default()
-            },
-        ])));
-
-    // The card is two columns wide: it does not give way to a one-column cell.
-    assert_eq!(count_of(&h, "Head2headCardWide"), 1, "still wide");
-    assert_eq!(count_of(&h, "OpenSeat"), 4, "all four seats");
-    assert_two_columns_wide(&h, "Head2headCardWide");
-    assert_eq!(first_card(&h).head2head.variant.as_str(), "wide");
-    assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
-
-    h.app()
-        .set_active_stream_cards(slint::ModelRc::new(slint::VecModel::from(vec![])));
-    assert_eq!(
-        count_of(&h, "Head2headCardWide"),
-        1,
-        "stream ended: wide again"
-    );
-    assert_two_columns_wide(&h, "Head2headCardWide");
-}
-
-/// Five members: the wide card has no seats and no button, and the calm invite
-/// card carries the one red button, wired to the share action.
-#[test]
-fn crew_of_five_shows_the_wide_card_without_seats_and_the_invite_card() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 5);
-    set_roster(
-        &h,
-        &[
-            ("user-1", "Test User"),
-            ("u2", "Jonas"),
-            ("u3", "Sara"),
-            ("u4", "Max"),
-            ("u5", "Leo"),
-        ],
-    );
-
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![h2h_entry(
-            5,
-            vec![
-                h2h_title("the_carry", "user-1", serde_json::json!(4167.0), "h"),
-                h2h_title("the_collector", "u2", serde_json::json!(14), "installed"),
-            ],
-            vec![h2h_pair("u2", 1, 1), h2h_pair("u3", 1, 1)],
-            None,
-        )]),
-    });
-
-    assert_eq!(count_of(&h, "Head2headCardPairs"), 1);
-    assert_two_columns_wide(&h, "Head2headCardPairs");
-    assert_eq!(first_card(&h).head2head.variant.as_str(), "pairs");
-    assert_eq!(first_card(&h).head2head.open_seats, 0);
-    assert_eq!(count_of(&h, "OpenSeat"), 0, "no seats from five members");
-    assert_eq!(count_of(&h, "InviteCard"), 1);
-    assert_eq!(
-        count_of(&h, "InviteButton"),
-        1,
-        "only the invite card has the button"
-    );
-    assert!(h.controls_labelled("Invite your crew").is_empty());
-    assert_eq!(h.controls_labelled("Share invite link").len(), 1);
-    let invite = (0..h.app().get_feed_cards().row_count())
-        .filter_map(|i| h.app().get_feed_cards().row_data(i))
-        .find(|c| c.card_type.as_str() == "invite")
-        .expect("the invite card is in the feed");
-    assert_eq!(invite.head2head.members.row_count(), 5);
-    assert_eq!(invite.head2head.more_members, 0);
-    invoke_invite_and_expect_code_request(&mut h, "Share invite link");
-}
-
-/// The feed can load before the member list. The invite card and the pair
-/// names are built again when the list arrives, so they never keep the
-/// short roster.
+/// The member list and the feed load in no fixed order. A feed that came
+/// first is built again with the roster: the board names the holder of a
+/// belt, not "Crew mate".
 #[test]
 fn a_feed_that_loads_before_the_member_list_is_built_again_with_the_roster() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 5);
-    // Two contested pairs: from five members the pairs card needs two.
     h.emit(Event::FeedLoaded {
         response: feed_of(vec![h2h_entry(
             5,
@@ -7497,13 +6462,17 @@ fn a_feed_that_loads_before_the_member_list_is_built_again_with_the_roster() {
             None,
         )]),
     });
-    let invite = |h: &Harness| {
-        (0..h.app().get_feed_cards().row_count())
-            .filter_map(|i| h.app().get_feed_cards().row_data(i))
-            .find(|c| c.card_type.as_str() == "invite")
-            .expect("the invite card")
+    let holder = |h: &Harness| {
+        h.app()
+            .get_feed_zones()
+            .titles
+            .row_data(0)
+            .expect("a belt on the board")
+            .person
+            .name
+            .to_string()
     };
-    assert_eq!(invite(&h).head2head.members.row_count(), 1, "viewer only");
+    assert_eq!(holder(&h), "Crew mate", "no roster yet");
 
     let member = |id: &str, name: &str| mello_core::crew_state::CrewMember {
         user_id: id.into(),
@@ -7524,143 +6493,7 @@ fn a_feed_that_loads_before_the_member_list_is_built_again_with_the_roster() {
             ..Default::default()
         },
     });
-    assert_eq!(invite(&h).head2head.members.row_count(), 5);
-    let cell = first_card(&h);
-    assert_eq!(
-        cell.head2head.pairs.row_data(0).unwrap().name.as_str(),
-        "Jonas",
-        "the pair row names the member, not Crew mate"
-    );
-}
-
-/// The invite card shows for 5 to 9 members: eight octagons and a "+N" at
-/// nine. From 10 it is not emitted. The share link stays in the crew menu.
-#[test]
-fn invite_card_shows_up_to_nine_members_and_is_gone_from_ten() {
-    for (n, invite_cards) in [(9, 1usize), (10, 0), (11, 0)] {
-        let mut h = Harness::new();
-        app_with_crew_of(&mut h, n);
-        let mut roster = vec![("user-1".to_string(), "Test User".to_string())];
-        roster.extend((2..=n).map(|i| (format!("u{i}"), format!("Kim {i}"))));
-        let roster_ref: Vec<(&str, &str)> = roster
-            .iter()
-            .map(|(a, b)| (a.as_str(), b.as_str()))
-            .collect();
-        set_roster(&h, &roster_ref);
-
-        h.emit(Event::FeedLoaded {
-            response: feed_of(vec![h2h_entry(
-                n,
-                vec![h2h_title("the_carry", "u2", serde_json::json!(4167.0), "h")],
-                vec![h2h_pair("u2", 1, 2)],
-                None,
-            )]),
-        });
-
-        assert_eq!(count_of(&h, "InviteCard"), invite_cards, "{n} members");
-        let invite = (0..h.app().get_feed_cards().row_count())
-            .filter_map(|i| h.app().get_feed_cards().row_data(i))
-            .find(|c| c.card_type.as_str() == "invite");
-        match invite {
-            Some(card) => {
-                assert_eq!(card.head2head.members.row_count(), 8);
-                assert_eq!(card.head2head.more_members, 1);
-            }
-            None => assert!(invite_cards == 0),
-        }
-    }
-}
-
-/// The chip on a pair row is the contested title with the largest gap: the
-/// 4,171 h Carry, not the 4.6 h Locked In.
-#[test]
-fn the_deciding_chip_is_the_title_with_the_largest_gap() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 2);
-    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
-
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![h2h_entry(
-            2,
-            vec![
-                h2h_title("locked_in", "user-1", serde_json::json!(4.6), "h"),
-                h2h_title("the_carry", "u2", serde_json::json!(4171.0), "h"),
-            ],
-            vec![h2h_pair_values(
-                "u2",
-                1,
-                1,
-                vec![
-                    ("locked_in", serde_json::json!(4.6), serde_json::json!(4.4)),
-                    (
-                        "the_carry",
-                        serde_json::json!(4.6),
-                        serde_json::json!(4171.0),
-                    ),
-                ],
-            )],
-            None,
-        )]),
-    });
-
-    let row = first_card(&h)
-        .head2head
-        .pairs
-        .row_data(0)
-        .expect("a pair row");
-    assert!(row.has_chip);
-    assert_eq!(row.chip.title.as_str(), "The Carry");
-    assert_eq!(row.chip.value.as_str(), "4,171");
-    assert_eq!(row.chip.holder_id.as_str(), "u2");
-    assert_eq!(count_of(&h, "TitleChip"), 1, "one chip on the one row");
-}
-
-/// Two pairs that share the same widest gap do not wear the same chip: the
-/// lower row takes the next contested title.
-#[test]
-fn a_deciding_chip_already_used_above_gives_way_in_the_next_row() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 5);
-    set_roster(
-        &h,
-        &[
-            ("user-1", "Test User"),
-            ("u2", "Jonas"),
-            ("u3", "Max"),
-            ("u4", "Sara"),
-            ("u5", "Leo"),
-        ],
-    );
-    let values = || {
-        vec![
-            ("the_collector", serde_json::json!(6), serde_json::json!(1)),
-            ("locked_in", serde_json::json!(9.0), serde_json::json!(6.0)),
-        ]
-    };
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![h2h_entry(
-            5,
-            vec![
-                h2h_title("the_collector", "user-1", serde_json::json!(6), "installed"),
-                h2h_title("locked_in", "user-1", serde_json::json!(9.0), "h"),
-            ],
-            vec![
-                h2h_pair_values("u2", 1, 1, values()),
-                h2h_pair_values("u3", 1, 1, values()),
-            ],
-            None,
-        )]),
-    });
-    let pairs = first_card(&h).head2head.pairs;
-    assert_eq!(pairs.row_count(), 2);
-    assert_eq!(
-        pairs.row_data(0).expect("row").chip.title.as_str(),
-        "The Collector"
-    );
-    assert_eq!(
-        pairs.row_data(1).expect("row").chip.title.as_str(),
-        "Locked In"
-    );
+    assert_eq!(holder(&h), "Jonas", "the board names the member");
 }
 
 /// The text of every `Text` the window draws.
@@ -7676,105 +6509,6 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock after the epoch")
         .as_millis() as i64
-}
-
-/// A title the holder took `days` whole days ago, plus an hour of margin so a
-/// slow test run cannot cross the day line.
-fn h2h_title_held(
-    id: &str,
-    holder: &str,
-    value: serde_json::Value,
-    unit: &str,
-    days: i64,
-) -> serde_json::Value {
-    serde_json::json!({
-        "title_id": id, "holder_user_id": holder, "value": value, "unit": unit,
-        "since_ms": now_ms() - days * 86_400_000 - 3_600_000,
-    })
-}
-
-/// The held label under each chip reads "held 9 days", "held 1 day", and is
-/// absent under one day. Checked in the data and in what the card draws.
-#[test]
-fn held_days_label_sits_under_the_chip_in_the_wide_card() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 1);
-    set_roster(&h, &[("user-1", "Test User")]);
-
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![h2h_entry(
-            1,
-            vec![
-                h2h_title_held("the_carry", "user-1", serde_json::json!(4167.0), "h", 9),
-                h2h_title_held("night_owl", "user-1", serde_json::json!("03:14"), "", 1),
-                h2h_title_held(
-                    "the_collector",
-                    "user-1",
-                    serde_json::json!(5),
-                    "installed",
-                    0,
-                ),
-            ],
-            vec![],
-            None,
-        )]),
-    });
-
-    let chips = first_card(&h).head2head.chips;
-    let labels: Vec<String> = (0..chips.row_count())
-        .map(|i| chips.row_data(i).unwrap().held_label.to_string())
-        .collect();
-    assert_eq!(labels, ["held 9 days", "held 1 day", ""]);
-    assert_eq!(count_of(&h, "HeldChip"), 3);
-    let drawn = drawn_texts(&h);
-    assert!(drawn.iter().any(|t| t == "held 9 days"), "{drawn:?}");
-    assert!(drawn.iter().any(|t| t == "held 1 day"), "{drawn:?}");
-    assert_eq!(
-        drawn.iter().filter(|t| t.starts_with("held ")).count(),
-        2,
-        "nothing under one day: {drawn:?}"
-    );
-}
-
-/// The same label sits under the chip of a pair row in the cell.
-#[test]
-fn held_days_label_sits_under_the_chip_in_a_pair_row() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 2);
-    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
-
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![h2h_entry(
-            2,
-            vec![h2h_title_held(
-                "the_carry",
-                "u2",
-                serde_json::json!(4171.0),
-                "h",
-                9,
-            )],
-            vec![h2h_pair_values(
-                "u2",
-                0,
-                1,
-                vec![(
-                    "the_carry",
-                    serde_json::json!(4.6),
-                    serde_json::json!(4171.0),
-                )],
-            )],
-            None,
-        )]),
-    });
-
-    let row = first_card(&h).head2head.pairs.row_data(0).unwrap();
-    assert_eq!(row.chip.held_label.as_str(), "held 9 days");
-    // The tooltip of an opened chip says what the title measures.
-    assert_eq!(
-        row.chip.stat_line.as_str(),
-        "Most hours in the top shared game."
-    );
-    assert!(drawn_texts(&h).iter().any(|t| t == "held 9 days"));
 }
 
 /// ★ Regression: discover had no way back. `back-requested` was declared on
@@ -8961,6 +7695,28 @@ fn emit_recap(h: &mut Harness, extra: serde_json::Value) {
     });
 }
 
+/// The zone feed draws the whole recap card in the centre view only (the
+/// board shows its numbers). Put the board's recap there, at rest.
+fn recap_in_the_centre(h: &Harness) {
+    let card = h.app().get_feed_zones().recap_card;
+    assert!(!card.id.is_empty(), "the board has a recap");
+    let clock = h.app().global::<crate::Clock>();
+    clock.set_manual(true);
+    clock.set_manual_now(1500);
+    let ui = h.app().global::<crate::SealedUi>();
+    ui.set_recap_card(card);
+    // The slot it left: one column, two rows of the old grid.
+    ui.set_from(crate::SealedArea {
+        x: 0.0,
+        y: 0.0,
+        w: 360.0,
+        h: 476.0,
+    });
+    ui.set_t0(0);
+    ui.set_active_kind("recap".into());
+    slint::platform::update_timers_and_animations();
+}
+
 /// A recap with two moved belts draws two rows, each a title chip, and the
 /// held section lists the members in count order.
 #[test]
@@ -8981,6 +7737,7 @@ fn recap_with_two_moved_belts_shows_two_rows_and_the_held_section() {
             ],
         }),
     );
+    recap_in_the_centre(&h);
     let card = first_card(&h);
     assert_eq!(card.card_type.as_str(), "recap");
     assert_eq!(card.belts_moved.row_count(), 2);
@@ -9020,6 +7777,7 @@ fn recap_card_caps_moved_belts_at_two() {
             "belts_held": belts_held(),
         }),
     );
+    recap_in_the_centre(&h);
     assert_eq!(
         count_of(&h, "TitleChip"),
         2,
@@ -9041,6 +7799,7 @@ fn recap_card_caps_moved_belts_at_two() {
 fn recap_without_belts_shows_neither_section() {
     let mut h = Harness::new();
     emit_recap(&mut h, serde_json::json!({}));
+    recap_in_the_centre(&h);
     let card = first_card(&h);
     assert_eq!(card.card_type.as_str(), "recap");
     assert_eq!(card.belts_moved.row_count(), 0);
@@ -9143,16 +7902,11 @@ const TALL_SECTIONS: [&str; 5] = [
     "RecapGamesStrip",
 ];
 
-fn rect_of(e: &ElementHandle) -> (f32, f32, f32, f32) {
-    let (p, s) = (e.absolute_position(), e.size());
-    (p.x, p.y, p.x + s.width, p.y + s.height)
-}
-
-/// With belts the card has every section and still two grid rows: the recap
-/// is two rows, never three.
+/// With belts the recap card has every section.
 #[test]
 fn the_tall_recap_has_every_section_and_two_rows_with_belts() {
     let h = tall_recap_crew(week_with_everything());
+    recap_in_the_centre(&h);
     for name in TALL_SECTIONS {
         assert_eq!(count_of(&h, name), 1, "{name} is on the card");
     }
@@ -9161,11 +7915,6 @@ fn the_tall_recap_has_every_section_and_two_rows_with_belts() {
         0,
         "no control on the card"
     );
-    let card = ElementHandle::find_by_element_type_name(h.app(), "RecapSlot")
-        .next()
-        .expect("the recap");
-    let rows = (card.size().height + 12.0) / (232.0 + 12.0);
-    assert!((rows - 2.0).abs() < 0.01, "two rows, got {rows}");
     let texts = drawn_texts(&h);
     for want in [
         "WEEKLY RECAP",
@@ -9199,23 +7948,6 @@ fn the_tall_recap_has_every_section_and_two_rows_with_belts() {
     }
 }
 
-/// With no belts both belt sections are gone and the card is two rows.
-#[test]
-fn the_tall_recap_without_belts_has_no_belt_sections_and_two_rows() {
-    let h = tall_recap_crew(week_without_belts());
-    assert_eq!(count_of(&h, "RecapMoved"), 0);
-    assert_eq!(count_of(&h, "RecapHeld"), 0);
-    for name in ["RecapHead", "RecapPeople", "RecapGamesStrip"] {
-        assert_eq!(count_of(&h, name), 1, "{name} is on the card");
-    }
-    let card = ElementHandle::find_by_element_type_name(h.app(), "RecapSlot")
-        .next()
-        .expect("the recap");
-    let rows = (card.size().height + 12.0) / (232.0 + 12.0);
-    assert!((rows - 2.0).abs() < 0.01, "two rows, got {rows}");
-    assert_eq!(first_recap(&h).recap_rows, 2);
-}
-
 /// The recap names its week and says how old it is: "Week 5" over "This week",
 /// "Last week" or "3 weeks ago", counted from `week_start_ms`.
 #[test]
@@ -9225,6 +7957,7 @@ fn the_recap_title_is_the_week_number_and_the_line_under_it_is_its_age() {
         week["week_number"] = serde_json::json!(5);
         week["week_start_ms"] = serde_json::json!(now_ms() - days_ago * DAY_MS);
         let h = tall_recap_crew(week);
+        recap_in_the_centre(&h);
         let texts = drawn_texts(&h);
         assert!(texts.iter().any(|t| t == "Week 5"), "{texts:?}");
         assert!(texts.iter().any(|t| t == want), "{want:?} in {texts:?}");
@@ -9242,16 +7975,15 @@ fn an_old_recap_without_a_week_number_is_named_by_its_date() {
     week["week_start"] = serde_json::json!(20_732 * DAY_MS);
     week["week_end"] = serde_json::json!(20_739 * DAY_MS);
     let h = tall_recap_crew(week);
+    recap_in_the_centre(&h);
     let texts = drawn_texts(&h);
     assert!(texts.iter().any(|t| t == "Week of 6 Oct"), "{texts:?}");
     assert!(!texts.iter().any(|t| t == "This week"), "{texts:?}");
 }
 
 fn first_recap(h: &Harness) -> FeedCardData {
-    use slint::Model;
-    h.app()
-        .get_feed_cards()
-        .iter()
+    zone_cards(h)
+        .into_iter()
         .find(|c| c.card_type == "recap")
         .expect("a recap card")
 }
@@ -9262,7 +7994,6 @@ fn first_recap(h: &Harness) -> FeedCardData {
 fn the_recap_card_reads_the_most_clipped_member_the_games_and_the_week() {
     let h = tall_recap_crew(week_with_everything());
     let card = first_recap(&h);
-    assert_eq!(card.recap_rows, 3);
     assert_eq!(card.recap_week.as_str(), "Week 4");
     assert_eq!(card.recap_active.name.as_str(), "Max");
     assert_eq!(card.recap_active.count, 550);
@@ -9279,33 +8010,12 @@ fn the_recap_card_reads_the_most_clipped_member_the_games_and_the_week() {
 #[test]
 fn an_older_recap_draws_without_the_new_fields() {
     let h = tall_recap_crew(serde_json::json!({"most_clipped": "Leo"}));
+    recap_in_the_centre(&h);
     let card = first_recap(&h);
     assert_eq!(card.recap_clipped.name.as_str(), "");
     assert_eq!(card.recap_games.row_count(), 0);
     assert_eq!(count_of(&h, "RecapGamesStrip"), 0);
     assert_eq!(count_of(&h, "RecapHead"), 1);
-}
-
-/// A crew of one has no weekly recap: with nobody to be in voice with and no
-/// clip, the week is empty (`isEmptyRecap`), so no card is drawn and the recap
-/// skeleton stays. The rule did not change with the tall card.
-#[test]
-fn a_crew_of_one_renders_no_recap() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 1);
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![recap_entry(serde_json::json!({
-            "total_hangout_min": 0, "total_game_min": 0, "total_min": 0,
-            "clip_count": 0, "top_members": [], "most_clipped": "",
-        }))]),
-    });
-    assert_eq!(count_of(&h, "RecapSlot"), 0);
-    assert_eq!(count_of(&h, "RecapCard"), 0);
-    assert_eq!(count_of(&h, "RecapHead"), 0);
-    assert!(
-        h.app().get_feed_skeleton_recap(),
-        "the recap skeleton stays"
-    );
 }
 
 /// A title this client has no icon for still gets a name and the belt icon.
@@ -9318,33 +8028,20 @@ fn recap_names_session_titles_the_card_has_no_chip_for() {
             "belts_moved": [belt_moved("last_one_up", serde_json::json!(5), "nights")],
         }),
     );
+    recap_in_the_centre(&h);
     let row = first_card(&h).belts_moved.row_data(0).expect("row");
     assert_eq!(row.title.as_str(), "Last One Up");
 }
 
 fn recap_feed(data: serde_json::Value) -> mello_core::crew_events::FeedResponse {
-    mello_core::crew_events::FeedResponse {
-        crew_id: "crew-0".into(),
-        sections: vec![mello_core::crew_events::FeedSection {
-            id: "this_week".into(),
-            entries: vec![mello_core::crew_events::FeedEntry {
-                id: "recap_1".into(),
-                entry_type: "recap".into(),
-                role: "recap".into(),
-                size: "md".into(),
-                ts: 1,
-                data,
-            }],
-        }],
-        joined: vec![],
-    }
+    let mut e = feed_entry("recap_1", "recap", data);
+    e.ts = 1;
+    feed_of(vec![e])
 }
 
 fn recap_titles(h: &Harness) -> Vec<String> {
-    use slint::Model;
-    h.app()
-        .get_feed_cards()
-        .iter()
+    zone_cards(h)
+        .into_iter()
         .filter(|c| c.card_type == "recap")
         .map(|c| c.title.to_string())
         .collect()
@@ -9386,34 +8083,12 @@ fn clips_only_recap_leads_with_clip_count() {
     assert_eq!(recap_titles(&h), vec!["3 clips".to_string()]);
 }
 
-/// An empty recap that reaches the client renders no recap card.
-#[test]
-fn empty_recap_renders_no_recap_card() {
-    let mut h = Harness::new();
-    logged_in_app(&mut h);
-    h.emit(Event::FeedLoaded {
-        response: recap_feed(serde_json::json!({
-            "total_hangout_min": 0, "total_game_min": 0, "total_min": 0,
-            "session_count": 0, "clip_count": 0,
-        })),
-    });
-    assert!(recap_titles(&h).is_empty());
-}
-
 fn clip_entry(id: &str) -> FeedEntry {
     feed_entry(
         id,
         "clip",
         serde_json::json!({"duration_seconds": 12.0, "media_url": "/clips/x.wav", "clipper_name": "alice"}),
     )
-}
-
-fn feed_card_types(h: &Harness) -> Vec<String> {
-    let m = h.app().get_feed_cards();
-    (0..m.row_count())
-        .filter_map(|i| m.row_data(i))
-        .map(|c| c.card_type.to_string())
-        .collect()
 }
 
 fn big_crew_feed(clips: usize) -> FeedResponse {
@@ -9432,82 +8107,11 @@ fn big_crew_feed(clips: usize) -> FeedResponse {
         entries.push(clip_entry(&format!("clip{i}")));
     }
     entries.push(feed_entry(
-        "recent_games",
-        "recent-games",
-        serde_json::json!({
-            "session_count": 14, "total_min": 1860,
-            "games": [{ "game_id": "valorant", "game_name": "Valorant", "minutes": 600 }]
-        }),
-    ));
-    entries.push(feed_entry(
         "s1",
         "session",
         serde_json::json!({"game_name": "Valorant", "duration_min": 60, "active_min": 60}),
     ));
     feed_of(entries)
-}
-
-/// A voice clip never takes a wide slot (CLIPS 7.1). With a head2head cell,
-/// the invite card and five clips, the wide slots hold no clip.
-#[test]
-fn five_clips_never_take_a_wide_slot() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 50);
-    set_roster(
-        &h,
-        &[("user-1", "Test User"), ("u2", "Jonas"), ("u3", "Sara")],
-    );
-    h.emit(Event::FeedLoaded {
-        response: big_crew_feed(5),
-    });
-
-    let types = feed_card_types(&h);
-    let infos: Vec<crate::feed_grid::CardInfo> = {
-        let m = h.app().get_feed_cards();
-        (0..m.row_count())
-            .filter_map(|i| m.row_data(i))
-            .map(|c| crate::feed_grid::CardInfo::of(&c))
-            .collect()
-    };
-    let wide = crate::feed_grid::wide_slot_indices(&infos, 0);
-    assert!(!wide.is_empty(), "the layout has a wide slot: {types:?}");
-    for w in wide {
-        assert_ne!(types[w], "clip", "a clip is in wide slot {w}: {types:?}");
-    }
-}
-
-/// Recent games is on the first screen for a big crew: in the first three rows
-/// of the grid (row 2, or row 3 under a day card), not behind the clips.
-#[test]
-fn recent_games_is_in_the_first_three_rows_of_a_big_crew() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 50);
-    set_roster(
-        &h,
-        &[("user-1", "Test User"), ("u2", "Jonas"), ("u3", "Sara")],
-    );
-    h.emit(Event::FeedLoaded {
-        response: big_crew_feed(5),
-    });
-
-    let types = feed_card_types(&h);
-    let at = types
-        .iter()
-        .position(|t| t == "recent-games")
-        .expect("recent games card");
-    let infos: Vec<crate::feed_grid::CardInfo> = {
-        let m = h.app().get_feed_cards();
-        (0..m.row_count())
-            .filter_map(|i| m.row_data(i))
-            .map(|c| crate::feed_grid::CardInfo::of(&c))
-            .collect()
-    };
-    let rows = crate::feed_grid::rows(&infos, 0);
-    assert!(
-        rows[at] <= 3,
-        "recent games at card {at}, row {}, past the third row: {types:?}",
-        rows[at]
-    );
 }
 
 /// A session card whose game has no art wears the two-letter monogram tile of
@@ -9521,10 +8125,11 @@ fn a_session_card_without_art_wears_the_two_letter_monogram() {
         ("Apex Legends", "AL"),
     ] {
         let mut h = Harness::new();
+        tall_window(&h);
         logged_in_app(&mut h);
         let mut feed = zero_telemetry_game_session_feed();
-        feed.sections[0].entries[0].data["game_name"] = serde_json::json!(name);
-        feed.sections[0].entries[0].data["game_id"] = serde_json::json!("custom-no-art");
+        feed.zones.sessions[0].data["game_name"] = serde_json::json!(name);
+        feed.zones.sessions[0].data["game_id"] = serde_json::json!("custom-no-art");
         h.emit(Event::FeedLoaded { response: feed });
 
         let card = first_card(&h);
@@ -9536,7 +8141,7 @@ fn a_session_card_without_art_wears_the_two_letter_monogram() {
         assert_eq!(
             card.game_monogram.as_str(),
             crate::recent_games::monogram(name),
-            "{name}: the same monogram as the recent games card"
+            "{name}: the same monogram as every game tile"
         );
         assert_eq!(
             count_of(&h, "GameArt"),
@@ -9568,45 +8173,6 @@ fn a_feed_changed_push_goes_to_the_core_as_a_command() {
         n, 3,
         "the gate lives in the core, one command for each push"
     );
-}
-
-/// A crew mate joined and the feed reloaded on a push. The crew list still
-/// says one member, the head2head entry of the feed says more. At two members
-/// the trio stays (frame B2). From three it goes (frame C).
-#[test]
-fn the_feed_member_count_drives_the_skeleton_trio_before_the_crew_list_catches_up() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 1);
-    set_roster(
-        &h,
-        &[("user-1", "Test User"), ("u2", "Jonas"), ("u3", "Max")],
-    );
-    let feed_of_members = |members: i32| {
-        let mut feed = recent_games_feed();
-        feed.sections[0].entries.insert(
-            0,
-            h2h_entry(
-                members,
-                vec![h2h_title(
-                    "the_collector",
-                    "u2",
-                    serde_json::json!(14),
-                    "installed",
-                )],
-                vec![h2h_pair("u2", 1, 1)],
-                None,
-            ),
-        );
-        feed
-    };
-    h.emit(Event::FeedLoaded {
-        response: feed_of_members(2),
-    });
-    assert_eq!(skeleton_cells(&h), 3, "two members: the trio stays");
-    h.emit(Event::FeedLoaded {
-        response: feed_of_members(3),
-    });
-    assert_eq!(skeleton_cells(&h), 0, "three members: no trio");
 }
 
 // ── live session card ───────────────────────────────────────────────
@@ -9725,12 +8291,11 @@ fn install_with_header(h: &Harness, appid: &str, name: &str, installed: bool) ->
 }
 
 /// One game id, one art form per frame shape. Brawlhalla has Steam art on
-/// disk and an exe icon. The poster tile (a header frame, library id or
-/// catalogue id) shows the Steam header. The session card and the NOW PLAYING
-/// pill (square frames) show the icon and never the header.
+/// disk and an exe icon. The session card and the NOW PLAYING pill (square
+/// frames) show the icon and never the header.
 #[test]
 fn one_game_id_resolves_to_one_art_form_per_frame_shape() {
-    // (installed list knows the game, id the recent games row carries)
+    // (installed list knows the game, id the session carries)
     for (installed, wire_id) in [
         (true, "steam-291550"),
         (true, "brawlhalla"),
@@ -9745,17 +8310,6 @@ fn one_game_id_resolves_to_one_art_form_per_frame_shape() {
         let _art = install_with_header(&h, "291550", "Brawlhalla", installed);
         let case = format!("installed {installed}, id {wire_id}");
 
-        // Recent games tile, in the poster grid (two PCs): the header frame.
-        let mut entry = recent_games_entry(serde_json::json!([
-            { "game_id": wire_id, "game_name": "Brawlhalla", "minutes": 2500, "launcher": "steam" }
-        ]));
-        entry.data["pc_count"] = serde_json::json!(2);
-        h.emit(Event::FeedLoaded {
-            response: feed_of(vec![entry]),
-        });
-        let tile = first_card(&h).recent_games.row_data(0).expect("a tile");
-        assert!(tile.has_capsule, "{case}: the tile has Steam art");
-
         // Session card (40 px square) and the NOW PLAYING pill: both are
         // icon slot frames, so both take the exe icon and never the header.
         h.ctx().game_icon_cache.borrow_mut().insert(
@@ -9763,8 +8317,8 @@ fn one_game_id_resolves_to_one_art_form_per_frame_shape() {
             crate::avatar::rgba_to_image(&[255u8; 4 * 4 * 4], 4, 4),
         );
         let mut feed = zero_telemetry_game_session_feed();
-        feed.sections[0].entries[0].data["game_name"] = serde_json::json!("Brawlhalla");
-        feed.sections[0].entries[0].data["game_id"] = serde_json::json!("brawlhalla");
+        feed.zones.sessions[0].data["game_name"] = serde_json::json!("Brawlhalla");
+        feed.zones.sessions[0].data["game_id"] = serde_json::json!("brawlhalla");
         h.emit(Event::FeedLoaded { response: feed });
         let card = first_card(&h);
         assert!(
@@ -9781,30 +8335,32 @@ fn one_game_id_resolves_to_one_art_form_per_frame_shape() {
     }
 }
 
-/// A game with no icon and no Steam art is the monogram on the tile and on
-/// the pill alike.
+/// A game with no icon and no Steam art is the monogram on the session card
+/// and on the pill alike.
 #[test]
-fn a_game_without_art_is_the_monogram_on_tile_and_pill() {
+fn a_game_without_art_is_the_monogram_on_card_and_pill() {
     let mut h = Harness::new();
     h.app()
         .window()
         .set_size(slint::PhysicalSize::new(1600, 1000));
     logged_in_app(&mut h);
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![recent_games_entry(serde_json::json!([
-            { "game_id": "epic-zzunknown", "game_name": "Zz Unknown Game", "minutes": 0, "launcher": "epic" }
-        ]))]),
-    });
-    let tile = first_card(&h).recent_games.row_data(0).expect("a tile");
-    assert!(!tile.has_capsule && !tile.has_icon);
+    let mut feed = zero_telemetry_game_session_feed();
+    feed.zones.sessions[0].data["game_name"] = serde_json::json!("Zz Unknown Game");
+    feed.zones.sessions[0].data["game_id"] = serde_json::json!("epic-zzunknown");
+    h.emit(Event::FeedLoaded { response: feed });
+    let card = first_card(&h);
+    assert!(!card.game_has_capsule && !card.game_has_icon);
     h.emit(game_detected(
         "epic-zzunknown",
         "Zz Unknown Game",
         now_ms() - 60_000,
     ));
     assert!(!h.app().get_game_has_capsule() && !h.app().get_game_has_runtime_icon());
-    assert_eq!(h.app().get_game_monogram().as_str(), tile.monogram.as_str());
-    assert_eq!(h.app().get_game_hue_index(), tile.hue_index);
+    assert_eq!(
+        h.app().get_game_monogram().as_str(),
+        card.game_monogram.as_str()
+    );
+    assert_eq!(h.app().get_game_hue_index(), card.game_hue_index);
 }
 
 fn solo_crew_feed(h: &mut Harness) {
@@ -9825,10 +8381,10 @@ fn solo_crew_feed(h: &mut Harness) {
     });
 }
 
-/// With poster art the live card takes the wide slot and shows the poster
-/// instead of the tile. The wide head2head card takes the wide slot of row 2.
+/// A live card carries its poster art. A carousel cell is too narrow for the
+/// poster (420 px), so the cell draws the game tile.
 #[test]
-fn a_live_session_with_poster_art_is_wide_and_shows_the_poster() {
+fn a_live_session_with_poster_art_keeps_the_tile_in_a_carousel_cell() {
     let mut h = Harness::new();
     solo_crew_feed(&mut h);
     let _art = install_with_poster(&h, "291550", "Brawlhalla");
@@ -9840,11 +8396,9 @@ fn a_live_session_with_poster_art_is_wide_and_shows_the_poster() {
 
     let card = live_cards(&h).remove(0);
     assert!(card.live.has_poster, "the card carries the poster");
-    assert_eq!(first_card(&h).card_type.as_str(), "live-session");
     let el: Vec<ElementHandle> =
         ElementHandle::find_by_element_type_name(h.app(), "LiveSessionCard").collect();
     assert_eq!(el.len(), 1);
-    assert!(el[0].size().width > 420.0, "the wide slot");
     let (pos, size) = (el[0].absolute_position(), el[0].size());
     let tiles = ElementHandle::find_by_element_type_name(h.app(), "GameArt")
         .filter(|t| {
@@ -9852,43 +8406,17 @@ fn a_live_session_with_poster_art_is_wide_and_shows_the_poster() {
             p.x >= pos.x && p.y >= pos.y && p.x < pos.x + size.width && p.y < pos.y + size.height
         })
         .count();
-    assert_eq!(tiles, 0, "the poster is the art, there is no tile");
-    assert_eq!(count_of(&h, "Head2headCardWide"), 1);
-    assert_two_columns_wide(&h, "Head2headCardWide");
+    assert!(size.width < 420.0, "a carousel cell");
+    assert_eq!(tiles, 1, "the cell draws the tile");
     let texts = drawn_texts(&h);
     for want in ["NOW PLAYING", "Brawlhalla", "since 12 min"] {
         assert!(texts.iter().any(|t| t == want), "{want} in {texts:?}");
     }
 }
 
-/// Without poster art the live card is a cell, and the wide head2head card of a
-/// crew of one keeps the wide slot.
-#[test]
-fn a_live_session_without_poster_art_is_a_cell_and_head2head_keeps_the_wide_slot() {
-    let mut h = Harness::new();
-    solo_crew_feed(&mut h);
-    h.emit(game_detected(
-        "rocket-league",
-        "Rocket League",
-        now_ms() - 12 * 60_000,
-    ));
-
-    let card = live_cards(&h).remove(0);
-    assert!(!card.live.has_poster);
-    assert_eq!(count_of(&h, "Head2headCardWide"), 1, "the wide card stays");
-    let el: Vec<ElementHandle> =
-        ElementHandle::find_by_element_type_name(h.app(), "LiveSessionCard").collect();
-    assert_eq!(el.len(), 1);
-    assert!(el[0].size().width < 420.0, "a cell");
-    let cards: Vec<_> = h.app().get_feed_cards().iter().collect();
-    assert_eq!(cards[0].card_type.as_str(), "head2head");
-    assert_eq!(cards[1].card_type.as_str(), "live-session");
-}
-
 fn live_cards(h: &Harness) -> Vec<FeedCardData> {
-    h.app()
-        .get_feed_cards()
-        .iter()
+    zone_cards(h)
+        .into_iter()
         .filter(|c| c.card_type.as_str() == "live-session")
         .collect()
 }
@@ -9930,12 +8458,14 @@ fn a_live_session_for_the_viewer_shows_the_pip_and_since_n_min() {
     let card = live_cards(&h).remove(0);
     assert_eq!(card.live.since_min, 12);
     assert_eq!(card.live.players.row_count(), 1);
-    let cards: Vec<_> = h.app().get_feed_cards().iter().collect();
-    assert_eq!(cards[0].card_type.as_str(), "head2head");
     assert_eq!(
-        cards[1].card_type.as_str(),
-        "live-session",
-        "no poster art, so it is the cell beside the lead"
+        h.app()
+            .get_feed_zones()
+            .sessions
+            .row_data(0)
+            .map(|c| c.card_type.to_string()),
+        Some("live-session".into()),
+        "the live session leads the Sessions zone"
     );
 }
 
@@ -10023,12 +8553,13 @@ fn a_live_session_started_3_min_ago_is_on_the_feed() {
 }
 
 /// The live card has the shape of the session card: a fixed game tile of the
-/// session tile's size, in the wide slot and in a cell, and a card height that
-/// equals the side cell.
+/// session tile's size, with or without poster art.
 #[test]
-fn the_live_card_has_the_session_tile_size_in_a_cell_and_the_poster_in_the_wide_slot() {
+fn the_live_card_has_the_session_tile_in_every_cell() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 2);
+    // The Sessions zone clear of the control bar and its NOW PLAYING tile.
+    tall_window(&h);
     set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
     h.emit(Event::FeedLoaded {
         response: feed_of(vec![h2h_entry(
@@ -10053,19 +8584,13 @@ fn the_live_card_has_the_session_tile_size_in_a_cell_and_the_poster_in_the_wide_
     assert_eq!(count_of(&h, "LiveSessionCard"), 2);
     let cards: Vec<ElementHandle> =
         ElementHandle::find_by_element_type_name(h.app(), "LiveSessionCard").collect();
-    let (wide, cell) = if cards[0].size().width > cards[1].size().width {
-        (&cards[0], &cards[1])
-    } else {
-        (&cards[1], &cards[0])
-    };
-    assert!(wide.size().width > 420.0, "one card is in the wide slot");
-    assert!(cell.size().width < 420.0, "one card is in a cell");
     assert_eq!(
-        wide.size().height,
-        cell.size().height,
-        "the wide card is as high as the side cell"
+        cards[0].size(),
+        cards[1].size(),
+        "the carousel cells are one size"
     );
-    for (card, want) in [(wide, 0), (cell, 1)] {
+    assert!(live_cards(&h).iter().any(|c| c.live.has_poster), "a poster");
+    for card in &cards {
         let (pos, size) = (card.absolute_position(), card.size());
         let tiles: Vec<ElementHandle> =
             ElementHandle::find_by_element_type_name(h.app(), "GameArt")
@@ -10077,75 +8602,10 @@ fn the_live_card_has_the_session_tile_size_in_a_cell_and_the_poster_in_the_wide_
                         && p.y < pos.y + size.height
                 })
                 .collect();
-        // The wide card has the poster, so it has no tile.
-        assert_eq!(
-            tiles.len(),
-            want,
-            "the tile of the cell, none on the poster"
-        );
-        if want == 1 {
-            assert_eq!(tiles[0].size().width, 40.0, "the session tile width");
-            assert_eq!(tiles[0].size().height, 40.0, "the session tile height");
-        }
+        assert_eq!(tiles.len(), 1, "the tile of the cell");
+        assert_eq!(tiles[0].size().width, 40.0, "the session tile width");
+        assert_eq!(tiles[0].size().height, 40.0, "the session tile height");
     }
-}
-
-/// A live session with poster art holds the wide slot of row 1, so the wide
-/// head2head card of a crew of one takes the wide slot of row 2. It is two
-/// columns wide before, during and after the game.
-#[test]
-fn the_wide_head2head_card_takes_row_two_while_a_live_session_holds_the_slot() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 1);
-    set_roster(&h, &[("user-1", "Test User")]);
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![h2h_entry(
-            1,
-            vec![h2h_title(
-                "the_carry",
-                "user-1",
-                serde_json::json!(4167.0),
-                "h",
-            )],
-            vec![],
-            None,
-        )]),
-    });
-    assert_eq!(count_of(&h, "Head2headCardWide"), 1);
-
-    let _art = install_with_poster(&h, "730", "Counter-Strike 2");
-    h.emit(game_detected(
-        "counter-strike-2",
-        "Counter-Strike 2",
-        now_ms(),
-    ));
-    assert_eq!(count_of(&h, "Head2headCardWide"), 1, "wide in row 2");
-    assert_two_columns_wide(&h, "Head2headCardWide");
-    assert_eq!(count_of(&h, "LiveSessionCard"), 1);
-    let cards: Vec<_> = h.app().get_feed_cards().iter().collect();
-    assert_eq!(cards[0].card_type.as_str(), "live-session");
-    assert_eq!(cards[1].card_type.as_str(), "head2head");
-    assert_eq!(
-        cards[1].head2head.variant.as_str(),
-        "wide",
-        "the entry is the same, only the slot differs"
-    );
-    let live = ElementHandle::find_by_element_type_name(h.app(), "LiveSessionCard")
-        .next()
-        .expect("the live card");
-    let h2h = ElementHandle::find_by_element_type_name(h.app(), "Head2headCardWide")
-        .next()
-        .expect("head2head");
-    assert!(
-        h2h.absolute_position().y >= live.absolute_position().y + live.size().height,
-        "head2head is the row under the live card"
-    );
-    assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
-
-    h.emit(game_ended("counter-strike-2", "Counter-Strike 2", 1));
-    assert_eq!(count_of(&h, "LiveSessionCard"), 0);
-    assert_eq!(count_of(&h, "Head2headCardWide"), 1, "wide again");
-    assert_two_columns_wide(&h, "Head2headCardWide");
 }
 
 /// The session end removes the live card, and the session card from the ledger
@@ -10234,82 +8694,6 @@ fn a_feed_that_loads_while_a_game_runs_keeps_the_live_card() {
 // ── Quiet and dormant feeds (mockup frames E and F) ─────────────────────────
 
 const DAY_MS: i64 = 86_400_000;
-
-fn entry_ago(id: &str, entry_type: &str, data: serde_json::Value, ago_ms: i64) -> FeedEntry {
-    let mut e = feed_entry(id, entry_type, data);
-    e.ts = now_ms() - ago_ms;
-    e
-}
-
-fn solo_session(id: &str, player: &str, player_id: &str, ago_days: i64) -> FeedEntry {
-    entry_ago(
-        id,
-        "session",
-        serde_json::json!({
-            "game_name": "Counter-Strike 2", "player_names": [player], "player_ids": [player_id],
-            "duration_min": 160, "wins": 3, "losses": 2, "draws": 0,
-        }),
-        ago_days * DAY_MS,
-    )
-}
-
-/// A title that changed hands `days` ago, with the pair that says both values.
-fn belt_entry(days: i64) -> FeedEntry {
-    // Ages count UTC days. Noon of the day `days` back keeps the age the same
-    // at any time of the day: an hour back from 00:30 UTC lands a day early.
-    let moved_at = if days == 0 {
-        now_ms() - 3_600_000
-    } else {
-        (now_ms().div_euclid(DAY_MS) - days) * DAY_MS + DAY_MS / 2
-    };
-    let night_owl = serde_json::json!({
-        "title_id": "night_owl", "holder_user_id": "u4", "value": "03:40", "unit": "",
-        "since_ms": moved_at, "moved_at_ms": moved_at, "previous_holder_user_id": "user-1",
-    });
-    feed_entry(
-        "head2head",
-        "head2head",
-        serde_json::json!({
-            "crew_id": "crew-0", "member_count": 4, "open_seats": 1,
-            "titles": [
-                h2h_title_held("the_carry", "u2", serde_json::json!(4201.0), "h", 9),
-                night_owl,
-            ],
-            "pairs": [
-                h2h_pair_values("u2", 4, 3, vec![("the_carry", serde_json::json!(4167.0), serde_json::json!(4201.0))]),
-                h2h_pair_values("u3", 2, 5, vec![]),
-                h2h_pair_values("u4", 3, 4, vec![("night_owl", serde_json::json!("03:14"), serde_json::json!("03:40"))]),
-            ],
-            "updated_at": 1_000,
-        }),
-    )
-}
-
-fn quiet_roster(h: &Harness) {
-    set_roster(
-        h,
-        &[
-            ("user-1", "Test User"),
-            ("u2", "Jonas"),
-            ("u3", "Max"),
-            ("u4", "Sara"),
-        ],
-    );
-}
-
-fn card_types(h: &Harness) -> Vec<String> {
-    let feed = h.app().get_feed_cards();
-    (0..feed.row_count())
-        .map(|i| {
-            let c = feed.row_data(i).unwrap();
-            if c.card_type.as_str() == "head2head" {
-                format!("head2head:{}", c.head2head.variant)
-            } else {
-                c.card_type.to_string()
-            }
-        })
-        .collect()
-}
 
 // --- stage 6 (streaming-quality): the stream session states on the cards ---
 
@@ -10524,299 +8908,9 @@ fn stream_volumes(h: &mut Harness) -> Vec<f32> {
         .collect()
 }
 
-/// Frame E: nothing live, no stream or belt in 24 h, no recap this week. The
-/// quiet row says so, and the belt that moved two days ago leads the feed with
-/// the head2head card, two columns wide, under it.
-#[test]
-fn a_quiet_feed_has_a_quiet_row_and_the_belt_that_moved_leads() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 4);
-    quiet_roster(&h);
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![
-            belt_entry(2),
-            solo_session("gs-1", "Test User", "user-1", 3),
-            solo_session("gs-2", "Sara", "u4", 2),
-        ]),
-    });
-
-    let quiet = h.app().get_feed_quiet();
-    assert_eq!(quiet.row_count(), 1);
-    let row = quiet.row_data(0).unwrap();
-    assert_eq!(
-        row.line.as_str(),
-        "No crew time last week. Sara and Test User still played."
-    );
-    assert_eq!(row.when.as_str(), "", "the quiet row carries no note");
-    assert_eq!(count_of(&h, "FeedJoinedRow"), 1, "the row is drawn");
-    assert_eq!(h.app().get_feed_dormant().row_count(), 0);
-
-    let types = card_types(&h);
-    assert_eq!(
-        types[..2],
-        ["head2head:belt", "head2head:pairs"],
-        "{types:?}"
-    );
-    let belt = first_card(&h).head2head.belt;
-    assert_eq!(belt.headline.as_str(), "Sara took Night Owl from Test User");
-    assert_eq!(belt.detail.as_str(), "03:40 beats 03:14.");
-    assert_eq!(belt.age.as_str(), "2 days ago");
-    assert_eq!(count_of(&h, "BeltHero"), 1);
-    assert_eq!(skeleton_cells(&h), 0, "no skeletons from three members");
-    // The cell stands tall, so it draws three pair rows beside the seat.
-    let cell = h.app().get_feed_cards().row_data(1).unwrap();
-    assert_eq!(cell.head2head.pairs.row_count(), 3);
-    assert_eq!(cell.head2head.open_seats, 1);
-}
-
-/// A recap this week is the news. The quiet row stays off.
-#[test]
-fn a_recap_this_week_ends_the_quiet() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 4);
-    quiet_roster(&h);
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![
-            belt_entry(2),
-            entry_ago(
-                "recap",
-                "recap",
-                serde_json::json!({
-                    "week_end": now_ms() - DAY_MS, "total_hangout_min": 600, "clip_count": 3,
-                    "top_members": [], "top_game": "Valorant",
-                }),
-                DAY_MS,
-            ),
-            solo_session("gs-1", "Sara", "u4", 2),
-        ]),
-    });
-    assert_eq!(h.app().get_feed_quiet().row_count(), 0);
-    assert_eq!(count_of(&h, "FeedJoinedRow"), 0);
-}
-
-/// A belt that moved in the last 24 hours is not quiet: the feed has news.
-#[test]
-fn a_belt_that_moved_today_ends_the_quiet() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 4);
-    quiet_roster(&h);
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![belt_entry(0), solo_session("gs-1", "Sara", "u4", 2)]),
-    });
-    assert_eq!(h.app().get_feed_quiet().row_count(), 0);
-}
-
-/// Frame F: nobody opened m3llo for three weeks. A strip says since when and
-/// who holds a belt. The feed keeps the last real recap, labelled with its age,
-/// and the two last sessions. The recap and the cell are the two tall cards.
-#[test]
-fn a_dormant_feed_keeps_the_last_recap_with_its_age_and_adds_a_strip() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 4);
-    quiet_roster(&h);
-    let recap_end = now_ms() - 21 * DAY_MS;
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![
-            entry_ago(
-                "recap",
-                "recap",
-                serde_json::json!({
-                    "week_start_ms": recap_end - 7 * DAY_MS, "week_end": recap_end, "total_hangout_min": 375, "clip_count": 3,
-                    "top_members": [], "top_game": "Rocket League", "longest_session_min": 140,
-                    "belts_held": [{"user_id": "u4", "display_name": "Sara", "count": 3, "title_ids": ["night_owl"]}],
-                }),
-                21 * DAY_MS,
-            ),
-            solo_session("gs-1", "Test User", "user-1", 24),
-            {
-                // The belts are 24 days old and moved the day of the last session.
-                let mut e = belt_entry(24);
-                e.id = "head2head".into();
-                e
-            },
-            solo_session("gs-2", "Sara", "u4", 27),
-        ]),
-    });
-
-    let strip = h.app().get_feed_dormant();
-    assert_eq!(strip.row_count(), 1);
-    let card = strip.row_data(0).unwrap();
-    assert_eq!(
-        card.title.as_str(),
-        format!(
-            "Nothing new since {}. Jonas holds The Carry.",
-            crate::feed_age::date_label(now_ms() - 24 * DAY_MS)
-        )
-    );
-    assert_eq!(card.timestamp.as_str(), "3 weeks ago");
-    assert_eq!(
-        h.app().get_feed_quiet().row_count(),
-        0,
-        "the strip stands in"
-    );
-
-    let feed = h.app().get_feed_cards();
-    let recap = (0..feed.row_count())
-        .filter_map(|i| feed.row_data(i))
-        .find(|c| c.card_type.as_str() == "recap")
-        .expect("the last recap stays");
-    assert_eq!(recap.age_label.as_str(), "4 weeks ago");
-    let types = card_types(&h);
-    // Head2head leads, the recap stands beside it (tall), two cells under it.
-    assert_eq!(types[0], "head2head:pairs", "{types:?}");
-    assert_eq!(types[1], "recap", "{types:?}");
-    assert_eq!(skeleton_cells(&h), 0, "no skeletons");
-    assert_eq!(count_of(&h, "RecapCard"), 1);
-}
-
 // ---------------------------------------------------------------------------
 // Daily recap (CLIPS 7.1)
 // ---------------------------------------------------------------------------
-
-/// A `daily-recap` entry for the UTC day `days_ago` days back, as the server
-/// builds it. `extra` overrides fields.
-fn daily_entry(days_ago: i64, extra: serde_json::Value) -> FeedEntry {
-    let day_start = (now_ms().div_euclid(DAY_MS) - days_ago) * DAY_MS;
-    let mut data = serde_json::json!({
-        "day_start": day_start, "day_end": day_start + DAY_MS,
-        "total_hangout_min": 30, "total_game_min": 95, "total_min": 125,
-        "session_count": 3, "clip_count": 1,
-        "top_game": "Rocket League", "game_id": "rocket-league",
-        "member_ids": ["user-1", "u2"],
-    });
-    for (k, v) in extra.as_object().expect("object").iter() {
-        data[k] = v.clone();
-    }
-    feed_entry(&format!("daily_{days_ago}"), "daily-recap", data)
-}
-
-fn daily_card(h: &Harness) -> Option<FeedCardData> {
-    let feed = h.app().get_feed_cards();
-    (0..feed.row_count())
-        .filter_map(|i| feed.row_data(i))
-        .find(|c| c.card_type.as_str() == "daily-recap")
-}
-
-/// The card states the day, the four numbers, the members and the belts.
-#[test]
-fn the_daily_recap_card_shows_the_day_the_numbers_the_members_and_two_belts() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 2);
-    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![daily_entry(
-            0,
-            serde_json::json!({
-                "belts_moved": [
-                    belt_moved("the_carry", serde_json::json!(4201.0), "h"),
-                    belt_moved("night_owl", serde_json::json!("03:40"), ""),
-                    belt_moved("marathon", serde_json::json!("3 h 48"), ""),
-                ],
-            }),
-        )]),
-    });
-
-    let card = daily_card(&h).expect("a daily recap card");
-    assert_eq!(card.day_label.as_str(), "Today so far");
-    assert_eq!(card.title.as_str(), "2h 5m", "the hangout time");
-    assert_eq!(card.clip_count, 1);
-    assert_eq!(card.day_sessions, 3);
-    assert_eq!(card.game_name.as_str(), "Rocket League");
-    assert_eq!(card.day_members.row_count(), 2);
-    assert_eq!(card.belts_moved.row_count(), 2, "two belts at most");
-    assert_eq!(count_of(&h, "DailyRecapCard"), 1);
-    let texts = drawn_texts(&h);
-    for want in [
-        "DAILY RECAP",
-        "Today so far",
-        "HANGOUT",
-        "CLIPS",
-        "SESSIONS",
-        "TOP GAME",
-        "Rocket League",
-    ] {
-        assert!(texts.iter().any(|t| t == want), "missing {want}: {texts:?}");
-    }
-    assert_eq!(count_of(&h, "TitleChip"), 2, "a chip for each belt");
-}
-
-/// The day word: "Today so far", "Yesterday", then the day name.
-#[test]
-fn the_daily_recap_names_its_day() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 2);
-    for (days_ago, want) in [(0, "Today so far"), (1, "Yesterday")] {
-        h.emit(Event::FeedLoaded {
-            response: feed_of(vec![daily_entry(days_ago, serde_json::json!({}))]),
-        });
-        assert_eq!(daily_card(&h).expect("card").day_label.as_str(), want);
-    }
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![daily_entry(2, serde_json::json!({}))]),
-    });
-    let day_start = (now_ms().div_euclid(DAY_MS) - 2) * DAY_MS;
-    assert_eq!(
-        daily_card(&h).expect("card").day_label.as_str(),
-        crate::feed_age::weekday_of(day_start)
-    );
-}
-
-/// The server sends up to three days. The feed draws one daily recap, the
-/// newest.
-#[test]
-fn only_the_newest_daily_recap_is_drawn() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 2);
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![
-            daily_entry(0, serde_json::json!({})),
-            daily_entry(1, serde_json::json!({})),
-            daily_entry(2, serde_json::json!({})),
-        ]),
-    });
-    let types = card_types(&h);
-    assert_eq!(types.iter().filter(|t| *t == "daily-recap").count(), 1);
-    assert_eq!(
-        daily_card(&h).expect("card").day_label.as_str(),
-        "Today so far"
-    );
-    assert_eq!(count_of(&h, "DailyRecapCard"), 1);
-}
-
-/// A day with nothing has no entry, so the feed has no card for it.
-#[test]
-fn a_feed_with_no_daily_recap_draws_none() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 2);
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![solo_session("gs-1", "Test User", "user-1", 5)]),
-    });
-    assert!(daily_card(&h).is_none());
-    assert_eq!(count_of(&h, "DailyRecapCard"), 0);
-}
-
-/// An older server still sends catch-up cards. They are not drawn and do not
-/// break the feed.
-#[test]
-fn a_catchup_entry_from_an_older_server_is_not_drawn() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 2);
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![
-            feed_entry(
-                "evt-join-1",
-                "catchup",
-                serde_json::json!({ "username": "kim", "display_name": "Kim" }),
-            ),
-            daily_entry(0, serde_json::json!({})),
-        ]),
-    });
-    let types = card_types(&h);
-    assert!(!types.iter().any(|t| t == "catchup"), "{types:?}");
-    assert_eq!(types.iter().filter(|t| *t == "daily-recap").count(), 1);
-    let texts = drawn_texts(&h);
-    assert!(!texts.iter().any(|t| t == "CATCH-UP"), "{texts:?}");
-}
 
 fn card_ui(h: &Harness) -> crate::StreamCardUi<'_> {
     h.app().global::<crate::StreamCardUi>()
@@ -11257,517 +9351,13 @@ fn the_format_label_follows_the_rung_and_the_decoded_size() {
 mod art_worker;
 mod sealed;
 mod testers;
+mod zones;
 
 // ---- the recap is never a one-cell card ----
 
-/// `(width, height)` of the first element of a component type.
-fn size_of_type(h: &Harness, name: &str) -> (f32, f32) {
-    let found: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), name).collect();
-    assert!(!found.is_empty(), "no {name} on screen");
-    let s = found[0].size();
-    (s.width, s.height)
-}
-
-/// The card of this type is two grid columns wide: more than half the feed
-/// panel, where a one-column cell is a third of it.
-fn assert_two_columns_wide(h: &Harness, name: &str) {
-    let (w, _) = size_of_type(h, name);
-    let (feed, _) = size_of_type(h, "CrewFeed");
-    assert!(
-        w > feed * 0.5,
-        "{name} is {w} px wide in a {feed} px feed: it is not two columns wide"
-    );
-}
-
-/// The smallest width and the smallest height among the elements of a type:
-/// the size of one grid cell, whichever slot the first one stands in.
-fn cell_size_of_type(h: &Harness, name: &str) -> (f32, f32) {
-    let found: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), name).collect();
-    assert!(!found.is_empty(), "no {name} on screen");
-    found.iter().fold((f32::MAX, f32::MAX), |(w, h), e| {
-        (w.min(e.size().width), h.min(e.size().height))
-    })
-}
-
-/// A crew of five with a weekly recap that has belts, head2head, a daily
-/// recap and sessions, in the given server order.
-fn crew_with_recap_h2h_daily_and_sessions(order: &[&str]) -> Harness {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 5);
-    set_roster(
-        &h,
-        &[
-            ("user-1", "Test User"),
-            ("u2", "Jonas"),
-            ("u3", "Sara"),
-            ("u4", "Max"),
-            ("u5", "Leo"),
-        ],
-    );
-    let entry = |kind: &str| -> FeedEntry {
-        match kind {
-            "recap" => recap_entry(serde_json::json!({
-                "belts_moved": [belt_moved("the_carry", serde_json::json!(4201.0), "h")],
-                "belts_held": belts_held(),
-            })),
-            "h2h" => h2h_entry(
-                5,
-                vec![h2h_title("the_carry", "u2", serde_json::json!(4201.0), "h")],
-                vec![
-                    h2h_pair("u2", 1, 3),
-                    h2h_pair("u3", 2, 2),
-                    h2h_pair("u4", 3, 1),
-                    h2h_pair("u5", 2, 2),
-                ],
-                None,
-            ),
-            "daily" => feed_entry(
-                "daily_0",
-                "daily-recap",
-                serde_json::json!({ "day_start": 1, "total_min": 125, "session_count": 2 }),
-            ),
-            "clip" => clip_entry("clip-1"),
-            "games" => feed_entry(
-                "recent_games",
-                "recent-games",
-                serde_json::json!({
-                    "session_count": 14, "total_min": 1860,
-                    "games": [{ "game_id": "valorant", "game_name": "Valorant", "minutes": 600 }]
-                }),
-            ),
-            other => feed_entry(
-                other,
-                "session",
-                serde_json::json!({"game_name": "Valorant", "duration_min": 60, "active_min": 60}),
-            ),
-        }
-    };
-    h.emit(Event::FeedLoaded {
-        response: feed_of(order.iter().map(|k| entry(k)).collect()),
-    });
-    h
-}
-
-/// Bob's feed drew the recap as a standard cell with "Belts moved" cut off.
-/// The recap is the tall card (two rows, one column) or the wide card (two
-/// columns), whatever order the server sends the cards in.
-#[test]
-fn the_weekly_recap_is_tall_or_wide_never_one_cell() {
-    let orders: [&[&str]; 8] = [
-        &["recap", "h2h", "daily", "s1", "s2"],
-        &["h2h", "recap", "daily", "s1", "s2"],
-        &["daily", "s1", "h2h", "recap", "s2"],
-        &["s1", "s2", "daily", "recap", "h2h"],
-        &["h2h", "daily", "recap", "s1", "s2", "clip", "games"],
-        &["recap", "h2h", "daily", "s1", "clip", "games"],
-        &["h2h", "recap", "s1", "clip", "games"],
-        &["daily", "recap", "h2h", "s1", "games"],
-    ];
-    for order in orders {
-        let h = crew_with_recap_h2h_daily_and_sessions(order);
-        assert!(
-            feed_card_types(&h).iter().any(|t| t == "recap"),
-            "{order:?}: the feed has the recap"
-        );
-        let (cw, ch) = cell_size_of_type(&h, "FeedSlot");
-        let (w, hgt) = size_of_type(&h, "RecapSlot");
-        assert!(
-            w >= cw * 1.6 || hgt >= ch * 1.6,
-            "{order:?}: the recap is {w}x{hgt} beside a {cw}x{ch} cell"
-        );
-        assert!(
-            h.controls_labelled("See the week").len() <= 1,
-            "{order:?}: one control"
-        );
-    }
-}
-
 // ---- head2head is always two columns wide ----
 
-/// A crew of `members` with one pair for each other member, no belt moved.
-fn pairs_feed(members: i32, extra: Vec<FeedEntry>) -> FeedResponse {
-    let pairs: Vec<_> = (2..=members)
-        .map(|n| h2h_pair(&format!("u{n}"), n % 3, 3 - n % 3))
-        .collect();
-    // The server lists the hero first.
-    let mut entries = extra;
-    entries.push(h2h_entry(
-        members,
-        vec![h2h_title("the_carry", "u2", serde_json::json!(4167.0), "h")],
-        pairs,
-        None,
-    ));
-    feed_of(entries)
-}
-
-fn open_pairs_crew(h: &mut Harness, members: i32, extra: Vec<FeedEntry>) {
-    app_with_crew_of(h, members);
-    let names: Vec<(String, String)> = std::iter::once(("user-1".to_string(), "Test User".into()))
-        .chain((2..=members).map(|n| (format!("u{n}"), format!("Member {n}"))))
-        .collect();
-    let roster: Vec<(&str, &str)> = names
-        .iter()
-        .map(|(a, b)| (a.as_str(), b.as_str()))
-        .collect();
-    set_roster(h, &roster);
-    h.emit(Event::FeedLoaded {
-        response: pairs_feed(members, extra),
-    });
-}
-
-/// The pair rows of the pairs card as `(x, y)`.
-fn pair_row_positions(h: &Harness) -> Vec<(f32, f32)> {
-    ElementHandle::find_by_element_type_name(h.app(), "PairRow")
-        .map(|e| (e.absolute_position().x, e.absolute_position().y))
-        .collect()
-}
-
-/// From two members on, head2head is the wide card: two grid columns, with the
-/// pair rows in two columns (two rows of pairs side by side at five members),
-/// a "+N more" line when rows remain, and the seats and the invite under five.
-#[test]
-fn head2head_is_two_columns_wide_at_every_crew_size_with_the_pair_rows_in_two_columns() {
-    for members in [2, 3, 4, 5, 6, 9] {
-        let mut h = Harness::new();
-        open_pairs_crew(&mut h, members, vec![]);
-        assert_eq!(count_of(&h, "Head2headCardPairs"), 1, "{members} members");
-        assert_eq!(count_of(&h, "Head2headCardWide"), 0);
-        assert_two_columns_wide(&h, "Head2headCardPairs");
-
-        let pairs = (members - 1) as usize;
-        let rows = pair_row_positions(&h);
-        assert_eq!(rows.len(), pairs.min(6), "{members} members: {rows:?}");
-        let mut xs: Vec<i32> = rows.iter().map(|r| r.0 as i32).collect();
-        xs.sort();
-        xs.dedup();
-        if pairs >= 2 {
-            assert_eq!(xs.len(), 2, "{members} members: two columns, got {rows:?}");
-        }
-        // Five members: two rows of pairs side by side.
-        if members == 5 {
-            let mut ys: Vec<i32> = rows.iter().map(|r| r.1 as i32).collect();
-            ys.sort();
-            ys.dedup();
-            assert_eq!(ys.len(), 2, "two rows of pairs: {rows:?}");
-        }
-        // Nine members: three rows in each column, and the rows reach the
-        // lower half of the card.
-        if members == 9 {
-            let mut ys: Vec<i32> = rows.iter().map(|r| r.1 as i32).collect();
-            ys.sort();
-            ys.dedup();
-            assert_eq!(ys.len(), 3, "three rows of pairs: {rows:?}");
-            let card = ElementHandle::find_by_element_type_name(h.app(), "Head2headCardPairs")
-                .next()
-                .expect("the pairs card");
-            let mid = card.absolute_position().y + card.size().height / 2.0;
-            let last = *ys.last().expect("rows") as f32;
-            assert!(last > mid - 40.0, "no empty lower half: {last} vs {mid}");
-        }
-        // The line that stands for the pairs that do not fit. It stands in
-        // the last row, not under the rows.
-        let more = pairs.saturating_sub(6);
-        assert_eq!(
-            h.controls_labelled(&format!("+{more} more")).len(),
-            usize::from(more > 0),
-            "{members} members"
-        );
-        // Seats and the red invite stay under five members.
-        let seats = (5 - members).max(0) as usize;
-        assert_eq!(count_of(&h, "OpenSeat"), seats.min(4), "{members} members");
-        assert_eq!(
-            h.controls_labelled("Invite your crew").len(),
-            usize::from(members < 5),
-            "{members} members"
-        );
-    }
-}
-
-/// Behind a hero, head2head takes the first wide slot after it: row 2, two
-/// columns, never the one-column side slot.
-#[test]
-fn head2head_takes_a_wide_slot_behind_a_hero() {
-    let mut hero = feed_entry(
-        "evt-stream-1",
-        "session-preview",
-        serde_json::json!({
-            "streamer_name": "Jonas", "title": "Ranked", "duration_min": 30,
-            "snapshot_urls": ["https://example.invalid/a.jpg"]
-        }),
-    );
-    hero.role = "hero".into();
-    for members in [3, 5] {
-        let mut h = Harness::new();
-        open_pairs_crew(&mut h, members, vec![hero.clone()]);
-        let types = feed_card_types(&h);
-        assert_eq!(types[0], "session-preview", "{types:?}");
-        assert_eq!(count_of(&h, "Head2headCardPairs"), 1);
-        assert_two_columns_wide(&h, "Head2headCardPairs");
-    }
-}
-
-/// A belt that moved for the viewer keeps the versus hero.
-#[test]
-fn the_versus_hero_stays_the_hero_when_a_belt_moved_for_the_viewer() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 2);
-    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
-    let now = crate::head2head::now_ms();
-    let moved = serde_json::json!({
-        "title_id": "the_carry", "holder_user_id": "u2", "value": 4201.0, "unit": "h",
-        "since_ms": now - 1000, "moved_at_ms": now - 1000, "previous_holder_user_id": "user-1",
-    });
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![h2h_entry(
-            2,
-            vec![moved.clone()],
-            vec![h2h_pair("u2", 0, 1)],
-            Some(moved),
-        )]),
-    });
-    assert_eq!(count_of(&h, "VersusHero"), 1);
-    assert_eq!(count_of(&h, "Head2headCardPairs"), 0);
-}
-
 // ---- Crew history and the m3llo+ upsell ----------------------------------
-
-/// A feed with the given `this_week` entries and `memory` entries.
-fn feed_with_memory(this_week: Vec<FeedEntry>, memory: Vec<FeedEntry>) -> FeedResponse {
-    FeedResponse {
-        crew_id: "crew-0".into(),
-        sections: vec![
-            FeedSection {
-                id: "this_week".into(),
-                entries: this_week,
-            },
-            FeedSection {
-                id: "memory".into(),
-                entries: memory,
-            },
-        ],
-        joined: vec![],
-    }
-}
-
-/// The m3llo+ upsell as the server sends it, pinned at the end of memory.
-fn locked_entry() -> FeedEntry {
-    let mut e = feed_entry("locked", "locked", serde_json::json!({}));
-    e.role = "locked".into();
-    e
-}
-
-fn crew_history_shows(h: &Harness) -> bool {
-    drawn_texts(h).iter().any(|t| t == "Crew history")
-}
-
-fn upsell_shows(h: &Harness) -> bool {
-    count_of(h, "LockedCard") > 0
-        || drawn_texts(h)
-            .iter()
-            .any(|t| t == "Unlock your crew's full story")
-}
-
-/// A crew whose Crew history holds two opened recaps (week 1 of the week
-/// start 11, with belts, and 12, without), in a window `width` wide.
-fn crew_history_of_two_recaps(width: u32, top_game: &str) -> Harness {
-    let mut h = Harness::new();
-    // Both recaps are open: the cards show, not the sealed ones.
-    h.settings().borrow_mut().sealed_opened.insert(
-        "crew-0".into(),
-        vec![crate::sealed::recap_key(11), crate::sealed::recap_key(12)],
-    );
-    app_with_crew_of(&mut h, 5);
-    set_roster(
-        &h,
-        &[
-            ("user-1", "Test User"),
-            ("u2", "Jonas"),
-            ("u3", "Sara"),
-            ("u4", "Max"),
-            ("u5", "Leo"),
-        ],
-    );
-    // Tall enough for the memory band to stand on screen.
-    h.app()
-        .window()
-        .set_size(slint::PhysicalSize::new(width, 3600));
-    let old_recap = |id: &str, week_start: i64, belts: bool| {
-        let mut week = if belts {
-            week_with_everything()
-        } else {
-            week_without_belts()
-        };
-        week["week_start"] = serde_json::json!(week_start);
-        week["top_game"] = serde_json::json!(top_game);
-        let mut e = recap_entry(week);
-        e.id = id.into();
-        e
-    };
-    h.emit(Event::FeedLoaded {
-        response: feed_with_memory(
-            vec![h2h_entry(5, vec![], vec![], None)],
-            vec![
-                old_recap("recap-a", 11, true),
-                old_recap("recap-b", 12, false),
-            ],
-        ),
-    });
-
-    h
-}
-
-/// A recap in Crew history is the tall card as in the week: one column, two
-/// rows, with or without belts. "Most active" stands inside it.
-#[test]
-fn a_recap_in_crew_history_is_the_tall_card() {
-    let h = crew_history_of_two_recaps(1280, "Rocket League");
-    let slots: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), "RecapSlot").collect();
-    assert_eq!(slots.len(), 2, "both recaps are drawn");
-    assert_eq!(
-        h.controls_labelled("See the week").len(),
-        0,
-        "no control on the card"
-    );
-    let kickers: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), "Text")
-        .filter(|e| e.accessible_label().is_some_and(|l| l == "MOST ACTIVE"))
-        .collect();
-    assert_eq!(kickers.len(), 2);
-    let mut rows: Vec<i32> = Vec::new();
-    for slot in &slots {
-        let card = rect_of(slot);
-        let r = ((slot.size().height + 12.0) / (232.0 + 12.0)).round() as i32;
-        rows.push(r);
-        assert!(
-            slot.size().width < slot.size().height,
-            "one column, not a wide card: {card:?}"
-        );
-        for inner in kickers.iter().map(rect_of) {
-            let centre = ((inner.0 + inner.2) / 2.0, (inner.1 + inner.3) / 2.0);
-            let inside = centre.0 >= card.0
-                && centre.0 <= card.2
-                && centre.1 >= card.1
-                && centre.1 <= card.3;
-            if inside {
-                assert!(
-                    inner.0 >= card.0 - 0.5
-                        && inner.2 <= card.2 + 0.5
-                        && inner.1 >= card.1 - 0.5
-                        && inner.3 <= card.3 + 0.5,
-                    "{inner:?} runs off the card {card:?}"
-                );
-            }
-        }
-    }
-    rows.sort();
-    assert_eq!(rows, vec![2, 2], "two rows, with or without belts");
-    // Each card holds its own label.
-    for kind in [&kickers] {
-        for slot in &slots {
-            let card = rect_of(slot);
-            let n = kind
-                .iter()
-                .map(rect_of)
-                .filter(|r| {
-                    r.0 >= card.0 - 0.5
-                        && r.2 <= card.2 + 0.5
-                        && r.1 >= card.1 - 0.5
-                        && r.3 <= card.3 + 0.5
-                })
-                .count();
-            assert_eq!(n, 1, "one inside the card {card:?}");
-        }
-    }
-}
-
-/// "Counter-Strike 2" is the top game in the 2 by 2 numbers of the tall card in
-/// Crew history. The name is one line (a line is 15 px high, two are 30) at
-/// every window width. At the default width, 1600 px, the cell is wide enough
-/// to show all of it (124 px at 12 px); a narrower card elides it.
-#[test]
-fn the_top_game_name_stays_on_one_line() {
-    for width in [1200, 1280, 1440, 1600] {
-        let h = crew_history_of_two_recaps(width, "Counter-Strike 2");
-        let names: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), "Text")
-            .filter(|e| {
-                e.accessible_label()
-                    .is_some_and(|l| l == "Counter-Strike 2")
-            })
-            .collect();
-        assert_eq!(names.len(), 2, "the top game of each recap");
-        for name in &names {
-            let r = rect_of(name);
-            assert!(r.3 - r.1 < 20.0, "{width}: {r:?} wraps to a second line");
-            if width == 1600 {
-                assert!(r.2 - r.0 >= 120.0, "{width}: {r:?} is elided");
-            }
-        }
-    }
-}
-
-/// Day 0: the server still sends the upsell, and the feed shows neither the
-/// "Crew history" heading nor the m3llo+ card. A crew with no history has none
-/// of it, so m3llo+ is not offered on an empty feed.
-#[test]
-fn a_new_crew_shows_no_crew_history_and_no_m3llo_plus_card() {
-    for plus in [false, true] {
-        let mut h = Harness::new();
-        h.settings().borrow_mut().plus_upsell_enabled = plus;
-        app_with_crew_of(&mut h, 1);
-        set_roster(&h, &[("user-1", "Test User")]);
-        h.emit(Event::FeedLoaded {
-            response: feed_with_memory(
-                vec![h2h_entry(1, vec![], vec![], None)],
-                vec![locked_entry()],
-            ),
-        });
-        assert!(
-            h.app().get_memory_cards().row_count() == 0,
-            "the section is empty (flag {plus})"
-        );
-        assert!(!crew_history_shows(&h), "no heading (flag {plus})");
-        assert!(!upsell_shows(&h), "no upsell (flag {plus})");
-    }
-}
-
-/// With history the heading shows. The upsell stays off until the client flag
-/// `plus_upsell_enabled` is on.
-#[test]
-fn a_crew_with_history_shows_crew_history_and_the_upsell_only_behind_the_flag() {
-    let memory = || vec![clip_entry("old-1"), clip_entry("old-2"), locked_entry()];
-    let this_week = || vec![h2h_entry(2, vec![], vec![h2h_pair("u2", 1, 1)], None)];
-
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 2);
-    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
-    h.emit(Event::FeedLoaded {
-        response: feed_with_memory(this_week(), memory()),
-    });
-    assert!(crew_history_shows(&h), "{:?}", drawn_texts(&h));
-    assert_eq!(h.app().get_memory_cards().row_count(), 2, "two clips");
-    assert!(!upsell_shows(&h), "the flag is off by default");
-
-    let mut h = Harness::new();
-    h.settings().borrow_mut().plus_upsell_enabled = true;
-    app_with_crew_of(&mut h, 2);
-    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
-    h.emit(Event::FeedLoaded {
-        response: feed_with_memory(this_week(), memory()),
-    });
-    assert!(crew_history_shows(&h));
-    assert!(upsell_shows(&h), "the flag shows the card at the end");
-    let last = h
-        .app()
-        .get_memory_cards()
-        .row_data(2)
-        .expect("three memory cards");
-    assert_eq!(last.card_type.as_str(), "locked", "pinned at the end");
-}
-
-/// The flag defaults to off.
-#[test]
-fn the_plus_upsell_flag_defaults_to_off() {
-    assert!(!crate::settings::Settings::default().plus_upsell_enabled);
-}
 
 // ---------------------------------------------------------------------------
 // About: the ABOUT tab, the credits and the Third-party notices view

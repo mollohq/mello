@@ -137,6 +137,12 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("admin_capture_policy_set", AdminCapturePolicySetRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("admin_feed_config_get", AdminFeedConfigGetRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("admin_feed_config_set", AdminFeedConfigSetRPC); err != nil {
+		return err
+	}
 	if err := initializer.RegisterRpc("admin_discover_curation_get", AdminDiscoverCurationGetRPC); err != nil {
 		return err
 	}
@@ -337,9 +343,6 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("post_clip", PostClipRPC); err != nil {
 		return err
 	}
-	if err := initializer.RegisterRpc("crew_timeline", CrewTimelineRPC); err != nil {
-		return err
-	}
 	if err := initializer.RegisterRpc("clip_upload_url", ClipUploadURLRPC); err != nil {
 		return err
 	}
@@ -359,12 +362,6 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 		return err
 	}
 	if err := initializer.RegisterRpc("diagnostic_log_upload_url", DiagnosticLogUploadURLRPC); err != nil {
-		return err
-	}
-	if err := initializer.RegisterRpc("crew_clips", CrewClipsRPC); err != nil {
-		return err
-	}
-	if err := initializer.RegisterRpc("crew_recaps", CrewRecapsRPC); err != nil {
 		return err
 	}
 	if err := initializer.RegisterRpc("crew_feed", CrewFeedRPC); err != nil {
@@ -411,8 +408,10 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 }
 
 const (
-	ProtocolVersion   = 1
-	MinClientProtocol = 1
+	// 2: the crew feed is the zone feed (crew_feed_zones.go). A client of
+	// protocol 1 reads sections that no longer exist, so it must update.
+	ProtocolVersion   = 2
+	MinClientProtocol = 2
 )
 
 func HealthCheckRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {

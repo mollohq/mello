@@ -11,6 +11,7 @@ mod stream_cards;
 // the callbacks and the stream timer.
 pub(crate) mod streaming;
 mod voice;
+pub(crate) mod zones;
 
 use mello_core::Event;
 
@@ -194,8 +195,7 @@ fn dispatch(ctx: &AppContext, event: Event) {
         | Event::ClipPlaybackProgress { .. }
         | Event::ClipPlaybackFinished
         | Event::FeedLoaded { .. }
-        // Raw timeline is kept for later deep-scroll; no UI handler yet.
-        | Event::TimelineLoaded { .. } => clip::handle(ctx, event),
+        | Event::FeedHistoryLoaded { .. } => clip::handle(ctx, event),
 
         // Game clips (F8)
         Event::GameClipStateChanged { .. }

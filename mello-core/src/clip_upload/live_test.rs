@@ -160,13 +160,18 @@ fn a_game_clip_goes_up_to_the_local_stack() {
     );
 
     // The crew's clip carries both URLs and the game fields.
-    let page = rt
-        .block_on(nk.rpc("crew_clips", &serde_json::json!({ "crew_id": crew_id })))
-        .expect("crew_clips");
-    let page: serde_json::Value = serde_json::from_str(&page).expect("json");
-    let stored = page["clips"]
+    let feed = rt
+        .block_on(nk.rpc("crew_feed", &serde_json::json!({ "crew_id": crew_id })))
+        .expect("crew_feed");
+    let feed: serde_json::Value = serde_json::from_str(&feed).expect("json");
+    let stored = feed["zones"]["clips"]
         .as_array()
-        .and_then(|clips| clips.iter().find(|c| c["clip_id"] == clip_id.as_str()))
+        .and_then(|clips| {
+            clips
+                .iter()
+                .map(|e| &e["data"])
+                .find(|c| c["clip_id"] == clip_id.as_str())
+        })
         .unwrap_or_else(|| panic!("{clip_id} is not in the crew's clips"))
         .clone();
     println!("stored: {stored}");

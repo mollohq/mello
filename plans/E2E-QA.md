@@ -685,7 +685,7 @@ All new fields read UI state that the app already has. Lists hold at most 20 row
 | `crew_members` | id, name, role, online, `avatar_key` (a fingerprint of the avatar image) | CREW-06, SET-01 |
 | `messages[]` | Adds id, reply-to name and preview, edited, deleted, gif, mentions me | CHAT-02, CHAT-03 |
 | `stream` | Hosting, watching, size, viewer count, quality preset, frames presented, stream cards | STREAM-01..03 |
-| `feed_cards`, `clip` | Feed cards; clip path, paused, progress, duration | FEED-01 |
+| `feed_zones`, `clip` | The zone feed (Stage, Board, clips, People, sessions, Crew history); clip path, paused, progress, duration | FEED-01 to FEED-12 |
 | `audio` | Device names, push to talk, its key | SET-02 |
 | `riot`, `update_available`, `app_version` | The settings and the update toast | SET-03, UPD-01 |
 | `/events` | `connected` and `reconnecting` on `ConnectionStateChanged` | VOICE-05 |

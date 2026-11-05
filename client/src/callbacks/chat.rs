@@ -265,6 +265,7 @@ pub fn wire(ctx: &AppContext) {
     {
         let cmd = ctx.cmd_tx.clone();
         let settings = ctx.settings.clone();
+        let last_feed = ctx.last_feed.clone();
         let app_weak = ctx.app.as_weak();
         let scroll_ctx = Rc::new(ChatSendScroll {
             scroll: ctx.chat_scroll.clone(),
@@ -281,17 +282,26 @@ pub fn wire(ctx: &AppContext) {
                     return;
                 };
                 let crew_id = app.get_active_crew_id().to_string();
-                let feed = app.get_feed_cards();
-                let Some(row) = (0..feed.row_count())
-                    .find(|&i| feed.row_data(i).is_some_and(|c| c.id == card_id))
-                else {
+                // The member joined in the last 24 hours (`zones.people`).
+                let Some(join_name) = last_feed.borrow().as_ref().and_then(|f| {
+                    f.zones
+                        .people
+                        .joined
+                        .iter()
+                        .find(|j| j.user_id == user_id)
+                        .map(|j| j.name.clone())
+                }) else {
                     return;
                 };
-                let Some(mut card) = feed.row_data(row) else {
-                    return;
-                };
-                let name = card.actor_name.to_string();
-                if crew_id.is_empty() || name.trim().is_empty() || card.said_hi {
+                // The roster name first: the join event keeps the name of then.
+                let name = app
+                    .get_members()
+                    .iter()
+                    .find(|m| m.id.as_str() == user_id)
+                    .map(|m| m.name.to_string())
+                    .filter(|n| !n.trim().is_empty())
+                    .unwrap_or(join_name);
+                if crew_id.is_empty() || name.trim().is_empty() {
                     return;
                 }
                 {
@@ -311,9 +321,12 @@ pub fn wire(ctx: &AppContext) {
                     mentions: vec![mention],
                 });
                 scroll_ctx.fire();
-                // The card reads "Said hi" and goes off.
-                card.said_hi = true;
-                feed.set_row_data(row, card);
+                // The button reads "Said hi" and goes off.
+                let mut z = app.get_feed_zones();
+                if z.say_hi_card == card_id {
+                    z.said_hi = true;
+                    app.set_feed_zones(z);
+                }
             });
     }
     {

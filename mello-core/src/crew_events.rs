@@ -174,62 +174,22 @@ pub struct UserGameStatsListResponse {
     pub games: Vec<UserGameStats>,
 }
 
-// --- Timeline (crew feed) ---
+// --- Crew feed (crew_feed) ---
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TimelineEntry {
-    pub id: String,
-    #[serde(rename = "type")]
-    pub entry_type: String,
-    #[serde(default)]
-    pub actor_id: String,
-    #[serde(default)]
-    pub ts: i64,
-    #[serde(default)]
-    pub score: i32,
-    #[serde(default)]
-    pub data: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TimelineResponse {
-    pub crew_id: String,
-    #[serde(default)]
-    pub entries: Vec<TimelineEntry>,
-    #[serde(default)]
-    pub cursor: Option<String>,
-    #[serde(default)]
-    pub has_more: bool,
-}
-
-// --- Curated feed (crew_feed) ---
-//
-// role/size/type stay plain strings so the server can ship new curation
-// treatments without a client release; unknown values degrade gracefully.
-
+/// One card of the zones. `type` stays a plain string: the client skips a
+/// type it does not know.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeedEntry {
     pub id: String,
     #[serde(rename = "type")]
     pub entry_type: String,
     #[serde(default)]
-    pub role: String,
-    #[serde(default)]
-    pub size: String,
-    #[serde(default)]
     pub ts: i64,
     #[serde(default)]
     pub data: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FeedSection {
-    pub id: String,
-    #[serde(default)]
-    pub entries: Vec<FeedEntry>,
-}
-
-/// A member who joined the crew in the last 24 hours (`FeedResponse::joined`),
+/// A member who joined the crew in the last 24 hours (`ZonePeople::joined`),
 /// from the member_joined events of the ledger. Newest first, at most three.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FeedJoin {
@@ -249,10 +209,124 @@ pub struct FeedJoin {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeedResponse {
     pub crew_id: String,
+    /// The zone feed (`crew_feed_zones.go`).
     #[serde(default)]
-    pub sections: Vec<FeedSection>,
+    pub zones: FeedZones,
+}
+
+// --- Zone feed ---
+//
+// Five fixed zones and Crew history. The server picks what each zone holds;
+// the client draws it and adds what is client state (live streams, live
+// sessions, voice, sealed and unread state). Free is the last `free_days`
+// days; older is Crew history, gated per viewer (`plus`).
+
+/// The zones payload.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FeedZones {
+    #[serde(default)]
+    pub free_days: i32,
+    #[serde(default)]
+    pub plus: bool,
+    #[serde(default)]
+    pub stage: ZoneStage,
+    #[serde(default)]
+    pub board: ZoneBoard,
+    /// The head2head data of the crew for the viewer (titles, pairs, own
+    /// values), as the `head2head` feed entry carries it.
+    #[serde(default)]
+    pub head2head: Option<serde_json::Value>,
+    /// Every clip of the free window, game clips first, then newest.
+    #[serde(default)]
+    pub clips: Vec<FeedEntry>,
+    #[serde(default)]
+    pub people: ZonePeople,
+    /// Every game, voice and stream session of the free window, newest first.
+    #[serde(default)]
+    pub sessions: Vec<FeedEntry>,
+    /// The games most members have, on a quiet week with no session.
+    #[serde(default)]
+    pub installed: Vec<serde_json::Value>,
+    /// One page of past weeks, newest first.
+    #[serde(default)]
+    pub history: Vec<ZoneHistoryWeek>,
+    /// The `history_before` of the next page. Zero at the end.
+    #[serde(default)]
+    pub history_next: i64,
+}
+
+/// The one thing to watch: `kind` is `game_clip`, `stream_replay` (with an
+/// entry), `belt` or `own_belts` (built from `head2head`), or empty.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ZoneStage {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub entry: Option<FeedEntry>,
+}
+
+/// The crew in numbers. `mode`: `tabs`, `quiet`, `past` or `solo`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ZoneBoard {
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub recap: Option<FeedEntry>,
+    /// The daily recap of the current UTC day.
+    #[serde(default)]
+    pub today: Option<FeedEntry>,
+    #[serde(default)]
+    pub last_activity_ms: i64,
+    #[serde(default)]
+    pub players_last_week: Vec<String>,
+}
+
+/// The first five and the joins of 24 hours. Voice is client state.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ZonePeople {
+    #[serde(default)]
+    pub member_count: i32,
+    #[serde(default)]
+    pub open_seats: i32,
     #[serde(default)]
     pub joined: Vec<FeedJoin>,
+}
+
+/// One past week of Crew history. `locked`: counts and teasers only.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ZoneHistoryWeek {
+    #[serde(default)]
+    pub week_start: i64,
+    #[serde(default)]
+    pub week_number: i32,
+    #[serde(default)]
+    pub locked: bool,
+    #[serde(default)]
+    pub clip_count: i32,
+    #[serde(default)]
+    pub stream_count: i32,
+    #[serde(default)]
+    pub recap: Option<FeedEntry>,
+    #[serde(default)]
+    pub items: Vec<FeedEntry>,
+    #[serde(default)]
+    pub teasers: Vec<ZoneTeaser>,
+}
+
+/// A locked clip or stream: who, what kind, how long. No URL.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ZoneTeaser {
+    /// `clip`, `voice` or `stream`.
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub actor_id: String,
+    #[serde(default)]
+    pub actor_name: String,
+    #[serde(default)]
+    pub duration_seconds: f64,
+    #[serde(default)]
+    pub ts: i64,
 }
 
 // --- PostClip ---

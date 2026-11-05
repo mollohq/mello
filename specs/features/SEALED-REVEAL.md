@@ -1,6 +1,6 @@
 # SEALED-REVEAL
 
-> **Component:** Crew Feed, Head2head, Weekly Recap
+> **Component:** Crew Feed (zones), Head2head, Weekly Recap
 > **Status:** shipped (v0.7.0)
 > **Depends on:** `specs/features/HEAD2HEAD.md`, `specs/19-FEED-CURATION-PERSONAL-STATS.md`
 > **Origin:** the fx lab. Its look and motion are approved.
@@ -17,17 +17,17 @@ the card in the centre of the feed. A second click sends it back to its slot, op
 | Centre view | `client/ui/panels/sealed_stage.slint` | Made with `if` when a card leaves its slot. |
 | Belt data for the UI | `client/src/sealed.rs` | Key, seed, code commands, count-up value. |
 | Opened state | `client/src/settings.rs` | `sealed_opened`, by crew. Local only. |
-| State port | `client/src/e2e_state.rs` | `sealed {belts, recap, open_center}`. |
+| State port | `client/src/e2e_state.rs` | `sealed {belts, own, recap, open_center, resting}`. |
 
 Sealed cards are:
 
-- the chip of a belt that moved, in the head2head pair rows, the versus hero, the
-  weekly recap and the daily recap;
-- the weekly recap card.
+- the chip of a belt that moved, in its row on the Board and in the belts moved
+  of the weekly recap;
+- the weekly recap, which takes the Board while it is sealed;
+- the own chips on the Stage of a new crew (section 9).
 
-- the own chips of the solo head2head card of a new crew (section 9).
-
-The belt hero (frame E) and the belt push keep their copy.
+The belt hero of the Stage shows only an open belt: while the belt is sealed on
+the board, the Stage does not show it. The belt push keeps its copy.
 
 ## 2. Sealed looks
 
@@ -101,9 +101,9 @@ Sizes in the centre:
   (Oxanium 700 120 px, unit in Barlow 300 34 px), the stat sentence (Barlow 300 18 px),
   and on the right the holder (avatar 112 px, name Oxanium 600 34 px) and
   "took it from" with the previous holder (avatar 22 px).
-- **Recap:** the recap card at the size of its slot (the tall card, one column and two rows), scaled by `min(1.1, (panel height - 2 * 40 px) / h, (panel width - 2 * 40 px) / w)`: it grows to 1.1 as in the fx lab and never past the panel. The panel is the clipped stage, the feed panel. The card stands in the centre of the panel and keeps 40 px on every side.
+- **Recap:** the recap card at the size of the sealed recap on the Board (one column, two rows), scaled by `min(1.1, (panel height - 2 * 40 px) / h, (panel width - 2 * 40 px) / w)`: it grows to 1.1 as in the fx lab and never past the panel. The panel is the clipped stage, the feed panel. The card stands in the centre of the panel and keeps 40 px on every side.
   The back clears with radius `clear * 470 px`, 80 px soft edge. The numbers count up, the top game fades in with them.
-  The revealed card has no control. The card in the slot is the opened view.
+  The revealed card has no control. Back on the Board, the week is the Week tab.
 
 The count-up has three kinds: a count with thousands (one decimal below 100 hours),
 hours and minutes (`4 h 05`), and a clock (`03:22`). `sealed.rs` sends the number and
@@ -123,13 +123,12 @@ The stat sentences are the Stat column of HEAD2HEAD.md section 2, in `sealed.rs`
   for 7 days after its week ends, and its key holds the week start.
 - A click on any slot of a belt opens the belt in every slot. While the belt is in the
   centre, its other slots stay sealed. They open when the card lands.
-- The key is stored when the card leaves its slot. The feed cards are built again
+- The key is stored when the card leaves its slot. The zones are built again
   when the card lands.
-- Opening a belt clears the unread dot on its pair rows. A pair row has the dot only
-  for a recent move that is not opened.
-- The versus hero keeps its tally. Its moved chip is sealed like any chip.
-- The recap opens in the centre and returns to its slot open. There is no
-  full-screen recap.
+- A sealed belt hides its unread dot. Once opened, the row of a recent move that
+  the viewer has not seen wears it (HEAD2HEAD.md, "Unread belt").
+- The recap opens in the centre. When it lands, the opened week is the Week tab
+  of the Board. There is no full-screen recap.
 - A belt that the viewer does not see sealed (a chip of a title that has not moved)
   has an empty key and is never sealed.
 
@@ -230,8 +229,8 @@ Skia frames.
 
 ## 9. Day 0: the own chips of a new crew
 
-A crew of one has no belt that moved. The solo head2head card (HEAD2HEAD.md section 5)
-shows the viewer's own values as chips. So that the first user gets the reveal too,
+A crew of one has no belt that moved. The Stage (HEAD2HEAD.md section 5, "Own
+chips") shows the viewer's own values as chips. So that the first user gets the reveal too,
 those chips arrive sealed.
 
 | Part | Rule |
@@ -247,8 +246,8 @@ those chips arrive sealed.
 | Later days | A key that was opened once stays open when the value changes, because the key has no value |
 
 - Each own chip opens alone. The other three wait in their slots while one is in the centre.
-- The sealed solo card keeps the headline "Go head2head with your crew", the four open seats and the invite.
-- A crew of two or more has no own chips. Its pair chips follow sections 2 to 4.
+- The Stage keeps "Go head2head with your crew". The People zone keeps the four open seats and the invite.
+- A crew of two or more has no own chips. Its belts follow sections 2 to 4.
 - State port: `sealed.own`.
 - Harness tests: a new crew seals all own chips, opening one opens only that one, a reopened crew keeps opened chips open when the value changes, and a crew older than 7 days has them open (`flow_tests/sealed.rs`).
 - Journey: `feed-solo-head2head` opens one own chip, checkpoints the face and closes it.

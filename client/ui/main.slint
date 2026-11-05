@@ -28,7 +28,6 @@ import {
     StreamCardData,
     YouStripData,
     GameStatsCardData,
-    JoinedRowData,
     BeltHeroData,
     HeroStreamData,
     GameIntegrationData,
@@ -48,6 +47,7 @@ import { VoiceChannelView } from "panels/voice_channel_view.slint";
 import { ChatPanel } from "panels/chat_panel.slint";
 import { ControlBar } from "panels/control_bar.slint";
 import { CrewFeed } from "panels/crew_feed.slint";
+import { ZonesData, PlusSoonModal } from "components/feed_board.slint";
 import { Clock, SealedUi } from "components/sealed.slint";
 import { SettingsModal } from "panels/settings_modal.slint";
 import { NewCrewModal } from "panels/new_crew_modal.slint";
@@ -72,7 +72,7 @@ export { ClipPlayerUi }
 // --- end stage 9 ---
 
 
-export { ChatFocus, BeltReveal, RecapSeal, Clock, SealedUi, CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, JoinedRowData, BeltHeroData, HeroStreamData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, NoticeEntryData, TesterData, InvitePersonData, Theme, VideoRect, FeedView, ForceUpdateWindow }
+export { ChatFocus, BeltReveal, RecapSeal, Clock, SealedUi, CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, BeltHeroData, HeroStreamData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, NoticeEntryData, TesterData, InvitePersonData, Theme, VideoRect, FeedView, ForceUpdateWindow }
 
 export component MainWindow inherits Window {
     title: "m3llo";
@@ -504,7 +504,6 @@ export component MainWindow inherits Window {
     in-out property <bool> invite-share-copied: false;
     callback invite-copy-link();
     callback invite-share-requested();
-    callback hide-invite-card();
 
     // --- Crew settings modal ---
     in-out property <bool> crew-settings-open: false;
@@ -531,27 +530,20 @@ export component MainWindow inherits Window {
     callback crew-context-leave();
 
     // --- Crew feed ---
-    in property <[FeedCardData]> feed-cards: [];
-    in property <[FeedCardData]> memory-cards: [];
-    in property <int> memory-rows: 0;
     in property <YouStripData> you-strip;
     // Personal stats profile (spec 19 A2), opened from the You strip.
     in-out property <bool> stats-profile-open: false;
     in property <[GameStatsCardData]> stats-profile-games: [];
     // Fired on open so the client can refresh user_game_stats.
     callback stats-profile-opened();
-    in property <bool> feed-cold-start: true;
-    // Skeleton trio (CLIPS 8): which of the three dashed cells show.
-    in property <bool> feed-skeleton-stream: false;
-    in property <bool> feed-skeleton-voice-clip: false;
-    in property <bool> feed-skeleton-recap: false;
-    in-out property <bool> feed-invite-line: false;
-    in property <[JoinedRowData]> feed-quiet: [];
-    // The dormant strip: one strip above the grid (frame F).
-    in property <[FeedCardData]> feed-dormant: [];
-    in property <bool> feed-has-more: false;
+    in property <ZonesData> feed-zones;
+    /// A locked week or the m3llo+ strip of the zone feed: the coming soon
+    /// modal opens (no purchase flow yet).
+    callback zones-plus-clicked();
+    in-out property <bool> plus-soon-open: false;
+    /// The zone feed scrolled near the end: load the next page of history.
+    callback zones-history-more();
     in property <int> feed-clip-count: 0;
-    callback feed-show-more-clicked();
     callback session-seen(/* session_id */ string);
 
     callback session-preview-request-frame(/* session_id */ string, /* index */ int);
@@ -1115,10 +1107,7 @@ export component MainWindow inherits Window {
                         CrewFeed {
                             width: parent.width;
                             height: parent.height;
-                            cards: root.feed-cards;
-                            memory-cards: root.memory-cards;
-                            memory-rows: root.memory-rows;
-                            you-strip: root.you-strip;
+                            zones: root.feed-zones;
                             stream-cards: root.active-stream-cards;
                             is-hosting: root.is-hosting;
                             is-watching: root.is-watching;
@@ -1127,23 +1116,7 @@ export component MainWindow inherits Window {
                             stream-ui-render-fps: root.dbg-stream-ui-render-fps;
                             stream-paused: root.stream-paused;
                             stream-paused-reason: root.stream-paused-reason;
-                            is-cold-start: root.feed-cold-start;
-                            skeleton-stream: root.feed-skeleton-stream;
-                            skeleton-voice-clip: root.feed-skeleton-voice-clip;
-                            skeleton-recap: root.feed-skeleton-recap;
-                            invite-line: root.feed-invite-line;
-                            quiet-rows: root.feed-quiet;
-                            dormant-cards: root.feed-dormant;
-                            feed-has-more: root.feed-has-more;
                             clip-count: root.feed-clip-count;
-                            feed-show-more-clicked => {
-                                root.feed-show-more-clicked();
-                            }
-                            you-strip-clicked => {
-                                root.stats-profile-open = true;
-                                root.stats-profile-opened();
-                            }
-                            crew-name: root.active-crew-name;
                             clip-playing-path: root.clip-playing-path;
                             clip-progress: root.clip-progress;
                             clip-paused: root.clip-paused;
@@ -1151,12 +1124,8 @@ export component MainWindow inherits Window {
                             clip-position-text: root.clip-position-text;
                             clip-duration-text: root.clip-duration-text;
                             clip-duration-ms: root.clip-duration-ms;
-                            stop-stream-clicked => {
-                                root.stop-stream();
-                            }
-                            stop-watching-clicked => {
-                                root.stop-watching();
-                            }
+                            stop-stream-clicked => { root.stop-stream(); }
+                            stop-watching-clicked => { root.stop-watching(); }
                             watch-stream-clicked(host-id, session-id, w, h) => {
                                 root.watch-stream(host-id, session-id, w, h);
                             }
@@ -1173,21 +1142,20 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
-                            seek-clip-ms(m) => {
-                                root.seek-clip-ms(m);
+                            seek-clip-ms(m) => { root.seek-clip-ms(m); }
+                            invite-clicked => { root.invite-share-requested(); }
+                            start-voice-clicked(channel-id) => { root.join-voice-channel(channel-id); }
+                            plus-clicked => {
+                                root.plus-soon-open = true;
+                                root.zones-plus-clicked();
                             }
-                            invite-clicked => {
-                                root.invite-share-requested();
+                            you-strip: root.you-strip;
+                            you-strip-clicked => {
+                                root.stats-profile-open = true;
+                                root.stats-profile-opened();
                             }
-                            start-voice-clicked(channel-id) => {
-                                root.join-voice-channel(channel-id);
-                            }
-                            hide-invite-clicked => {
-                                root.hide-invite-card();
-                            }
-                            session-seen(id) => {
-                                root.session-seen(id);
-                            }
+                            history-more => { root.zones-history-more(); }
+                            session-seen(id) => { root.session-seen(id); }
                             session-preview-request-frame(sid, idx) => {
                                 root.session-preview-request-frame(sid, idx);
                             }
@@ -1727,6 +1695,10 @@ export component MainWindow inherits Window {
         save(url) => { root.chat-image-save(url); }
         copy(url) => { root.chat-image-copy(url); }
         shown(i) => { root.chat-viewer-shown(i); }
+    }
+
+    if plus-soon-open: PlusSoonModal {
+        close-requested => { root.plus-soon-open = false; }
     }
 
     if invite-share-open: InviteShareModal {

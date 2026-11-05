@@ -1,6 +1,6 @@
-// FEED-11: the day card. A daily recap with sessions to list is two columns
-// wide with the day's sessions as rows (spec 19 section 3.5a, mockup frame H).
-// A voice session is a row there, never a card.
+// FEED-11: today on the board. Three members play today: the Today tab of
+// the board counts the sessions, the members and the top game, and the
+// Sessions zone holds the sessions as cards. Spec features/CREW-FEED-ZONES.md.
 
 import { journey } from "../../tools/mello-driver/src/journey.ts";
 import { onboardWithNewCrew } from "./lib/onboarding.ts";
@@ -28,8 +28,8 @@ export default journey({
           "Public",
         );
         await bob.waitFor(
-          "the head2head card of a crew of one",
-          (s) => s.head2head.present,
+          "the solo board of a crew of one",
+          (s) => s.feed_zones.board === "solo",
           30_000,
         );
         code = await readInviteCode(bob);
@@ -74,35 +74,30 @@ export default journey({
     );
 
     await step(
-      "the day card: today so far, two columns, the sessions as rows",
+      "today on the board: the sessions, the members and the top game",
       async () => {
         await bob.restart();
         const s = await bob.waitFor(
-          "the day card",
-          (st) => st.daily_recap.present && st.daily_recap.wide,
+          "today with three sessions",
+          (st) =>
+            !st.feed_zones.today.empty && st.feed_zones.today.sessions >= 3,
           45_000,
         );
-        const d = s.daily_recap;
+        const t = s.feed_zones.today;
+        expect(t.on >= 3, `three members took part, got ${t.on}`);
+        expect(t.hangout !== "", "the hangout time shows");
         expect(
-          d.day === "Today so far",
-          `the day that is not over, got "${d.day}"`,
+          t.top_game === "Counter-Strike 2",
+          `the top game of the day, got "${t.top_game}"`,
+        );
+        const games = s.feed_zones.sessions.filter(
+          (c) => c.card_type === "game-session",
         );
         expect(
-          d.rows >= 1 && d.rows <= 2,
-          `one or two session rows on the card, got ${d.rows}`,
+          games.length >= 1,
+          `the sessions of the day are cards in the Sessions zone, got ${s.feed_zones.sessions.map((c) => c.card_type).join(",")}`,
         );
-        expect(d.sessions >= 3, `three sessions counted, got ${d.sessions}`);
-        expect(d.members >= 3, `three members took part, got ${d.members}`);
-        expect(
-          s.feed_cards.filter((c) => c.card_type === "daily-recap").length ===
-            1,
-          "one daily recap card",
-        );
-        expect(
-          s.feed_cards.some((c) => c.card_type === "recent-games"),
-          "the recent games card stays",
-        );
-        await bob.checkpoint("day-card");
+        await bob.checkpoint("day-today");
       },
     );
   },

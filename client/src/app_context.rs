@@ -97,6 +97,9 @@ pub struct AppContext {
     /// The last crew feed, so cards that name members (head2head, invite) can
     /// be built again when the member list arrives after the feed.
     pub last_feed: Rc<RefCell<Option<mello_core::crew_events::FeedResponse>>>,
+    /// The `history_before` of the Crew history page being loaded, so a
+    /// scroll asks for each page once. Zero when none is in flight.
+    pub zones_history_pending: Rc<Cell<i64>>,
     /// The games the viewer and the active crew play now (live session card).
     pub live_games: Rc<RefCell<crate::live_session::LiveGames>>,
     /// Runtime game icons (exe-extracted or crew-shared), keyed by game_id.
@@ -224,6 +227,7 @@ impl AppContext {
             dbg_hist: Rc::new(RefCell::new(crate::DebugHistory::new())),
             avatar_cache: Rc::new(RefCell::new(HashMap::new())),
             last_feed: Rc::new(RefCell::new(None)),
+            zones_history_pending: Rc::new(Cell::new(0)),
             live_games: Rc::new(RefCell::new(Default::default())),
             game_icon_cache: Rc::new(RefCell::new(HashMap::new())),
             art: Arc::new(mello_core::art::ArtStore::disabled()),
@@ -297,6 +301,7 @@ impl Clone for AppContext {
             dbg_hist: self.dbg_hist.clone(),
             avatar_cache: self.avatar_cache.clone(),
             last_feed: self.last_feed.clone(),
+            zones_history_pending: self.zones_history_pending.clone(),
             live_games: self.live_games.clone(),
             game_icon_cache: self.game_icon_cache.clone(),
             art: self.art.clone(),

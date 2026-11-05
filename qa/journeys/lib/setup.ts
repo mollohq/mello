@@ -52,9 +52,8 @@ export async function selectCrew(app: App, crew: string): Promise<void> {
 
 /**
  * Open the invite modal of the active crew and read the join code from the
- * link. A crew of one has the red invite on its head2head card ("Invite your
- * crew"). Without that card the invite line under the skeleton trio has it
- * ("Share invite link"). Both ask for the same code.
+ * link. While the first five have an open seat, the People zone has the red
+ * invite ("Invite your crew"). See `openInvite`.
  */
 export async function readInviteCode(app: App): Promise<string> {
   await openInvite(app);

@@ -1,6 +1,6 @@
 // FEED-12: a game clip (CLIPS.md 15.13). bob is in voice and plays
 // a game. He presses F8, and the crew feed shows the clip card with its
-// poster. The video goes up, and alice plays the clip, pauses it and seeks.
+// poster, on the Stage or in the clips. The video goes up, and alice plays the clip, pauses it and seeks.
 //
 // A journey cannot start a real game. bob's game comes through the e2e-only
 // fake sensor (POST /fake-game), so the replay rules run their normal code. A
@@ -14,6 +14,7 @@
 import type { AppState } from "../../tools/mello-driver/src/app.ts";
 import { journey } from "../../tools/mello-driver/src/journey.ts";
 import { twoUsersInOneCrew } from "./lib/setup.ts";
+import { zoneCards } from "./lib/stage.ts";
 import { joinVoice } from "./lib/voice.ts";
 
 const CHANNEL = "General";
@@ -25,10 +26,11 @@ const RECORD_MS = 8_000;
 const MAX_CLIP_MS = 31_000;
 const FAILURES = ["GameClipFailed", "GameClipUploadFailed"];
 
-type Card = AppState["feed_cards"][number];
+type Card = AppState["feed_zones"]["clips"][number];
 
+/** The game clip: on the Stage while it is the newest with a poster, else in the clips. */
 function gameClip(s: AppState): Card | undefined {
-  return s.feed_cards.find((c) => c.card_type === "clip" && c.clip_kind === "game");
+  return zoneCards(s).find((c) => c.card_type === "clip" && c.clip_kind === "game");
 }
 
 export default journey({

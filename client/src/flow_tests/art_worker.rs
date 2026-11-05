@@ -39,7 +39,7 @@ fn header_request(h: &mut Harness) -> (Vec<String>, ArtSlot) {
     art_requests(h)
         .into_iter()
         .find(|(_, s)| *s == ArtSlot::Header)
-        .expect("the grid asked for the header slot")
+        .expect("the frame asked for the header slot")
 }
 
 /// The header fetches among the requests since the last call.
@@ -60,50 +60,49 @@ fn serve(h: &mut Harness, ids: &[String], slot: ArtSlot) -> Option<String> {
     got
 }
 
-/// A recent games card of two PCs: the poster grid, header frames.
-fn recent_feed(games: serde_json::Value) -> FeedResponse {
-    let mut entry = recent_games_entry(games);
-    entry.data["pc_count"] = serde_json::json!(2);
-    feed_of(vec![entry])
+/// A feed whose day on the board has this top game. The board draws its art
+/// in a header frame.
+fn top_game_feed(games: serde_json::Value) -> FeedResponse {
+    let g = &games[0];
+    feed_of(vec![feed_entry(
+        "daily-1",
+        "daily-recap",
+        serde_json::json!({
+            "game_id": g["game_id"], "top_game": g["game_name"],
+            "day_start": now_ms(), "total_min": 60, "session_count": 1,
+        }),
+    )])
 }
 
-/// A recent games card of one PC: the list, 48 px square rows.
-fn recent_list_feed(games: serde_json::Value) -> FeedResponse {
-    feed_of(vec![recent_games_entry(games)])
+/// The art of the board's top game. Empty while the board draws no art.
+fn top_art(h: &Harness) -> slint::Image {
+    h.app().get_feed_zones().today_top.art
 }
 
-fn first_tile(h: &Harness) -> crate::RecentGameTile {
-    h.app()
-        .get_feed_cards()
-        .iter()
-        .find(|c| c.card_type.as_str() == "recent-games")
-        .expect("the recent games card")
-        .recent_games
-        .row_data(0)
-        .expect("a tile")
+fn has_art(h: &Harness) -> bool {
+    top_art(h).size().width > 0
 }
 
 #[test]
-fn a_tile_without_local_art_asks_the_worker_and_shows_the_header_crop() {
+fn a_top_game_without_local_art_asks_the_worker_and_shows_the_header_crop() {
     let fake = FakeArt::start();
     fake.put("steam-2300340", "header", jpeg(1280, 720));
     let mut h = Harness::with_art_server(&fake.base);
     app_with_crew_of(&mut h, 1);
     h.emit(Event::FeedLoaded {
-        response: recent_feed(serde_json::json!([
+        response: top_game_feed(serde_json::json!([
             { "game_id": "steam-2300340", "game_name": "Night Stones", "minutes": 600 }
         ])),
     });
-    assert!(!first_tile(&h).has_capsule, "monogram until the art lands");
+    assert!(!has_art(&h), "no art until it lands");
     let (ids, slot) = header_request(&mut h);
     assert_eq!(slot, ArtSlot::Header);
     assert_eq!(ids[0], "steam-2300340");
 
     assert_eq!(serve(&mut h, &ids, slot).as_deref(), Some("steam-2300340"));
-    let tile = first_tile(&h);
-    assert!(tile.has_capsule, "the tile shows the Worker art");
+    assert!(has_art(&h), "the board shows the Worker art");
     // 16 by 9 art is cut to the 460 by 215 header frame.
-    let size = tile.capsule.size();
+    let size = top_art(&h).size();
     assert_eq!((size.width, size.height), (460, 215));
     assert_eq!(fake.count("steam-2300340", "header"), 1);
 }
@@ -114,7 +113,7 @@ fn the_hit_is_on_disk_so_a_restart_asks_nothing() {
     fake.put("steam-2300340", "header", jpeg(1280, 720));
     let mut h = Harness::with_art_server(&fake.base);
     app_with_crew_of(&mut h, 1);
-    let feed = recent_feed(serde_json::json!([
+    let feed = top_game_feed(serde_json::json!([
         { "game_id": "steam-2300340", "game_name": "Night Stones", "minutes": 600 }
     ]));
     h.emit(Event::FeedLoaded {
@@ -125,7 +124,7 @@ fn the_hit_is_on_disk_so_a_restart_asks_nothing() {
     // The memory copy is gone; the file stays.
     h.ctx().game_icon_cache.borrow_mut().clear();
     h.emit(Event::FeedLoaded { response: feed });
-    assert!(first_tile(&h).has_capsule, "decoded from the file");
+    assert!(has_art(&h), "decoded from the file");
     assert!(
         header_requests(&mut h).is_empty(),
         "a fresh file is not asked again"
@@ -134,11 +133,11 @@ fn the_hit_is_on_disk_so_a_restart_asks_nothing() {
 }
 
 #[test]
-fn a_404_falls_through_to_the_monogram_and_is_not_asked_again() {
+fn a_404_falls_through_to_no_art_and_is_not_asked_again() {
     let fake = FakeArt::start();
     let mut h = Harness::with_art_server(&fake.base);
     app_with_crew_of(&mut h, 1);
-    let feed = recent_feed(serde_json::json!([
+    let feed = top_game_feed(serde_json::json!([
         { "game_id": "steam-999999", "game_name": "No Art Game", "minutes": 60 }
     ]));
     h.emit(Event::FeedLoaded {
@@ -148,13 +147,13 @@ fn a_404_falls_through_to_the_monogram_and_is_not_asked_again() {
     assert_eq!(serve(&mut h, &ids, slot), None, "the Worker has nothing");
     let asked = fake.count("steam-999999", "header");
     assert_eq!(asked, 1);
-    assert!(!first_tile(&h).has_capsule, "the monogram stays");
+    assert!(!has_art(&h), "no art stays");
 
     // The feed is built again: the miss is remembered, so no new request.
     h.emit(Event::FeedLoaded { response: feed });
     assert!(header_requests(&mut h).is_empty(), "negative cache");
     assert_eq!(fake.count("steam-999999", "header"), asked);
-    assert!(!first_tile(&h).has_capsule);
+    assert!(!has_art(&h));
 }
 
 #[test]
@@ -163,7 +162,7 @@ fn art_older_than_a_week_shows_at_once_and_is_checked_with_its_etag() {
     fake.put("steam-2300340", "header", jpeg(1280, 720));
     let mut h = Harness::with_art_server(&fake.base);
     app_with_crew_of(&mut h, 1);
-    let feed = recent_feed(serde_json::json!([
+    let feed = top_game_feed(serde_json::json!([
         { "game_id": "steam-2300340", "game_name": "Night Stones", "minutes": 600 }
     ]));
     h.emit(Event::FeedLoaded {
@@ -185,7 +184,7 @@ fn art_older_than_a_week_shows_at_once_and_is_checked_with_its_etag() {
     h.ctx().game_icon_cache.borrow_mut().clear();
 
     h.emit(Event::FeedLoaded { response: feed });
-    assert!(first_tile(&h).has_capsule, "the old file still shows");
+    assert!(has_art(&h), "the old file still shows");
     let (ids, slot) = header_request(&mut h);
     assert_eq!(ids, vec!["steam-2300340".to_string()], "one id is checked");
     serve(&mut h, &ids, slot);
@@ -227,9 +226,7 @@ fn the_live_card_gets_the_hero_crop_and_the_wide_slot() {
         serve(&mut h, &hero_ids, slot).as_deref(),
         Some(ids[0].as_str())
     );
-    let live = h
-        .app()
-        .get_feed_cards()
+    let live = zone_model(&h)
         .iter()
         .find(|c| c.card_type.as_str() == "live-session")
         .expect("the live card");
@@ -264,96 +261,6 @@ fn crop_cover_fills_the_frame_from_the_centre() {
 }
 
 #[test]
-fn the_grid_poster_frame_is_the_header_shape() {
-    let fake = FakeArt::start();
-    let mut h = Harness::with_art_server(&fake.base);
-    app_with_crew_of(&mut h, 2);
-    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
-    let both = serde_json::json!(["user-1", "u2"]);
-    h.emit(Event::FeedLoaded {
-        response: two_member_feed_with_games(
-            serde_json::json!([
-                { "game_id": "steam-2300340", "game_name": "Night Stones", "minutes": 600, "member_ids": both },
-                { "game_id": "steam-252950", "game_name": "Rocket League", "minutes": 400, "member_ids": both }
-            ]),
-            None,
-        ),
-    });
-    let frames: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), "RecentGamePoster")
-        .flat_map(|p| {
-            let pos = p.absolute_position();
-            let w = p.size().width;
-            ElementHandle::find_by_element_type_name(h.app(), "GameArt")
-                .filter(move |a| {
-                    (a.absolute_position().x - pos.x).abs() < 0.5 && a.size().width == w
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect();
-    assert!(!frames.is_empty(), "the posters draw a header frame");
-    for f in frames {
-        let s = f.size();
-        let ratio = s.width / s.height;
-        assert!(
-            (ratio - 460.0 / 215.0).abs() < 0.02,
-            "{s:?} is not 460 by 215"
-        );
-    }
-}
-
-fn an_icon() -> slint::Image {
-    crate::avatar::rgba_to_image(&[255u8; 4 * 4 * 4], 4, 4)
-}
-
-/// The ladder is per slot. A game with an exe icon and Worker art: the art
-/// frames (tile) show the art and never the icon; the icon slot (pill) shows
-/// the icon and does not ask for the Worker icon.
-#[test]
-fn an_exe_icon_stays_in_the_icon_slot_and_the_art_fills_the_frames() {
-    let fake = FakeArt::start();
-    fake.put("steam-2300340", "header", jpeg(1280, 720));
-    fake.put("steam-2300340", "icon", jpeg(90, 90));
-    let mut h = Harness::with_art_server(&fake.base);
-    app_with_crew_of(&mut h, 1);
-    h.ctx()
-        .game_icon_cache
-        .borrow_mut()
-        .insert("steam-2300340".into(), an_icon());
-
-    h.emit(Event::FeedLoaded {
-        response: recent_feed(serde_json::json!([
-            { "game_id": "steam-2300340", "game_name": "Night Stones", "minutes": 600 }
-        ])),
-    });
-    let (ids, slot) = header_request(&mut h);
-    assert_eq!(slot, ArtSlot::Header, "the frame asks for header art");
-    serve(&mut h, &ids, slot);
-    let tile = first_tile(&h);
-    assert!(tile.has_capsule, "the art is in the header frame");
-    assert!(
-        tile.has_icon,
-        "the exe icon is in the square slot of the tile, not in the header frame"
-    );
-
-    h.emit(game_detected(
-        "steam-2300340",
-        "Night Stones",
-        now_ms() - 60_000,
-    ));
-    assert!(
-        h.app().get_game_has_runtime_icon(),
-        "the pill shows the icon"
-    );
-    assert!(!h.app().get_game_has_capsule());
-    assert!(
-        art_requests(&mut h)
-            .iter()
-            .all(|(_, s)| *s != ArtSlot::Icon),
-        "an exe icon needs no Worker icon"
-    );
-}
-
-#[test]
 fn the_pill_without_an_exe_icon_takes_the_worker_icon() {
     let fake = FakeArt::start();
     fake.put("steam-2300340", "icon", jpeg(90, 90));
@@ -378,70 +285,6 @@ fn the_pill_without_an_exe_icon_takes_the_worker_icon() {
         "the Worker icon fills the pill as an icon"
     );
     assert!(!h.app().get_game_has_capsule());
-}
-
-fn count_of_type(h: &Harness, name: &str) -> usize {
-    ElementHandle::find_by_element_type_name(h.app(), name).count()
-}
-
-/// The list row is a 48 px square: it asks for the icon slot, draws the
-/// Worker icon in a `GameIcon` and never asks for the header.
-#[test]
-fn the_recent_games_list_row_draws_the_worker_icon() {
-    let fake = FakeArt::start();
-    fake.put("steam-2300340", "icon", jpeg(90, 90));
-    fake.put("steam-2300340", "header", jpeg(1280, 720));
-    let mut h = Harness::with_art_server(&fake.base);
-    app_with_crew_of(&mut h, 1);
-    h.emit(Event::FeedLoaded {
-        response: recent_list_feed(serde_json::json!([
-            { "game_id": "steam-2300340", "game_name": "Night Stones", "minutes": 600 }
-        ])),
-    });
-    assert_eq!(count_of_type(&h, "RecentGameTileCell"), 1, "the list");
-    assert!(!first_tile(&h).has_icon, "monogram until the art lands");
-    assert_eq!(count_of_type(&h, "GameIcon"), 0);
-    let asks = art_requests(&mut h);
-    assert!(
-        asks.iter().all(|(_, s)| *s == ArtSlot::Icon),
-        "a list asks for the icon slot only: {asks:?}"
-    );
-    let (ids, slot) = asks.into_iter().next().expect("the row asked for art");
-    serve(&mut h, &ids, slot);
-
-    let tile = first_tile(&h);
-    assert!(tile.has_icon, "the Worker icon is on the tile");
-    assert!(!tile.has_capsule);
-    assert_eq!(count_of_type(&h, "GameIcon"), 1, "the cell draws the image");
-    assert_eq!(count_of_type(&h, "GameBadge"), 0, "no monogram");
-}
-
-/// Art in one slot does not stop the search in the other: a tile that has its
-/// header still gets its icon when the icon lands.
-#[test]
-fn refresh_looks_up_each_slot_of_a_tile_on_its_own() {
-    let fake = FakeArt::start();
-    fake.put("steam-2300340", "header", jpeg(1280, 720));
-    fake.put("steam-2300340", "icon", jpeg(90, 90));
-    let mut h = Harness::with_art_server(&fake.base);
-    app_with_crew_of(&mut h, 1);
-    h.emit(Event::FeedLoaded {
-        response: recent_feed(serde_json::json!([
-            { "game_id": "steam-2300340", "game_name": "Night Stones", "minutes": 600 }
-        ])),
-    });
-    let asks = art_requests(&mut h);
-    let header = asks.iter().find(|(_, s)| *s == ArtSlot::Header).cloned();
-    let icon = asks.iter().find(|(_, s)| *s == ArtSlot::Icon).cloned();
-    let (hids, hslot) = header.expect("the grid asks for the header");
-    let (iids, islot) = icon.expect("the grid keeps a list for narrow slots");
-    serve(&mut h, &hids, hslot);
-    let tile = first_tile(&h);
-    assert!(tile.has_capsule && !tile.has_icon);
-    serve(&mut h, &iids, islot);
-    let tile = first_tile(&h);
-    assert!(tile.has_capsule, "the header stays");
-    assert!(tile.has_icon, "the icon landed after the header");
 }
 
 fn stats_of(id: &str) -> mello_core::crew_events::UserGameStats {
@@ -601,9 +444,7 @@ fn the_recap_games_strip_asks_for_header_art() {
     assert_eq!(slot, ArtSlot::Header);
     serve(&mut h, &hids, slot);
 
-    let card = h
-        .app()
-        .get_feed_cards()
+    let card = zone_model(&h)
         .iter()
         .find(|c| c.card_type.as_str() == "recap")
         .expect("the recap card");
@@ -632,8 +473,8 @@ fn the_session_card_tile_takes_the_icon_slot() {
     let mut h = Harness::with_art_server(&fake.base);
     app_with_crew_of(&mut h, 1);
     let mut feed = zero_telemetry_game_session_feed();
-    feed.sections[0].entries[0].data["game_name"] = serde_json::json!("Night Stones");
-    feed.sections[0].entries[0].data["game_id"] = serde_json::json!("steam-2300340");
+    feed.zones.sessions[0].data["game_name"] = serde_json::json!("Night Stones");
+    feed.zones.sessions[0].data["game_id"] = serde_json::json!("steam-2300340");
     h.emit(Event::FeedLoaded { response: feed });
     let card = first_card(&h);
     assert!(!card.game_has_icon && !card.game_has_capsule);
@@ -684,9 +525,7 @@ fn the_live_card_tile_takes_the_icon_slot() {
         .find(|(_, s)| *s == ArtSlot::Icon)
         .unwrap_or_else(|| panic!("the live card asked for the icon slot: {asks_dbg:?}"));
     serve(&mut h, &iids, slot);
-    let live = h
-        .app()
-        .get_feed_cards()
+    let live = zone_model(&h)
         .iter()
         .find(|c| c.card_type.as_str() == "live-session")
         .expect("the live card");

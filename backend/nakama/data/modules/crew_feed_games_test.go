@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 )
 
 func gsCard(id string, wins, losses, draws, streak int) feedCard {
@@ -38,166 +37,6 @@ func gsCardT0(id string, durationMin int, playerIDs []string, wins, losses, draw
 			Draws:       draws,
 			StreakAfter: streak,
 		},
-	}
-}
-
-func TestGameSessionNotableFloor(t *testing.T) {
-	cases := []struct {
-		count int
-		want  int
-	}{
-		{0, 10},
-		{1, 10},
-		{5, 10},
-		{6, 30},
-		{15, 30},
-		{16, feedGameSessionNotableMin},
-		{100, feedGameSessionNotableMin},
-	}
-	for _, tc := range cases {
-		if got := gameSessionNotableFloor(tc.count); got != tc.want {
-			t.Fatalf("floor(%d) = %d, want %d", tc.count, got, tc.want)
-		}
-	}
-}
-
-func TestGameSessionCardCap(t *testing.T) {
-	cases := []struct {
-		count int
-		want  int
-	}{
-		{0, 4},
-		{1, 4},
-		{5, 4},
-		{6, feedGameSessionMaxCards},
-		{100, feedGameSessionMaxCards},
-	}
-	for _, tc := range cases {
-		if got := gameSessionCardCap(tc.count); got != tc.want {
-			t.Fatalf("cap(%d) = %d, want %d", tc.count, got, tc.want)
-		}
-	}
-}
-
-func TestGameSessionQuality(t *testing.T) {
-	// Routine 2-1 night, streak 2 → below the default notable floor (no T0 data).
-	if q := gameSessionQuality(gsCard("a", 2, 1, 0, 2)); q >= feedGameSessionNotableMin {
-		t.Fatalf("routine session scored %d, want < %d", q, feedGameSessionNotableMin)
-	}
-	// 5-win streak, flawless 5-0 → notable.
-	if q := gameSessionQuality(gsCard("b", 5, 0, 0, 5)); q < feedGameSessionNotableMin {
-		t.Fatalf("heater session scored %d, want >= %d", q, feedGameSessionNotableMin)
-	}
-	// Short solo session with no telemetry → T0 score 0.
-	if q := gameSessionQuality(gsCardT0("c", 10, nil, 0, 0, 0, 0)); q != 0 {
-		t.Fatalf("10m solo no-telemetry scored %d, want 0", q)
-	}
-	// Non-game card → sentinel (never competes as a game session).
-	if q := gameSessionQuality(feedCard{backendType: "clip"}); q != feedMinQuality {
-		t.Fatalf("non-game scored %d, want sentinel", q)
-	}
-}
-
-func TestGameSessionQualityT0Examples(t *testing.T) {
-	cases := []struct {
-		name string
-		card feedCard
-		want int
-	}{
-		{"10m solo", gsCardT0("a", 10, nil, 0, 0, 0, 0), 0},
-		{"4h solo", gsCardT0("b", 240, nil, 0, 0, 0, 0), 40},
-		{"2h with one crewmate", gsCardT0("c", 120, []string{"a", "b"}, 0, 0, 0, 0), 45},
-	}
-	for _, tc := range cases {
-		if got := gameSessionQuality(tc.card); got != tc.want {
-			t.Fatalf("%s: scored %d, want %d", tc.name, got, tc.want)
-		}
-	}
-}
-
-func TestPruneGameSessions_CapsAndDropsRoutine(t *testing.T) {
-	cards := []feedCard{
-		{id: "clip1", backendType: "clip"},
-		gsCard("routine1", 2, 1, 0, 1),
-		gsCard("heater", 5, 0, 0, 5),
-		gsCard("routine2", 1, 2, 0, -1),
-		gsCard("skid", 0, 6, 0, -3),
-		gsCard("big", 4, 4, 2, 1),
-		{id: "voice1", backendType: "voice_session"},
-	}
-	out, pruned := pruneGameSessions(cards)
-
-	if !feedCardsContain(out, "clip1") || !feedCardsContain(out, "voice1") {
-		t.Fatalf("non-game cards were dropped")
-	}
-	if feedCardsContain(out, "routine1") || feedCardsContain(out, "routine2") {
-		t.Fatalf("routine game sessions were kept")
-	}
-	if len(pruned) < 2 {
-		t.Fatalf("expected pruned routine sessions, got %d", len(pruned))
-	}
-
-	gameCount := 0
-	for _, c := range out {
-		if c.backendType == "game_session" {
-			gameCount++
-		}
-	}
-	gameSessionCount := 5 // five gsCard entries in input
-	cap := gameSessionCardCap(gameSessionCount)
-	if gameCount > cap {
-		t.Fatalf("kept %d game sessions, want <= %d", gameCount, cap)
-	}
-}
-
-func TestPruneGameSessions_LongSoloSurvivesQuietWeek(t *testing.T) {
-	cards := []feedCard{
-		gsCardT0("long-solo", 240, nil, 0, 0, 0, 0),
-		{id: "clip1", backendType: "clip"},
-	}
-	out, _ := pruneGameSessions(cards)
-	if !feedCardsContain(out, "long-solo") {
-		t.Fatal("4h solo no-telemetry session should survive in a quiet week (floor 10, score 40)")
-	}
-}
-
-func TestPruneGameSessions_LongSoloPrunedLoudWeek(t *testing.T) {
-	cards := make([]feedCard, 0, 17)
-	cards = append(cards, gsCardT0("long-solo", 240, nil, 0, 0, 0, 0))
-	for i := 0; i < 16; i++ {
-		cards = append(cards, gsCard("heater"+string(rune('a'+i)), 5, 0, 0, 5))
-	}
-	out, _ := pruneGameSessions(cards)
-	if feedCardsContain(out, "long-solo") {
-		t.Fatal("4h solo session should be pruned when 16+ higher-scoring sessions exist (floor 50, cap 2)")
-	}
-}
-
-func TestFillerRole_NoTelemetryQuiet(t *testing.T) {
-	c := gsCardT0("t0", 240, nil, 0, 0, 0, 0)
-	if fillerRole(c) != "quiet" {
-		t.Fatalf("no-telemetry game_session role: got %q want quiet", fillerRole(c))
-	}
-	cTelemetry := gsCard("telemetry", 5, 0, 0, 5)
-	if fillerRole(cTelemetry) != "standard" {
-		t.Fatalf("telemetry game_session role: got %q want standard", fillerRole(cTelemetry))
-	}
-}
-
-func TestFillerPriority_GameSessionOrdering(t *testing.T) {
-	strong := gsCard("strong", 5, 0, 0, 5)
-	weak := gsCardT0("weak", 10, nil, 0, 0, 0, 0)
-	voice := typedCard("voice", "session", "voice_session")
-
-	pStrong := fillerPriority(strong)
-	pVoice := fillerPriority(voice)
-	pWeak := fillerPriority(weak)
-
-	if pStrong <= pVoice {
-		t.Fatalf("strong game session priority %d should exceed voice %d", pStrong, pVoice)
-	}
-	if pWeak < pVoice {
-		t.Fatalf("weak game session priority %d should be >= voice %d", pWeak, pVoice)
 	}
 }
 
@@ -349,71 +188,6 @@ func TestBuildRecentGames_OvernightSessionDoesNotInflateTotals(t *testing.T) {
 	}
 	if data.Games[0].Minutes != 130 {
 		t.Fatalf("tile = %d min, want 130", data.Games[0].Minutes)
-	}
-}
-
-// The Crew play rollup is gone. A loud week yields one recent games card that
-// counts the pruned routine sessions, and no entry of type rollup.
-func TestBuildThisWeek_LoudWeekHasRecentGamesNotRollup(t *testing.T) {
-	cards := make([]feedCard, 0, 20)
-	for i := 0; i < 16; i++ {
-		cards = append(cards, gsCard("heater"+string(rune('a'+i)), 5, 0, 0, 5))
-	}
-	for i := 0; i < 4; i++ {
-		cards = append(cards, gsCardT0("routine"+string(rune('a'+i)), 30, []string{"solo"}, 0, 0, 0, 0))
-	}
-	entries := buildThisWeek(cards, time.Now().UnixMilli())
-	var recent *FeedEntry
-	for i := range entries {
-		if entries[i].Type == "rollup" {
-			t.Fatal("the Crew play rollup must not be emitted")
-		}
-		if entries[i].Type == "recent-games" {
-			recent = &entries[i]
-		}
-	}
-	if recent == nil {
-		t.Fatal("expected a recent games entry")
-	}
-	if recent.ID != "recent_games" || recent.Role != "standard" {
-		t.Fatalf("meta: id=%q role=%q", recent.ID, recent.Role)
-	}
-	data := recent.Data.(RecentGamesData)
-	if data.SessionCount != 20 {
-		t.Fatalf("header counts %d sessions, want all 20", data.SessionCount)
-	}
-}
-
-// A busy crew (50 members) has more clips and strong sessions than slots.
-// Clips rank 10000 and strong sessions above the recent games card, so before
-// the diversity pick the card was crowded out of the week.
-func TestBuildThisWeek_BusyCrewStillHasRecentGames(t *testing.T) {
-	now := time.Now().UnixMilli()
-	cards := make([]feedCard, 0, 40)
-	for i := 0; i < 8; i++ {
-		cards = append(cards, clipCard(fmt.Sprintf("clip%d", i), now-int64(i)*1000))
-	}
-	for i := 0; i < 16; i++ {
-		cards = append(cards, gsCard(fmt.Sprintf("heater%d", i), 5, 0, 0, 5))
-	}
-	entries := buildThisWeek(cards, now)
-	for _, e := range entries {
-		if e.Type == "recent-games" {
-			return
-		}
-	}
-	t.Fatalf("a busy crew lost the recent games card: %d entries", len(entries))
-}
-
-func TestFillerPriority_RecentGamesBeatsWeakSession(t *testing.T) {
-	recent := feedCard{feedType: "recent-games", backendType: "recent_games"}
-	weak := gsCardT0("weak", 10, nil, 0, 0, 0, 0)
-	strong := gsCard("strong", 5, 0, 0, 5)
-	if fillerPriority(recent) <= fillerPriority(weak) {
-		t.Fatalf("recent games priority %d should beat weak session %d", fillerPriority(recent), fillerPriority(weak))
-	}
-	if fillerPriority(strong) <= fillerPriority(recent) {
-		t.Fatalf("strong session priority %d should beat recent games %d", fillerPriority(strong), fillerPriority(recent))
 	}
 }
 
@@ -631,20 +405,6 @@ func TestCrewLibraryDocs_ReadsMemberDocs(t *testing.T) {
 	}
 }
 
-func TestBuildThisWeek_SnapshotFeedsRecentGamesCard(t *testing.T) {
-	libs := map[string]*LibraryDoc{"alice": libDoc(1, libGame("steam-730", "Counter-Strike 2", 120, 1_760_000_000))}
-	entries := buildThisWeekWithLibraries(nil, time.Now().UnixMilli(), libs)
-	found := false
-	for _, e := range entries {
-		if e.Type == "recent-games" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("entries = %+v, want a recent-games card from the snapshot", entries)
-	}
-}
-
 // The tile carries the launcher of the library entry, so the client can show
 // it when the playtime is unknown.
 func TestBuildRecentGames_TileCarriesTheLauncher(t *testing.T) {
@@ -663,42 +423,6 @@ func TestBuildRecentGames_TileCarriesTheLauncher(t *testing.T) {
 	}
 	if got := tileByID(t, d, "steam-730").Launcher; got != "steam" {
 		t.Fatalf("launcher = %q, want steam", got)
-	}
-}
-
-// The recent games card is on the first screen for every crew size: right
-// after the head2head card, ahead of the clips that fill the other slots. A
-// busy crew used to get it as the 7th entry, after the wide-slot swap pushed
-// it back.
-func TestBuildThisWeek_RecentGamesFollowsHead2headInABusyCrew(t *testing.T) {
-	now := time.Now().UnixMilli()
-	cards := make([]feedCard, 0, 40)
-	for i := 0; i < 13; i++ {
-		cards = append(cards, clipCard(fmt.Sprintf("clip%d", i), now-int64(i)*1000))
-	}
-	for i := 0; i < 16; i++ {
-		cards = append(cards, gsCard(fmt.Sprintf("heater%d", i), 5, 0, 0, 5))
-	}
-	entries := buildThisWeekFull(cards, now, nil, &Head2headFeedData{UpdatedAt: now})
-	if len(entries) < 3 || entries[0].Type != "head2head" {
-		t.Fatalf("entries: %+v", entries)
-	}
-	pos, dailies := -1, 0
-	for i, e := range entries {
-		if e.Type == "recent-games" {
-			pos = i
-		}
-		if e.Type == "daily-recap" {
-			dailies++
-		}
-		if e.Type == "clip" && e.Size == "lg" {
-			t.Fatalf("clip %s is wide", e.ID)
-		}
-	}
-	// The daily recaps stand between head2head and the sessions; the recent
-	// games card is the first of the sessions' slots.
-	if pos < 0 || pos > 1+dailies {
-		t.Fatalf("recent games at entry %d, want right after head2head and the %d daily recaps", pos, dailies)
 	}
 }
 

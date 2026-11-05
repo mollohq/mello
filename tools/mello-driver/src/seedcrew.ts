@@ -15,8 +15,7 @@ export async function nextIndex(runId: string, nameAt: (i: number) => string, ex
 }
 
 function carryHolder(feed: any): string | undefined {
-  const h2h = (feed?.sections ?? []).flatMap((x: any) => x.entries ?? []).find((e: any) => e.type === "head2head");
-  return h2h?.data?.titles?.find((t: any) => t.title_id === "the_carry")?.holder_user_id;
+  return feed?.zones?.head2head?.titles?.find((t: any) => t.title_id === "the_carry")?.holder_user_id;
 }
 
 /** The text that says how to turn dev_fault on. It reads no file. */

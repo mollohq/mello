@@ -168,39 +168,20 @@ struct Snapshot {
     /// The member list of the active crew, in screen order.
     crew_members: Vec<MemberSnap>,
     stream: StreamSnap,
-    /// The feed of the active crew, in screen order (newest first).
-    feed_cards: Vec<FeedCardSnap>,
+    /// The zone feed of the active crew (`handlers/zones.rs`).
+    feed_zones: ZonesSnap,
     /// The clip that plays in the feed.
     clip: ClipSnap,
     /// The game clip player over the feed (CLIPS.md 15.9).
     game_clip_player: GameClipPlayerSnap,
-    /// The head2head card of the feed (the first one), if any.
-    head2head: Head2headSnap,
-    /// The invite card of the feed, if any.
-    invite_card: InviteCardSnap,
-    /// The recent games card of the feed, if any.
-    recent_games: RecentGamesSnap,
     /// The stats strip: the viewer's last game with its square icon.
     you_strip: YouStripSnap,
-    /// The live session cards of the feed, in screen order.
+    /// The live session cards of the Sessions zone, in screen order.
     live_sessions: Vec<LiveSessionSnap>,
-    /// The daily recap card of the feed, if any.
-    daily_recap: DailyRecapSnap,
     /// Sealed belts and recap in the feed, and the card in the centre.
     sealed: SealedSnap,
-    /// The skeleton trio cells that show (0 to 3).
-    skeleton_trio: usize,
-    /// The joined cards of the feed, in grid order. A join is the smallest card
-    /// the grid has, a standard cell after the first row.
-    joined: Vec<JoinedSnap>,
     /// The chat input has the cursor.
     chat_input_focused: bool,
-    /// The quiet row (frame E): at most one, in the place of the recap.
-    quiet_rows: Vec<JoinedRowSnap>,
-    /// The dormant strip (frame F): the text and its age, if it shows.
-    dormant_strip: Option<DormantSnap>,
-    /// The belt hero leads the feed (frame E).
-    belt_hero: Option<BeltHeroSnap>,
     /// The audio page of the settings.
     audio: AudioSnap,
     riot: RiotSnap,
@@ -296,39 +277,243 @@ struct FeedCardSnap {
     clip_uploading: bool,
     /// The video is up, or this PC has the clip file.
     clip_can_play: bool,
-    /// The grid row the card is in, one-based (`feed_grid::rows`). A card in
-    /// the stream rows above the grid is row 0.
-    row: usize,
-    /// The card holds a two-column slot.
-    wide: bool,
+    /// The poster is on the card.
+    poster: bool,
+    /// The card counts as new (unread).
+    new: bool,
+    game_name: String,
+    /// The game art of the card: `"image"` or `"monogram"`.
+    art: &'static str,
 }
 
-/// The feed cards on screen with their grid row and slot width.
-fn read_feed_cards(app: &MainWindow) -> Vec<FeedCardSnap> {
-    let cards: Vec<crate::FeedCardData> = app.get_feed_cards().iter().collect();
-    let infos: Vec<crate::feed_grid::CardInfo> =
-        cards.iter().map(crate::feed_grid::CardInfo::of).collect();
-    let start = crate::feed_grid::grid_start(app.get_active_stream_cards().row_count(), &infos);
-    let rows = crate::feed_grid::rows(&infos, start);
-    let wide = crate::feed_grid::wide_slot_indices(&infos, start);
-    cards
-        .iter()
-        .enumerate()
-        .take(LIST_LIMIT)
-        .map(|(i, c)| FeedCardSnap {
-            id: c.id.to_string(),
-            card_type: c.card_type.to_string(),
-            title: c.title.to_string(),
-            actor_name: c.actor_name.to_string(),
-            clip_path: c.clip_path.to_string(),
-            clip_kind: c.clip_kind.to_string(),
-            clip_poster_path: c.clip_poster_path.to_string(),
-            clip_uploading: c.clip_uploading,
-            clip_can_play: c.clip_can_play,
-            row: rows[i],
-            wide: wide.contains(&i),
-        })
-        .collect()
+fn card_snap(c: &crate::FeedCardData) -> FeedCardSnap {
+    FeedCardSnap {
+        id: c.id.to_string(),
+        card_type: c.card_type.to_string(),
+        title: c.title.to_string(),
+        actor_name: c.actor_name.to_string(),
+        clip_path: c.clip_path.to_string(),
+        clip_kind: c.clip_kind.to_string(),
+        clip_poster_path: c.clip_poster_path.to_string(),
+        clip_uploading: c.clip_uploading,
+        clip_can_play: c.clip_can_play,
+        poster: c.snapshot_poster_ready,
+        new: c.is_new,
+        game_name: c.game_name.to_string(),
+        art: if c.game_has_icon || c.game_has_capsule {
+            "image"
+        } else {
+            "monogram"
+        },
+    }
+}
+
+/// The zone feed (`ZonesData`), zone by zone.
+#[derive(Serialize)]
+struct ZonesSnap {
+    /// `"live"`, `"card"`, `"own"` or `""` (collapsed).
+    stage: String,
+    /// The card on the Stage when `stage` is `"card"`.
+    stage_card: Option<FeedCardSnap>,
+    /// The belt hero, when the Stage card is one.
+    belt_hero: Option<BeltHeroSnap>,
+    /// The viewer's own chips on the Stage (a crew of one).
+    own_chips: Vec<OwnChipSnap>,
+    /// The viewer's octagon wears an image.
+    you_avatar: bool,
+    /// `"sealed"`, `"tabs"`, `"quiet"`, `"past"`, `"solo"` or `""`.
+    board: String,
+    /// The belts of the board, in order.
+    belts: Vec<BoardBeltSnap>,
+    /// Every belt of the crew. The board draws seven at most.
+    belt_count: i32,
+    quiet_line: String,
+    /// The Today tab of the board.
+    today: TodaySnap,
+    /// The games of a crew of one on the solo board.
+    solo_games: Vec<String>,
+    /// The dormant strip, if it shows.
+    dormant: Option<DormantSnap>,
+    clips: Vec<FeedCardSnap>,
+    people: PeopleSnap,
+    sessions: Vec<FeedCardSnap>,
+    /// The games most members have, on a quiet week with no session.
+    installed: Vec<String>,
+    history: Vec<HistoryWeekSnap>,
+    /// The server has another page of history.
+    history_more: bool,
+    /// The viewer has m3llo+.
+    plus: bool,
+}
+
+#[derive(Serialize)]
+struct OwnChipSnap {
+    title: String,
+    /// The value as the chip draws it, for example `"4,167"`.
+    value: String,
+    sealed: bool,
+}
+
+/// The Today tab of the board: the daily recap of the current day.
+#[derive(Serialize)]
+struct TodaySnap {
+    /// Nothing today: the tab is dim.
+    empty: bool,
+    /// For example `"6 h 40"` or `"48 min"`.
+    hangout: String,
+    clips: i64,
+    sessions: i64,
+    /// The members who took part.
+    on: i64,
+    /// Empty when the day has no top game.
+    top_game: String,
+}
+
+fn stat_text(s: &crate::BoardStat) -> String {
+    [s.value.as_str(), s.unit.as_str(), s.tail.as_str()]
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[derive(Serialize)]
+struct BoardBeltSnap {
+    title: String,
+    holder_name: String,
+    sealed: bool,
+    unread: bool,
+}
+
+#[derive(Serialize)]
+struct PeopleSnap {
+    /// The People zone shows.
+    shown: bool,
+    /// The octagons of the first five, and how many wear an image.
+    members: usize,
+    members_with_avatar: usize,
+    open_seats: i32,
+    /// Who joined in the last 24 hours.
+    joined: Vec<String>,
+    joined_line: String,
+    /// The Say hi button shows.
+    say_hi: bool,
+    /// `"call"`, `"idle"` or `""`.
+    voice: String,
+    channel: String,
+}
+
+#[derive(Serialize)]
+struct HistoryWeekSnap {
+    label: String,
+    locked: bool,
+    /// The cards of an open week.
+    clips: usize,
+    /// The teasers of a locked week, and the "+N" after them.
+    teasers: usize,
+    more: i32,
+}
+
+fn read_zones(app: &MainWindow) -> ZonesSnap {
+    let z = app.get_feed_zones();
+    let stage_card = (z.stage == "card").then(|| z.stage_card.clone());
+    ZonesSnap {
+        stage: z.stage.to_string(),
+        stage_card: stage_card.as_ref().map(card_snap),
+        belt_hero: stage_card
+            .filter(|c| c.card_type == "head2head" && c.head2head.variant == "belt")
+            .map(|c| BeltHeroSnap {
+                headline: c.head2head.belt.headline.to_string(),
+                detail: c.head2head.belt.detail.to_string(),
+                age: c.head2head.belt.age.to_string(),
+            }),
+        own_chips: z
+            .own_chips
+            .iter()
+            .map(|t| OwnChipSnap {
+                title: t.title.to_string(),
+                value: t.value.to_string(),
+                sealed: t.belt.sealed,
+            })
+            .collect(),
+        you_avatar: z.you.has_avatar,
+        board: z.board.to_string(),
+        belts: z
+            .titles
+            .iter()
+            .map(|t| BoardBeltSnap {
+                title: t.title.to_string(),
+                holder_name: t.person.name.to_string(),
+                sealed: t.belt.sealed,
+                unread: t.unread,
+            })
+            .collect(),
+        belt_count: z.title_count,
+        quiet_line: z.quiet_line.to_string(),
+        today: {
+            let n = |label: &str| {
+                z.today_stats
+                    .iter()
+                    .find(|s| s.label == label)
+                    .and_then(|s| s.value.parse::<i64>().ok())
+                    .unwrap_or(0)
+            };
+            TodaySnap {
+                empty: z.today_empty,
+                hangout: stat_text(&z.today_big),
+                clips: n("CLIPS"),
+                sessions: n("SESSIONS"),
+                on: n("ON"),
+                top_game: if z.today_has_top {
+                    z.today_top.name.to_string()
+                } else {
+                    String::new()
+                },
+            }
+        },
+        solo_games: z.solo_games.iter().map(|g| g.name.to_string()).collect(),
+        dormant: (!z.dormant_line.is_empty()).then(|| DormantSnap {
+            text: z.dormant_line.to_string(),
+            age: z.dormant_age.to_string(),
+        }),
+        clips: z
+            .clips
+            .iter()
+            .take(LIST_LIMIT)
+            .map(|c| card_snap(&c))
+            .collect(),
+        people: PeopleSnap {
+            shown: z.people,
+            members: z.members.row_count(),
+            members_with_avatar: z.members.iter().filter(|m| m.has_avatar).count(),
+            open_seats: z.open_seats,
+            joined: z.joined.iter().map(|p| p.name.to_string()).collect(),
+            joined_line: z.joined_line.to_string(),
+            say_hi: !z.say_hi_card.is_empty() && !z.said_hi,
+            voice: z.voice.to_string(),
+            channel: z.channel.to_string(),
+        },
+        sessions: z
+            .sessions
+            .iter()
+            .take(LIST_LIMIT)
+            .map(|c| card_snap(&c))
+            .collect(),
+        installed: z.installed.iter().map(|g| g.name.to_string()).collect(),
+        history: z
+            .history
+            .iter()
+            .map(|w| HistoryWeekSnap {
+                label: w.label.to_string(),
+                locked: w.locked,
+                clips: w.clips.row_count(),
+                teasers: w.teasers.row_count(),
+                more: w.more,
+            })
+            .collect(),
+        history_more: z.history_more,
+        plus: z.plus,
+    }
 }
 
 #[derive(Serialize)]
@@ -384,7 +569,7 @@ struct SealedSnap {
     resting: bool,
 }
 
-/// Count the sealed belts and the sealed recap of the feed cards.
+/// Count the sealed belts and the sealed recap of the zones.
 fn read_sealed(app: &MainWindow) -> SealedSnap {
     let ui = app.global::<crate::SealedUi>();
     let active = ui.get_active_key();
@@ -398,13 +583,12 @@ fn read_sealed(app: &MainWindow) -> SealedSnap {
             list.push(key);
         }
     };
-    for c in app.get_feed_cards().iter() {
-        let h = &c.head2head;
-        h.pairs.iter().for_each(|p| add(&p.chip.belt));
-        h.chips.iter().for_each(|t| add(&t.belt));
-        c.belts_moved.iter().for_each(|b| add(&b.belt));
-        recap |= c.recap_seal.sealed && c.recap_seal.key != active;
-    }
+    let z = app.get_feed_zones();
+    z.titles.iter().for_each(|t| add(&t.belt));
+    z.own_chips.iter().for_each(|t| add(&t.belt));
+    let r = &z.recap_card;
+    r.belts_moved.iter().for_each(|b| add(&b.belt));
+    recap |= r.recap_seal.sealed && r.recap_seal.key != active;
     SealedSnap {
         belts: keys.len(),
         own: own.len(),
@@ -418,60 +602,6 @@ fn read_sealed(app: &MainWindow) -> SealedSnap {
     }
 }
 
-/// The head2head card of the feed. `present` is false when the feed has none;
-/// then `placement` is `"none"` and the lists are empty.
-#[derive(Serialize)]
-struct Head2headSnap {
-    present: bool,
-    /// `"wide"`, `"versus"` or `"none"`. The card is always two columns wide:
-    /// `"wide"` is the card of a crew of one (chips) and the pairs card of a
-    /// crew of two or more (pair rows). `member_count` tells them apart.
-    placement: &'static str,
-    member_count: i32,
-    open_seats: i32,
-    /// The chips the card draws: the viewer's own values on the wide card.
-    own_values: Vec<TitleChipSnap>,
-    /// Every contested title and who holds it.
-    titles: Vec<TitleHolderSnap>,
-    /// Every pair of the viewer, drawn or not.
-    pairs_count: usize,
-    /// The pair rows the pairs card draws.
-    pair_rows: usize,
-    /// Pair rows that wear the red dot (a belt moved today, not yet seen).
-    pair_rows_dot: usize,
-    /// The "+N more" line of the pairs card. 0 when it does not show.
-    more_pairs: i32,
-    belt_moved_recent: bool,
-    /// The viewer's octagon on the card: a fingerprint of the avatar image,
-    /// "" when it shows initials (as `crew_members`).
-    own_avatar_key: String,
-    /// The opponent octagons of the pair rows, in row order. "" for initials.
-    pair_avatar_keys: Vec<String>,
-}
-
-/// The daily recap card. `present` is false when the feed has none.
-#[derive(Serialize)]
-struct DailyRecapSnap {
-    present: bool,
-    /// "Today so far", "Yesterday" or a day name.
-    day: String,
-    /// The hangout time, for example `"2h 5m"`.
-    hangout: String,
-    clips: i32,
-    sessions: i32,
-    top_game: String,
-    /// The member octagons drawn.
-    members: usize,
-    /// The place in the feed card list. 0 is the first card.
-    index: usize,
-    /// One entry for each belt: `"The Carry"`.
-    belts: Vec<String>,
-    /// The day card: two columns wide with its sessions listed.
-    wide: bool,
-    /// The session rows the day card carries.
-    rows: usize,
-}
-
 /// A live session card (a game in progress).
 #[derive(Serialize)]
 struct LiveSessionSnap {
@@ -480,93 +610,13 @@ struct LiveSessionSnap {
     member_names: Vec<String>,
     since_min: i32,
     since_text: String,
-    /// The place in the feed card list. 0 is the first card.
+    /// The place in the Sessions zone. 0 is the first card.
     index: usize,
     /// The octagons drawn, and how many wear an avatar.
     octagons: usize,
     with_avatar: usize,
-    /// The card has local poster art and holds the wide slot. Without it the
-    /// card is a cell.
+    /// The card has local poster art.
     poster: bool,
-}
-
-/// The invite card of the feed. `present` is false when the feed has none.
-#[derive(Serialize)]
-struct InviteCardSnap {
-    present: bool,
-    /// The member octagons drawn.
-    octagons: usize,
-    /// The "+N" after the octagons. 0 when there is none.
-    more_count: i32,
-    /// The octagons that wear an image and not initials.
-    with_avatar: usize,
-}
-
-#[derive(Serialize)]
-struct TitleChipSnap {
-    title_id: String,
-    /// The number and its unit as the chip reads them, for example `"4.2 h"`.
-    display: String,
-}
-
-#[derive(Serialize)]
-struct TitleHolderSnap {
-    title_id: String,
-    /// The member list name of the holder. Empty when the holder is not in it.
-    holder_name: String,
-}
-
-#[derive(Serialize)]
-struct JoinedSnap {
-    /// The joiner, for example `"Jonas"`.
-    name: String,
-    /// The headline, for example `"Jonas joined"`.
-    title: String,
-    /// For example `"invited by b0bben"`. Empty without an inviter.
-    invited: String,
-    /// For example `"Today 23:14"`.
-    when: String,
-    /// The card's place among the feed cards, from 0.
-    index: usize,
-}
-
-#[derive(Serialize)]
-struct JoinedRowSnap {
-    /// For example `"Jonas joined, invited by b0bben"`.
-    line: String,
-    /// For example `"Today 23:14"`.
-    when: String,
-}
-
-#[derive(Serialize)]
-struct RecentGamesSnap {
-    /// The right side of the card header: the week's line, for example
-    /// `"14 sessions, 31 h this week"`. Empty when the card has none.
-    header_line: String,
-    /// `"grid"` (poster grid, two or more PCs) or `"list"`. Empty with no card.
-    shape: &'static str,
-    /// The PCs behind the tiles: the members who own or played a listed game.
-    pc_count: i32,
-    tiles: Vec<RecentGameTileSnap>,
-}
-
-#[derive(Serialize)]
-struct RecentGameTileSnap {
-    name: String,
-    /// How many owner octagons the tile carries (the pips of the grid).
-    owners: usize,
-    /// The line under the name, for example `"4,167 H"` or `"EPIC"`.
-    hours_text: String,
-    /// Lower case: `"steam"`, `"epic"`, `"gog"`, or empty when unknown.
-    launcher: String,
-    tracked: bool,
-    /// What the shape of the card draws: `"image"` (the header art in the
-    /// grid, the icon in the list) or `"monogram"` (the two-letter fallback).
-    art: &'static str,
-    /// The tile holds icon art (the square of the list row).
-    has_icon: bool,
-    /// The tile holds header art (the frame of the poster grid).
-    has_header: bool,
 }
 
 /// The stats strip of the feed, the viewer's own.
@@ -699,193 +749,6 @@ fn image_key(img: &slint::Image) -> String {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     format!("{}x{}-{hash:016x}", size.width, size.height)
-}
-
-/// The placement name that the state port reports for a head2head variant.
-fn placement_name(variant: &str) -> &'static str {
-    match variant {
-        "wide" | "pairs" => "wide",
-        "versus" => "versus",
-        _ => "none",
-    }
-}
-
-/// The head2head card of the feed, read from the first `head2head` card.
-fn read_head2head(app: &MainWindow) -> Head2headSnap {
-    let feed = app.get_feed_cards();
-    // The belt hero is a head2head card too, but the pairs card carries the pairs.
-    let Some(card) = feed
-        .iter()
-        .find(|c| c.card_type == "head2head" && c.head2head.variant != "belt")
-    else {
-        return Head2headSnap {
-            present: false,
-            placement: "none",
-            member_count: 0,
-            open_seats: 0,
-            own_values: Vec::new(),
-            titles: Vec::new(),
-            pairs_count: 0,
-            pair_rows: 0,
-            pair_rows_dot: 0,
-            more_pairs: 0,
-            belt_moved_recent: false,
-            own_avatar_key: String::new(),
-            pair_avatar_keys: Vec::new(),
-        };
-    };
-    let h = &card.head2head;
-    let members = app.get_members();
-    Head2headSnap {
-        present: true,
-        placement: placement_name(&h.variant),
-        member_count: h.member_count,
-        open_seats: h.open_seats,
-        own_values: first_rows(&h.chips, |c| TitleChipSnap {
-            title_id: c.id.to_string(),
-            display: if c.unit.is_empty() {
-                c.value.to_string()
-            } else {
-                format!("{} {}", c.value, c.unit)
-            },
-        }),
-        titles: first_rows(&h.titles, |t| TitleHolderSnap {
-            title_id: t.id.to_string(),
-            holder_name: members
-                .iter()
-                .find(|m| m.id == t.holder_id)
-                .map(|m| m.name.to_string())
-                .unwrap_or_default(),
-        }),
-        pairs_count: h.pairs_total.max(0) as usize,
-        pair_rows: h.pairs.row_count(),
-        pair_rows_dot: h.pairs.iter().filter(|r| r.moved_recent).count(),
-        more_pairs: h.more_pairs,
-        belt_moved_recent: h.belt_moved_recent,
-        own_avatar_key: if h.left_has_avatar {
-            image_key(&h.left_avatar)
-        } else {
-            String::new()
-        },
-        pair_avatar_keys: h
-            .pairs
-            .iter()
-            .map(|r| {
-                if r.has_avatar {
-                    image_key(&r.avatar)
-                } else {
-                    String::new()
-                }
-            })
-            .collect(),
-    }
-}
-
-/// The invite card of the feed, read from the first `invite` card.
-fn read_invite_card(app: &MainWindow) -> InviteCardSnap {
-    let feed = app.get_feed_cards();
-    match feed.iter().find(|c| c.card_type == "invite") {
-        Some(card) => InviteCardSnap {
-            present: true,
-            octagons: card.head2head.members.row_count(),
-            more_count: card.head2head.more_members,
-            with_avatar: card
-                .head2head
-                .members
-                .iter()
-                .filter(|m| m.has_avatar)
-                .count(),
-        },
-        None => InviteCardSnap {
-            present: false,
-            octagons: 0,
-            more_count: 0,
-            with_avatar: 0,
-        },
-    }
-}
-
-/// The daily recap card of the feed, read from the first such card.
-fn read_daily_recap(app: &MainWindow) -> DailyRecapSnap {
-    let feed = app.get_feed_cards();
-    let Some((index, card)) = feed
-        .iter()
-        .enumerate()
-        .find(|(_, c)| c.card_type == "daily-recap")
-    else {
-        return DailyRecapSnap {
-            present: false,
-            day: String::new(),
-            hangout: String::new(),
-            clips: 0,
-            sessions: 0,
-            top_game: String::new(),
-            members: 0,
-            index: 0,
-            belts: Vec::new(),
-            wide: false,
-            rows: 0,
-        };
-    };
-    DailyRecapSnap {
-        present: true,
-        day: card.day_label.to_string(),
-        hangout: card.title.to_string(),
-        clips: card.clip_count,
-        sessions: card.day_sessions,
-        top_game: card.game_name.to_string(),
-        members: card.day_members.row_count(),
-        index,
-        wide: card.day_wide,
-        rows: card.day_rows.row_count(),
-        belts: card
-            .belts_moved
-            .iter()
-            .map(|b| b.title.to_string())
-            .collect(),
-    }
-}
-
-/// The recent games card of the feed, read from the first such card.
-fn read_recent_games(app: &MainWindow) -> RecentGamesSnap {
-    let feed = app.get_feed_cards();
-    let Some(card) = feed.iter().find(|c| c.card_type == "recent-games") else {
-        return RecentGamesSnap {
-            header_line: String::new(),
-            shape: "",
-            pc_count: 0,
-            tiles: Vec::new(),
-        };
-    };
-    let grid = crate::recent_games::is_grid(i64::from(card.recent_pc_count));
-    RecentGamesSnap {
-        header_line: card.subtitle.to_string(),
-        shape: if grid { "grid" } else { "list" },
-        pc_count: card.recent_pc_count,
-        tiles: first_rows(&card.recent_games, |t| {
-            // The tile shows the launcher in place of hours when it has none.
-            let hours = t.hours.to_string();
-            let launcher = if hours.starts_with(|c: char| c.is_ascii_digit()) {
-                crate::recent_games::launcher_of(&t.game_id, "")
-            } else {
-                hours.to_lowercase()
-            };
-            RecentGameTileSnap {
-                name: t.game_name.to_string(),
-                owners: t.owners.row_count(),
-                hours_text: hours,
-                launcher,
-                tracked: t.tracked,
-                art: if (grid && t.has_capsule) || (!grid && t.has_icon) {
-                    "image"
-                } else {
-                    "monogram"
-                },
-                has_icon: t.has_icon,
-                has_header: t.has_capsule,
-            }
-        }),
-    }
 }
 
 /// The first [`LIST_LIMIT`] rows of a model, converted.
@@ -1364,7 +1227,7 @@ fn read(app: &MainWindow) -> Snapshot {
                 can_watch: c.can_watch,
             }),
         },
-        feed_cards: read_feed_cards(app),
+        feed_zones: read_zones(app),
         clip: ClipSnap {
             path: app.get_clip_playing_path().into(),
             paused: app.get_clip_paused(),
@@ -1383,10 +1246,7 @@ fn read(app: &MainWindow) -> Snapshot {
                 error: ui.get_error().into(),
             }
         },
-        head2head: read_head2head(app),
         sealed: read_sealed(app),
-        invite_card: read_invite_card(app),
-        recent_games: read_recent_games(app),
         you_strip: {
             let strip = app.get_you_strip();
             YouStripSnap {
@@ -1395,9 +1255,9 @@ fn read(app: &MainWindow) -> Snapshot {
                 art: if strip.has_icon { "image" } else { "monogram" },
             }
         },
-        daily_recap: read_daily_recap(app),
         live_sessions: app
-            .get_feed_cards()
+            .get_feed_zones()
+            .sessions
             .iter()
             .enumerate()
             .filter(|(_, c)| c.card_type == "live-session")
@@ -1412,49 +1272,7 @@ fn read(app: &MainWindow) -> Snapshot {
                 poster: c.live.has_poster,
             })
             .collect(),
-        joined: app
-            .get_feed_cards()
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| c.card_type == "joined")
-            .map(|(index, c)| JoinedSnap {
-                name: c.actor_name.to_string(),
-                title: c.title.to_string(),
-                invited: c.subtitle.to_string(),
-                when: c.timestamp.to_string(),
-                index,
-            })
-            .collect(),
         chat_input_focused: app.global::<crate::ChatFocus>().get_input_focused(),
-        quiet_rows: app
-            .get_feed_quiet()
-            .iter()
-            .map(|r| JoinedRowSnap {
-                line: r.line.to_string(),
-                when: r.when.to_string(),
-            })
-            .collect(),
-        dormant_strip: app.get_feed_dormant().iter().next().map(|c| DormantSnap {
-            text: c.title.to_string(),
-            age: c.timestamp.to_string(),
-        }),
-        belt_hero: app
-            .get_feed_cards()
-            .iter()
-            .find(|c| c.card_type == "head2head" && c.head2head.variant == "belt")
-            .map(|c| BeltHeroSnap {
-                headline: c.head2head.belt.headline.to_string(),
-                detail: c.head2head.belt.detail.to_string(),
-                age: c.head2head.belt.age.to_string(),
-            }),
-        skeleton_trio: [
-            app.get_feed_skeleton_stream(),
-            app.get_feed_skeleton_voice_clip(),
-            app.get_feed_skeleton_recap(),
-        ]
-        .into_iter()
-        .filter(|on| *on)
-        .count(),
         audio: AudioSnap {
             capture_device: app.get_selected_capture_name().into(),
             playback_device: app.get_selected_playback_name().into(),
@@ -1603,18 +1421,22 @@ mod tests {
             can_watch: true,
             ..Default::default()
         }]));
-        app.set_feed_cards(model(vec![crate::FeedCardData {
-            id: "f1".into(),
-            card_type: "clip".into(),
-            title: "Clutch".into(),
-            actor_name: "alice".into(),
-            clip_path: "/clips/a.mp4".into(),
-            clip_kind: "game".into(),
-            clip_poster_path: "/clips/a.jpg".into(),
-            clip_uploading: true,
-            clip_can_play: true,
+        app.set_feed_zones(crate::ZonesData {
+            clips: model(vec![crate::FeedCardData {
+                id: "f1".into(),
+                card_type: "clip".into(),
+                title: "Clutch".into(),
+                actor_name: "alice".into(),
+                clip_path: "/clips/a.mp4".into(),
+                clip_kind: "game".into(),
+                clip_poster_path: "/clips/a.jpg".into(),
+                clip_uploading: true,
+                clip_can_play: true,
+                is_new: true,
+                ..Default::default()
+            }]),
             ..Default::default()
-        }]));
+        });
         app.set_clip_playing_path("/clips/a.mp4".into());
         app.set_clip_paused(true);
         app.set_clip_progress(0.5);
@@ -1633,7 +1455,8 @@ mod tests {
             s["messages"],
             json!([{"sender": "bob", "text": "@alice yes", "id": "m1",
                     "reply_to_name": "alice", "reply_preview": "ready?",
-                    "edited": true, "deleted": false, "gif": true, "mentions_me": true}])
+                    "edited": true, "deleted": false, "gif": true, "mentions_me": true,
+                    "images": 0, "reactions": 0}])
         );
         assert_eq!(
             s["stream"],
@@ -1643,11 +1466,13 @@ mod tests {
                               "width": 1280, "height": 720, "can_watch": true}]})
         );
         assert_eq!(
-            s["feed_cards"],
+            s["feed_zones"]["clips"],
             json!([{"id": "f1", "card_type": "clip", "title": "Clutch",
                     "actor_name": "alice", "clip_path": "/clips/a.mp4",
                     "clip_kind": "game", "clip_poster_path": "/clips/a.jpg",
-                    "clip_uploading": true, "clip_can_play": true}])
+                    "clip_uploading": true, "clip_can_play": true,
+                    "poster": false, "new": true, "game_name": "",
+                    "art": "monogram"}])
         );
         assert_eq!(
             s["clip"],
@@ -1691,39 +1516,31 @@ mod tests {
             sealed,
             ..Default::default()
         };
-        let chip = |key: &str, sealed: bool| crate::TitleHeld {
+        let title = |key: &str, sealed: bool| crate::BoardTitle {
             belt: belt(key, sealed),
             ..Default::default()
         };
-        let row = |key: &str, sealed: bool| crate::H2hPairRow {
-            has_chip: true,
-            chip: chip(key, sealed),
-            ..Default::default()
-        };
-        app.set_feed_cards(model(vec![
-            crate::FeedCardData {
-                card_type: "head2head".into(),
-                head2head: crate::Head2headData {
-                    pairs: model(vec![row("night_owl:1", true), row("the_carry:2", false)]),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            crate::FeedCardData {
+        app.set_feed_zones(crate::ZonesData {
+            titles: model(vec![
+                title("night_owl:1", true),
+                title("the_carry:2", false),
+            ]),
+            recap_card: crate::FeedCardData {
                 card_type: "recap".into(),
                 recap_seal: crate::RecapSeal {
                     key: "recap:7".into(),
                     sealed: true,
                     ..Default::default()
                 },
-                // The same belt as the pair row: counted once.
+                // The same belt as the board row: counted once.
                 belts_moved: model(vec![crate::RecapBeltMovedRow {
                     belt: belt("night_owl:1", true),
                     ..Default::default()
                 }]),
                 ..Default::default()
             },
-        ]));
+            ..Default::default()
+        });
         assert_eq!(
             snapshot_json(app)["sealed"],
             json!({"belts": 1, "own": 0, "recap": true, "open_center": "none", "resting": false})
@@ -1741,97 +1558,123 @@ mod tests {
     }
 
     #[test]
-    fn the_snapshot_reads_head2head_recent_games_and_the_skeleton_trio() {
+    fn the_snapshot_reads_the_zones() {
         let h = Harness::new();
         let app = h.app();
-        let none = snapshot_json(app);
-        assert_eq!(none["head2head"]["present"], false);
-        assert_eq!(none["head2head"]["placement"], "none");
-        assert_eq!(
-            none["recent_games"],
-            json!({"header_line": "", "shape": "", "pc_count": 0, "tiles": []})
-        );
-        assert_eq!(none["skeleton_trio"], 0);
+        let none = snapshot_json(app)["feed_zones"].clone();
+        assert_eq!(none["stage"], "");
+        assert_eq!(none["stage_card"], Value::Null);
+        assert_eq!(none["board"], "");
+        assert_eq!(none["history"], json!([]));
 
-        app.set_members(model(vec![crate::MemberData {
-            id: "u1".into(),
-            name: "bob".into(),
-            ..Default::default()
-        }]));
-        let chip = |id: &str, value: &str, unit: &str| crate::TitleHeld {
-            id: id.into(),
-            value: value.into(),
-            unit: unit.into(),
-            holder_id: "u1".into(),
+        let person = |name: &str| crate::H2hPerson {
+            name: name.into(),
             ..Default::default()
         };
-        let tile = |name: &str, id: &str, hours: &str, capsule: bool| crate::RecentGameTile {
-            game_id: id.into(),
-            game_name: name.into(),
-            hours: hours.into(),
-            has_icon: capsule,
-            tracked: capsule,
-            ..Default::default()
-        };
-        app.set_feed_cards(model(vec![
-            crate::FeedCardData {
+        app.set_feed_zones(crate::ZonesData {
+            stage: "card".into(),
+            stage_card: crate::FeedCardData {
+                id: "head2head-belt".into(),
                 card_type: "head2head".into(),
                 head2head: crate::Head2headData {
-                    variant: "pairs".into(),
-                    member_count: 1,
-                    open_seats: 4,
-                    belt_moved_recent: true,
-                    pairs_total: 4,
-                    more_pairs: 3,
-                    left_has_avatar: true,
-                    left_avatar: pixels([9, 9, 9, 255]),
-                    pairs: model(vec![crate::H2hPairRow::default()]),
-                    chips: model(vec![
-                        chip("the_carry", "62", "%"),
-                        chip("one_trick", "9", ""),
-                    ]),
-                    titles: model(vec![chip("the_carry", "62", "%")]),
+                    variant: "belt".into(),
+                    belt: crate::BeltHeroData {
+                        headline: "Sara took Night Owl from you".into(),
+                        detail: "03:40 beats 03:14.".into(),
+                        age: "6 days ago".into(),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
                 ..Default::default()
             },
-            crate::FeedCardData {
-                card_type: "recent-games".into(),
-                subtitle: "14 sessions, 31 h this week".into(),
-                recent_games: model(vec![
-                    tile("Brawlhalla", "steam-291550", "4,167 H", true),
-                    tile("Fortnite", "epic-fortnite", "EPIC", false),
-                ]),
+            board: "quiet".into(),
+            quiet_line: "No crew time last week.".into(),
+            today_big: crate::BoardStat {
+                value: "6".into(),
+                unit: "h".into(),
+                tail: "40".into(),
+                label: "HANGOUT".into(),
+            },
+            today_stats: model(vec![
+                crate::BoardStat {
+                    value: "2".into(),
+                    label: "SESSIONS".into(),
+                    ..Default::default()
+                },
+                crate::BoardStat {
+                    value: "3".into(),
+                    label: "ON".into(),
+                    ..Default::default()
+                },
+            ]),
+            today_has_top: true,
+            today_top: crate::BoardGame {
+                name: "Counter-Strike 2".into(),
                 ..Default::default()
             },
-        ]));
-        app.set_feed_skeleton_stream(true);
-        app.set_feed_skeleton_recap(true);
-
-        let s = snapshot_json(app);
+            titles: model(vec![crate::BoardTitle {
+                title: "NIGHT OWL".into(),
+                person: person("Sara"),
+                unread: true,
+                ..Default::default()
+            }]),
+            title_count: 13,
+            people: true,
+            members: model(vec![person("You"), person("Sara")]),
+            open_seats: 3,
+            joined: model(vec![person("Jonas")]),
+            joined_line: "Jonas joined".into(),
+            say_hi_card: "joined-u2".into(),
+            voice: "idle".into(),
+            channel: "Lounge".into(),
+            installed: model(vec![crate::BoardGame {
+                name: "Deep Rock Galactic".into(),
+                ..Default::default()
+            }]),
+            history: model(vec![crate::HistoryWeek {
+                label: "Week 4".into(),
+                locked: true,
+                teasers: model(vec![crate::LockedTeaser::default()]),
+                more: 5,
+                ..Default::default()
+            }]),
+            history_more: true,
+            ..Default::default()
+        });
+        let z = snapshot_json(app)["feed_zones"].clone();
+        assert_eq!(z["stage"], "card");
+        assert_eq!(z["stage_card"]["card_type"], "head2head");
         assert_eq!(
-            s["head2head"],
-            json!({"present": true, "placement": "wide", "member_count": 1, "open_seats": 4,
-                   "own_values": [{"title_id": "the_carry", "display": "62 %"},
-                                  {"title_id": "one_trick", "display": "9"}],
-                   "titles": [{"title_id": "the_carry", "holder_name": "bob"}],
-                   "pairs_count": 4, "pair_rows": 1, "pair_rows_dot": 0, "more_pairs": 3, "belt_moved_recent": true,
-                   "own_avatar_key": image_key(&pixels([9, 9, 9, 255])),
-                   "pair_avatar_keys": [""]})
+            z["belt_hero"],
+            json!({"headline": "Sara took Night Owl from you", "detail": "03:40 beats 03:14.",
+                   "age": "6 days ago"})
+        );
+        assert_eq!(z["board"], "quiet");
+        assert_eq!(z["quiet_line"], "No crew time last week.");
+        assert_eq!(
+            z["today"],
+            json!({"empty": false, "hangout": "6 h 40", "clips": 0, "sessions": 2, "on": 3,
+                   "top_game": "Counter-Strike 2"})
         );
         assert_eq!(
-            s["invite_card"],
-            json!({"present": false, "octagons": 0, "more_count": 0, "with_avatar": 0})
+            z["belts"],
+            json!([{"title": "NIGHT OWL", "holder_name": "Sara", "sealed": false, "unread": true}])
         );
+        assert_eq!(z["belt_count"], 13);
         assert_eq!(
-            s["recent_games"],
-            json!({"header_line": "14 sessions, 31 h this week", "shape": "list", "pc_count": 0, "tiles": [
-                {"name": "Brawlhalla", "hours_text": "4,167 H", "launcher": "steam",
-                 "owners": 0, "tracked": true, "art": "image", "has_icon": true, "has_header": false},
-                {"name": "Fortnite", "hours_text": "EPIC", "launcher": "epic",
-                 "owners": 0, "tracked": false, "art": "monogram", "has_icon": false, "has_header": false}]})
+            z["people"],
+            json!({"shown": true, "members": 2, "members_with_avatar": 0, "open_seats": 3, "joined": ["Jonas"],
+                   "joined_line": "Jonas joined", "say_hi": true, "voice": "idle",
+                   "channel": "Lounge"})
         );
-        assert_eq!(s["skeleton_trio"], 2);
+        assert_eq!(z["installed"], json!(["Deep Rock Galactic"]));
+        assert_eq!(
+            z["history"],
+            json!([{"label": "Week 4", "locked": true, "clips": 0, "teasers": 1, "more": 5}])
+        );
+        assert_eq!(z["history_more"], true);
+        assert_eq!(z["plus"], false);
     }
 
     /// The QA harness asserts the member volume and the local mute.

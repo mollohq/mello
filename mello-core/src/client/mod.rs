@@ -1293,12 +1293,11 @@ impl Client {
             Command::StopClipPlayback => {
                 self.handle_stop_clip_playback();
             }
-            Command::LoadCrewTimeline { crew_id, cursor } => {
-                self.handle_load_crew_timeline(&crew_id, cursor.as_deref())
-                    .await;
-            }
             Command::LoadCrewFeed { crew_id } => {
                 self.handle_load_crew_feed(&crew_id).await;
+            }
+            Command::LoadCrewHistory { crew_id, before } => {
+                self.handle_load_crew_history(&crew_id, before).await;
             }
             Command::FeedChanged { crew_id } => {
                 let active = self.nakama.active_crew_id().map(String::from);

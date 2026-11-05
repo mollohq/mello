@@ -1,0 +1,362 @@
+import { Theme } from "../theme.slint";
+import { H2hPerson, BeltReveal, RecapSeal, FeedCardData } from "../types.slint";
+import { SealedFixtures } from "./sealed_fixtures.slint";
+import { CrewFeed } from "../panels/crew_feed.slint";
+import { ControlBar } from "../panels/control_bar.slint";
+import { BoardStat, BoardGame, BoardTitle, ZonesData, HistoryWeek } from "../components/feed_board.slint";
+
+// ============================================================
+//  The zone feed matrix: the real CrewFeed panel with test data, one
+//  Preview for each crew case. The review gate for every feed change.
+//
+//  Members are fake. Avatars are DiceBear output from the approved styles
+//  (AVATAR-SYSTEM.md 2.1). Art is the abstract preview fixtures.
+//
+//  Render every case to one page: scripts/render-feed-zones.sh
+//  One case:
+//    slint-viewer --component PreviewFeedBig --screenshot out.png \
+//      client/ui/previews/feed_board_preview.slint
+// ============================================================
+
+global Crew {
+    out property <H2hPerson> bob: { id: "u-bob", name: "b0bben", initials: "B0", hue-index: 1, avatar: @image-url("fixtures/avatars/b0bben.svg"), has-avatar: true };
+    out property <H2hPerson> you: { id: "u-bob", name: "You", initials: "B0", hue-index: 1, avatar: @image-url("fixtures/avatars/b0bben.svg"), has-avatar: true };
+    out property <H2hPerson> max: { id: "u-max", name: "Max", initials: "MA", hue-index: 0, avatar: @image-url("fixtures/avatars/max.svg"), has-avatar: true };
+    out property <H2hPerson> jonas: { id: "u-jonas", name: "Jonas", initials: "JO", hue-index: 2, avatar: @image-url("fixtures/avatars/jonas.svg"), has-avatar: true };
+    out property <H2hPerson> sara: { id: "u-sara", name: "Sara", initials: "SA", hue-index: 3, avatar: @image-url("fixtures/avatars/sara.svg"), has-avatar: true };
+    out property <H2hPerson> leo: { id: "u-leo", name: "Leo", initials: "LE", hue-index: 4, avatar: @image-url("fixtures/avatars/leo.svg"), has-avatar: true };
+    out property <H2hPerson> oskar: { id: "u-oskar", name: "Oskar", initials: "OS", hue-index: 3, avatar: @image-url("fixtures/avatars/oskar.svg"), has-avatar: true };
+    out property <H2hPerson> ida: { id: "u-ida", name: "Ida", initials: "ID", hue-index: 2, avatar: @image-url("fixtures/avatars/ida.svg"), has-avatar: true };
+    out property <H2hPerson> nils: { id: "u-nils", name: "Nils", initials: "NI", hue-index: 1, avatar: @image-url("fixtures/avatars/nils.svg"), has-avatar: true };
+    out property <H2hPerson> theo: { id: "u-theo", name: "Theo", initials: "TH", hue-index: 4, avatar: @image-url("fixtures/avatars/theo.svg"), has-avatar: true };
+    out property <H2hPerson> vera: { id: "u-vera", name: "Vera", initials: "VE", hue-index: 0, avatar: @image-url("fixtures/avatars/vera.svg"), has-avatar: true };
+    out property <H2hPerson> alva: { id: "u-alva", name: "Alva", initials: "AL", hue-index: 0, avatar: @image-url("fixtures/avatars/alva.svg"), has-avatar: true };
+    out property <H2hPerson> hugo: { id: "u-hugo", name: "Hugo", initials: "HU", hue-index: 2, avatar: @image-url("fixtures/avatars/hugo.svg"), has-avatar: true };
+    out property <H2hPerson> elin: { id: "u-elin", name: "Elin", initials: "EL", hue-index: 2, avatar: @image-url("fixtures/avatars/elin.svg"), has-avatar: true };
+    out property <H2hPerson> noah: { id: "u-noah", name: "Noah", initials: "NO", hue-index: 0, avatar: @image-url("fixtures/avatars/noah.svg"), has-avatar: true };
+    out property <H2hPerson> saga: { id: "u-saga", name: "Saga", initials: "SA", hue-index: 4, avatar: @image-url("fixtures/avatars/saga.svg"), has-avatar: true };
+    out property <H2hPerson> juni: { id: "u-juni", name: "Juni", initials: "JU", hue-index: 3, avatar: @image-url("fixtures/avatars/juni.svg"), has-avatar: true };
+
+    out property <image> cs2: @image-url("fixtures/capsule-sample-1.png");
+    out property <image> rl: @image-url("fixtures/capsule-sample-2.png");
+    out property <image> drg: @image-url("fixtures/capsule-sample-4.png");
+    out property <image> hd2: @image-url("fixtures/capsule-sample-5.png");
+
+    out property <image> i-carry: @image-url("../icons/h2h-carry.svg");
+    out property <image> i-owl: @image-url("../icons/h2h-night-owl.svg");
+    out property <image> i-marathon: @image-url("../icons/h2h-belt.svg");
+    out property <image> i-clipper: @image-url("../icons/scissors.svg");
+    out property <image> i-collector: @image-url("../icons/h2h-collector.svg");
+    out property <image> i-locked: @image-url("../icons/h2h-locked-in.svg");
+    out property <image> i-mouth: @image-url("../icons/mic.svg");
+    out property <[float]> wave-a: [0.18, 0.63, 0.51, 0.22, 0.03, 0.03, 0.03, 0.35, 0.73, 0.30, 0.03, 0.03, 0.03, 0.14, 0.36, 0.62, 0.45, 0.32, 0.17, 0.03, 0.03, 0.06, 0.13, 0.29, 0.22, 0.32, 0.28, 0.14, 0.06, 0.03, 0.03, 0.12, 0.41, 0.57, 0.80, 0.53, 0.51, 0.28, 0.13, 0.03, 0.03, 0.10, 0.24, 0.41, 0.45, 0.44, 0.42, 0.28, 0.11, 0.03, 0.03, 0.03, 0.43, 0.75, 0.29, 0.03, 0.03, 0.16, 0.49, 0.55, 0.83, 0.67, 0.40, 0.12];
+    out property <[float]> wave-b: [0.22, 0.46, 0.85, 0.47, 0.24, 0.03, 0.03, 0.03, 0.11, 0.22, 0.22, 0.11, 0.03, 0.03, 0.03, 0.39, 0.77, 0.29, 0.03, 0.03, 0.03, 0.07, 0.22, 0.24, 0.28, 0.22, 0.08, 0.03, 0.03, 0.03, 0.08, 0.31, 0.39, 0.46, 0.67, 0.59, 0.49, 0.30, 0.11, 0.03, 0.03, 0.14, 0.36, 0.62, 0.60, 0.35, 0.15, 0.03, 0.03, 0.03, 0.20, 0.44, 0.84, 0.55, 0.47, 0.20, 0.03, 0.15, 0.27, 0.48, 0.53, 0.40, 0.11, 0.03];
+    out property <[float]> wave-c: [0.21, 0.56, 0.66, 0.79, 0.42, 0.21, 0.03, 0.03, 0.09, 0.31, 0.39, 0.57, 0.67, 0.51, 0.33, 0.11, 0.03, 0.03, 0.13, 0.37, 0.62, 0.49, 0.48, 0.63, 0.37, 0.14, 0.03, 0.03, 0.12, 0.35, 0.49, 0.41, 0.32, 0.16, 0.03, 0.03, 0.20, 0.52, 0.62, 0.66, 0.61, 0.37, 0.19, 0.03, 0.03, 0.32, 0.84, 0.40, 0.03, 0.18, 0.35, 0.44, 0.14, 0.03, 0.15, 0.32, 0.42, 0.53, 0.65, 0.41, 0.10, 0.03, 0.06, 0.21];
+    out property <[float]> wave-d: [0.07, 0.14, 0.21, 0.27, 0.30, 0.26, 0.18, 0.06, 0.03, 0.03, 0.27, 0.68, 0.89, 0.46, 0.24, 0.03, 0.13, 0.37, 0.24, 0.10, 0.03, 0.27, 0.66, 0.27, 0.03, 0.03, 0.19, 0.51, 0.79, 0.62, 0.66, 0.50, 0.18, 0.03, 0.03, 0.14, 0.26, 0.35, 0.10, 0.03, 0.03, 0.15, 0.46, 0.54, 0.53, 0.41, 0.12, 0.03, 0.12, 0.29, 0.33, 0.13, 0.03, 0.10, 0.33, 0.39, 0.36, 0.32, 0.08, 0.03, 0.21, 0.40, 0.48, 0.49];
+}
+
+global Data {
+    out property <BeltReveal> marathon-sealed: {
+        key: "marathon:911", sealed: true, seed: 911,
+        code: SealedFixtures.marathon-code, cells: SealedFixtures.marathon-cells,
+        title: "Marathon", icon: Crew.i-marathon, hue-index: Crew.sara.hue-index, kind: 1, amount: 232,
+        stat: "Longest single game session.", holder: Crew.sara, prev: Crew.leo,
+    };
+    out property <BeltReveal> carry-sealed: {
+        key: "the_carry:1307", sealed: true, seed: 1307,
+        code: SealedFixtures.carry-code, cells: SealedFixtures.carry-cells,
+        title: "The Carry", icon: Crew.i-carry, hue-index: Crew.leo.hue-index, kind: 0, amount: 412, unit: "h",
+        stat: "Most hours in the top shared game.", holder: Crew.leo, prev: Crew.max,
+    };
+    out property <RecapSeal> week-seal: {
+        key: "recap:45", sealed: true, seed: 4421,
+        bright: SealedFixtures.recap-bright, dim: SealedFixtures.recap-dim,
+    };
+
+    out property <[BoardStat]> today: [
+        { value: "14", label: "CLIPS" },
+        { value: "9", label: "SESSIONS" },
+        { value: "17", label: "ON" },
+    ];
+    /// Today: Marathon moved last night and is still sealed.
+    out property <[BoardTitle]> titles-today: [
+        { person: Crew.sara, title: "MARATHON", icon: Crew.i-marathon, value: "3", unit: "h", tail: "52", unread: true, belt: Data.marathon-sealed },
+        { person: Crew.oskar, title: "CLIPPER", icon: Crew.i-clipper, value: "41", unit: "clips", unread: true },
+        { person: Crew.leo, title: "THE CARRY", icon: Crew.i-carry, value: "412", unit: "h" },
+        { person: Crew.you, title: "NIGHT OWL", icon: Crew.i-owl, value: "03:14" },
+        { person: Crew.max, title: "THE COLLECTOR", icon: Crew.i-collector, value: "37", unit: "installed" },
+        { person: Crew.jonas, title: "LOCKED IN", icon: Crew.i-locked, value: "21", unit: "h" },
+        { person: Crew.ida, title: "MOUTH", icon: Crew.i-mouth, value: "1,140", unit: "min" },
+    ];
+    /// Monday: two belts moved in the week and are still sealed.
+    out property <[BoardTitle]> titles-monday: [
+        { person: Crew.sara, title: "MARATHON", icon: Crew.i-marathon, value: "3", unit: "h", tail: "52", belt: Data.marathon-sealed },
+        { person: Crew.leo, title: "THE CARRY", icon: Crew.i-carry, value: "412", unit: "h", belt: Data.carry-sealed },
+        { person: Crew.oskar, title: "CLIPPER", icon: Crew.i-clipper, value: "41", unit: "clips" },
+        { person: Crew.you, title: "NIGHT OWL", icon: Crew.i-owl, value: "03:14" },
+        { person: Crew.max, title: "THE COLLECTOR", icon: Crew.i-collector, value: "37", unit: "installed" },
+    ];
+    /// Monday, the week opened: the belts are open, the moves show the dot.
+    out property <[BoardTitle]> titles-opened: [
+        { person: Crew.sara, title: "MARATHON", icon: Crew.i-marathon, value: "3", unit: "h", tail: "52", unread: true },
+        { person: Crew.leo, title: "THE CARRY", icon: Crew.i-carry, value: "412", unit: "h", unread: true },
+        { person: Crew.oskar, title: "CLIPPER", icon: Crew.i-clipper, value: "41", unit: "clips" },
+        { person: Crew.you, title: "NIGHT OWL", icon: Crew.i-owl, value: "03:14" },
+    ];
+}
+
+global Own {
+    out property <BeltReveal> carry: { key: "own:the_carry:c1", sealed: true, seed: 11, code: SealedFixtures.carry-code, cells: SealedFixtures.carry-cells, title: "The Carry", icon: Crew.i-carry, hue-index: 1, holder: Crew.you };
+    out property <BeltReveal> owl: { key: "own:night_owl:c1", sealed: true, seed: 12, code: SealedFixtures.owl-code, cells: SealedFixtures.owl-cells, title: "Night Owl", icon: Crew.i-owl, hue-index: 1, holder: Crew.you };
+    out property <BeltReveal> collector: { key: "own:the_collector:c1", sealed: true, seed: 13, code: SealedFixtures.marathon-code, cells: SealedFixtures.marathon-cells, title: "The Collector", icon: Crew.i-collector, hue-index: 1, holder: Crew.you };
+    out property <BeltReveal> locked: { key: "own:locked_in:c1", sealed: true, seed: 14, code: SealedFixtures.owl-code, cells: SealedFixtures.owl-cells, title: "Locked In", icon: Crew.i-locked, hue-index: 1, holder: Crew.you };
+    out property <BeltReveal> owl-moved: {
+        key: "night_owl:3301", sealed: true, seed: 3301, code: SealedFixtures.owl-code, cells: SealedFixtures.owl-cells,
+        title: "Night Owl", icon: Crew.i-owl, hue-index: Crew.jonas.hue-index, holder: Crew.jonas, prev: Crew.you,
+    };
+}
+
+global Hist {
+    out property <FeedCardData> g1: { id: "g1", card-type: "clip", clip-kind: "game", clip-path: "g1", clip-can-play: true,
+        snapshot-poster: @image-url("fixtures/stream-sample-2.png"), snapshot-poster-ready: true,
+        actor-name: "Max", actor-initials: "MA", actor-avatar: Crew.max.avatar, actor-has-avatar: true, game-name: "Counter-Strike 2", duration: "0:30", is-new: true };
+    out property <FeedCardData> v1: { id: "v1", card-type: "clip", clip-kind: "voice", clip-path: "v1",
+        actor-name: "Jonas", actor-initials: "JO", actor-avatar: Crew.jonas.avatar, actor-has-avatar: true, game-name: "Counter-Strike 2", duration: "0:24", waveform: Crew.wave-b };
+    out property <FeedCardData> g2: { id: "g2", card-type: "clip", clip-kind: "game", clip-path: "g2", clip-can-play: true,
+        snapshot-poster: @image-url("fixtures/stream-sample-1.png"), snapshot-poster-ready: true,
+        actor-name: "Hugo", actor-initials: "HU", actor-avatar: Crew.hugo.avatar, actor-has-avatar: true, game-name: "Rocket League", duration: "0:22" };
+    out property <FeedCardData> v2: { id: "v2", card-type: "clip", clip-kind: "voice", clip-path: "v2",
+        actor-name: "Sara", actor-initials: "SA", actor-avatar: Crew.sara.avatar, actor-has-avatar: true, duration: "0:30", waveform: Crew.wave-c };
+    out property <FeedCardData> g3: { id: "g3", card-type: "clip", clip-kind: "game", clip-path: "g3", clip-can-play: true,
+        snapshot-poster: @image-url("fixtures/stream-sample-3.png"), snapshot-poster-ready: true,
+        actor-name: "Leo", actor-initials: "LE", actor-avatar: Crew.leo.avatar, actor-has-avatar: true, game-name: "Fall Guys", duration: "0:18" };
+    out property <FeedCardData> hero-sara: { id: "hero", card-type: "clip", clip-kind: "game", clip-path: "hero", clip-can-play: true, is-hero: true,
+        snapshot-poster: @image-url("fixtures/stream-sample-3.png"), snapshot-poster-ready: true,
+        actor-name: "Sara", actor-initials: "SA", actor-avatar: Crew.sara.avatar, actor-has-avatar: true, game-name: "Counter-Strike 2", duration: "0:31", is-new: true };
+    out property <FeedCardData> hero-max: { id: "hero-max", card-type: "clip", clip-kind: "game", clip-path: "hero-max", clip-can-play: true, is-hero: true,
+        snapshot-poster: @image-url("fixtures/stream-sample-2.png"), snapshot-poster-ready: true,
+        actor-name: "Max", actor-initials: "MA", actor-avatar: Crew.max.avatar, actor-has-avatar: true, game-name: "Counter-Strike 2", duration: "0:28", is-new: true };
+    out property <FeedCardData> hero-hugo: { id: "hero-hugo", card-type: "clip", clip-kind: "game", clip-path: "hero-hugo", clip-can-play: true, is-hero: true,
+        snapshot-poster: @image-url("fixtures/stream-sample-1.png"), snapshot-poster-ready: true,
+        actor-name: "Hugo", actor-initials: "HU", actor-avatar: Crew.hugo.avatar, actor-has-avatar: true, game-name: "Rocket League", duration: "0:30" };
+    out property <FeedCardData> hero-old: { id: "hero-old", card-type: "clip", clip-kind: "game", clip-path: "hero-old", clip-can-play: true, is-hero: true,
+        snapshot-poster: @image-url("fixtures/stream-sample-3.png"), snapshot-poster-ready: true,
+        actor-name: "Jonas", actor-initials: "JO", actor-avatar: Crew.jonas.avatar, actor-has-avatar: true, game-name: "Fall Guys", duration: "0:30" };
+    out property <FeedCardData> s-cs: { id: "s-cs", card-type: "game-session", game-name: "Counter-Strike 2", game-capsule: Crew.cs2, game-has-capsule: true,
+        actor-name: "Jonas", actor-initials: "JO", actor-avatar: Crew.jonas.avatar, actor-has-avatar: true, duration-human: "2h 16m", timestamp: "Today",
+        game-record: "1W 2L", game-wins: 1, game-losses: 2, game-matches: 3, participant-count: 3,
+        part0-initials: "JO", part0-avatar: Crew.jonas.avatar, part0-has-avatar: true,
+        part1-initials: "SA", part1-avatar: Crew.sara.avatar, part1-has-avatar: true,
+        part2-initials: "B0", part2-avatar: Crew.bob.avatar, part2-has-avatar: true };
+    out property <FeedCardData> s-drg: { id: "s-drg", card-type: "game-session", game-name: "Deep Rock Galactic", game-capsule: Crew.drg, game-has-capsule: true,
+        actor-name: "Nils", actor-initials: "NI", actor-avatar: Crew.nils.avatar, actor-has-avatar: true, duration-human: "2h 05m", timestamp: "Yesterday", participant-count: 3,
+        part0-initials: "NI", part0-avatar: Crew.nils.avatar, part0-has-avatar: true,
+        part1-initials: "AL", part1-avatar: Crew.alva.avatar, part1-has-avatar: true,
+        part2-initials: "HU", part2-avatar: Crew.hugo.avatar, part2-has-avatar: true };
+    out property <FeedCardData> s-rl: { id: "s-rl", card-type: "game-session", game-name: "Rocket League", game-capsule: Crew.rl, game-has-capsule: true,
+        actor-name: "Max", actor-initials: "MA", actor-avatar: Crew.max.avatar, actor-has-avatar: true, duration-human: "48m", timestamp: "Monday",
+        game-record: "2W 1L", game-wins: 2, game-losses: 1, game-matches: 3, participant-count: 2,
+        part0-initials: "MA", part0-avatar: Crew.max.avatar, part0-has-avatar: true,
+        part1-initials: "TH", part1-avatar: Crew.theo.avatar, part1-has-avatar: true };
+    out property <FeedCardData> belt-hero: { id: "head2head-belt", card-type: "head2head",
+        head2head: { variant: "belt", belt: {
+            title-id: "night_owl", title: "Night Owl", icon: Crew.i-owl, hue-index: Crew.sara.hue-index,
+            prev: Crew.you, prev-value: "03:14", holder: Crew.sara, holder-value: "03:40",
+            age: "6 days ago", headline: "Sara took Night Owl from you", detail: "03:40 beats 03:14." } } };
+    out property <FeedCardData> recap-sealed: { id: "recap_45", card-type: "recap", recap-week: "Week 45", recap-seal: Data.week-seal };
+    out property <[HistoryWeek]> locked: [
+        { label: "Week 44", age: "Last week", locked: true, seal: Data.week-seal, more: 9,
+          teasers: [
+            { person: Crew.leo, kind: "CLIP", duration: "0:30", code: SealedFixtures.carry-code },
+            { person: Crew.ida, kind: "STREAM", duration: "1 h 12 min", code: SealedFixtures.owl-code },
+          ] },
+        { label: "Week 43", age: "2 weeks ago", locked: true, seal: { key: "plus:43", sealed: true, seed: 911, bright: SealedFixtures.recap-bright, dim: SealedFixtures.recap-dim }, more: 4,
+          teasers: [
+            { person: Crew.sara, kind: "VOICE", duration: "0:24", code: SealedFixtures.marathon-code },
+            { person: Crew.max, kind: "CLIP", duration: "0:28", code: SealedFixtures.owl-code },
+          ] },
+    ];
+    out property <[HistoryWeek]> open: [
+        { label: "Week 44", age: "Last week", locked: false,
+          big: { value: "38", unit: "h", tail: "05", label: "HANGOUT" },
+          stats: [ { value: "22", label: "CLIPS" }, { value: "3", unit: "h", tail: "58", label: "LONGEST" }, { value: "5", label: "GAMES" } ],
+          has-top: true, top: { name: "Counter-Strike 2", art: Crew.cs2 },
+          clips: [Hist.g3, Hist.v2, Hist.g2] },
+        { label: "Week 43", age: "2 weeks ago", locked: false,
+          big: { value: "29", unit: "h", tail: "40", label: "HANGOUT" },
+          stats: [ { value: "17", label: "CLIPS" }, { value: "2", unit: "h", tail: "10", label: "LONGEST" }, { value: "4", label: "GAMES" } ],
+          has-top: true, top: { name: "Rocket League", art: Crew.rl },
+          clips: [Hist.g2, Hist.v1] },
+    ];
+}
+
+/// The feed panel at 1x with the control bar, as in the app.
+component Panel inherits Rectangle {
+    in property <ZonesData> zones;
+    width: 865px;
+    height: 865px;
+    background: Theme.bg-app;
+    VerticalLayout {
+        CrewFeed { vertical-stretch: 1; zones: root.zones; }
+        ControlBar {
+            height: Theme.control-bar-height;
+            user-name: "b0bben";
+            user-initials: "B0";
+            user-avatar: Crew.bob.avatar;
+            has-user-avatar: true;
+            can-stream: true;
+        }
+    }
+}
+
+global Base {
+    out property <[BoardStat]> today: Data.today;
+    out property <BoardStat> today-big: { value: "6", unit: "h", tail: "40", label: "HANGOUT" };
+    out property <BoardStat> week-big: { value: "43", unit: "h", tail: "12", label: "HANGOUT" };
+    out property <[BoardStat]> week-stats: [
+        { value: "31", label: "CLIPS" }, { value: "3", unit: "h", tail: "58", label: "LONGEST" }, { value: "5", label: "GAMES" },
+    ];
+    out property <BoardGame> cs2: { name: "Counter-Strike 2", art: Crew.cs2 };
+}
+
+/// 1 · A crew of one, day 0: own belts, the solo board, the first five.
+export component PreviewFeedDay0 inherits Panel {
+    zones: {
+        you: Crew.bob,
+        stage: "own", own-chips: [{ belt: Own.carry }, { belt: Own.owl }, { belt: Own.collector }, { belt: Own.locked }],
+        board: "solo",
+        solo-games: [
+            { name: "Counter-Strike 2", art: Crew.cs2, count: "4,167 h" },
+            { name: "Rocket League", art: Crew.rl, count: "812 h" },
+            { name: "Deep Rock Galactic", art: Crew.drg, count: "96 h" },
+        ],
+        people: true, members: [Crew.bob], open-seats: 4,
+    };
+}
+
+/// 2 · Three members, a little activity: Max's clip on stage, the board with
+/// a sealed belt, People moves up, one session.
+export component PreviewFeedSmall inherits Panel {
+    zones: {
+        you: Crew.bob,
+        stage: "card", stage-card: Hist.hero-max,
+        board: "tabs",
+        today-big: { value: "1", unit: "h", tail: "10", label: "HANGOUT" },
+        today-stats: [{ value: "1", label: "CLIPS" }, { value: "2", label: "SESSIONS" }, { value: "3", label: "ON" }],
+        today-has-top: true, today-top: Base.cs2,
+        week-big: Base.week-big, week-stats: Base.week-stats,
+        titles: Data.titles-monday, title-count: 13, more-label: "+8 MORE",
+        people: true, members: [Crew.bob, Crew.jonas, Crew.max], open-seats: 2,
+        sessions: [Hist.s-cs, Hist.s-rl],
+    };
+}
+
+/// 3 · Forty members, a busy evening: game clip on stage, the carousel,
+/// three joined and a call, session cards, sealed history.
+export component PreviewFeedBig inherits Panel {
+    height: 1500px;
+    zones: {
+        you: Crew.bob,
+        stage: "card", stage-card: Hist.hero-sara,
+        board: "tabs",
+        today-big: Base.today-big, today-stats: Base.today, today-has-top: true, today-top: Base.cs2,
+        week-big: Base.week-big, week-stats: Base.week-stats,
+        titles: Data.titles-today, title-count: 13, more-label: "+6 MORE",
+        clips: [Hist.g1, Hist.v1, Hist.g2, Hist.v2, Hist.g3],
+        people: true,
+        joined: [Crew.elin, Crew.noah, Crew.saga], joined-line: "Elin, Noah and Saga joined", joined-sub: "invited by Max, 20:46", say-hi-card: "j1",
+        voice: "call", channel: "Lounge", voice-line: "5 in the call", voice-people: [Crew.jonas, Crew.sara, Crew.ida, Crew.oskar], voice-more: 1,
+        sessions: [Hist.s-cs, Hist.s-drg, Hist.s-rl],
+        history: Hist.locked, history-more: true,
+    };
+}
+
+/// 4 · Monday: the sealed recap takes the board slot, the clips run full width.
+export component PreviewFeedMonday inherits Panel {
+    zones: {
+        you: Crew.bob,
+        stage: "card", stage-card: Hist.hero-hugo,
+        board: "sealed", recap-card: Hist.recap-sealed,
+        clips: [Hist.v1, Hist.g2, Hist.v2],
+        sessions: [Hist.s-cs],
+    };
+}
+
+/// 5 · Quiet week: the belt hero, the quiet board, the empty channel, what the
+/// crew has installed.
+export component PreviewFeedQuiet inherits Panel {
+    zones: {
+        you: Crew.bob,
+        stage: "card", stage-card: Hist.belt-hero, stage-short: true,
+        board: "quiet", quiet-line: "No crew time last week.", quiet-sub: "Sara, Max and 2 more still played.",
+        titles: Data.titles-opened, title-count: 13, more-label: "+9 MORE",
+        people: true, voice: "idle", channel: "Lounge", voice-line: "Empty. Last call 6 November",
+        installed: [
+            { name: "Deep Rock Galactic", art: Crew.drg, count: "23" },
+            { name: "Helldivers 2", art: Crew.hd2, count: "19" },
+            { name: "Rocket League", art: Crew.rl, count: "17" },
+        ],
+    };
+}
+
+/// 6 · Dormant: the strip, an old clip on stage, the last real week.
+export component PreviewFeedDormant inherits Panel {
+    zones: {
+        you: Crew.bob,
+        dormant-line: "Nothing new since 13 November. Leo holds The Carry.", dormant-age: "3 weeks ago",
+        stage: "card", stage-card: Hist.hero-old,
+        board: "past", past-label: "WEEK 46", past-age: "3 weeks ago",
+        week-big: { value: "38", unit: "h", tail: "05", label: "HANGOUT" }, week-stats: Base.week-stats,
+        titles: Data.titles-opened, title-count: 13, more-label: "+9 MORE",
+        people: true, voice: "idle", channel: "Lounge", voice-line: "Empty. Last call 13 November",
+    };
+}
+
+/// 7 · Crew history with m3llo+: every week open.
+export component PreviewFeedHistoryPlus inherits Panel {
+    height: 1500px;
+    zones: {
+        you: Crew.bob,
+        stage: "card", stage-card: Hist.hero-sara,
+        board: "tabs",
+        today-big: Base.today-big, today-stats: Base.today, today-has-top: true, today-top: Base.cs2,
+        week-big: Base.week-big, week-stats: Base.week-stats,
+        titles: Data.titles-today, title-count: 13, more-label: "+6 MORE",
+        clips: [Hist.g1, Hist.v1, Hist.g2],
+        sessions: [Hist.s-cs, Hist.s-drg, Hist.s-rl],
+        history: Hist.open, plus: true,
+    };
+}
+
+/// 8 · A quiet crew of two: three open seats with the invite, and the empty
+/// channel. The voice part is a card of its own.
+export component PreviewFeedQuietTwo inherits Panel {
+    zones: {
+        you: Crew.bob,
+        stage: "card", stage-card: Hist.belt-hero, stage-short: true,
+        board: "quiet", quiet-line: "No crew time last week.", quiet-sub: "Max still played.",
+        titles: Data.titles-opened, title-count: 7, more-label: "",
+        people: true, members: [Crew.bob, Crew.max], open-seats: 3,
+        voice: "idle", channel: "Lounge", voice-line: "Empty. Last call 6 November",
+    };
+}
+
+/// 9 · Three members, one joined today, a call: the seats and the join, and
+/// the call in a card of its own.
+export component PreviewFeedJoinCall inherits Panel {
+    height: 1200px;
+    zones: {
+        you: Crew.bob,
+        stage: "card", stage-card: Hist.hero-max,
+        board: "tabs",
+        today-big: { value: "1", unit: "h", tail: "10", label: "HANGOUT" },
+        today-stats: [{ value: "1", label: "CLIPS" }, { value: "2", label: "SESSIONS" }, { value: "3", label: "ON" }],
+        today-has-top: true, today-top: Base.cs2,
+        week-big: Base.week-big, week-stats: Base.week-stats,
+        titles: Data.titles-monday, title-count: 13, more-label: "+8 MORE",
+        people: true, members: [Crew.bob, Crew.jonas, Crew.elin], open-seats: 2,
+        joined: [Crew.elin], joined-line: "Elin joined", joined-sub: "invited by Jonas, 20:46", say-hi-card: "j1", say-hi-name: "Elin",
+        voice: "call", channel: "Lounge", voice-line: "2 in the call", voice-people: [Crew.jonas, Crew.elin],
+        sessions: [Hist.s-cs, Hist.s-rl],
+    };
+}
