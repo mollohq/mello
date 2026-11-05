@@ -11,6 +11,9 @@ pub fn wire(ctx: &AppContext) {
         log::debug!("UI: feed show more (premium pagination — not implemented)");
     });
 
+    // The zone feed scrolled near the end of Crew history.
+    crate::handlers::zones::wire_history_paging(ctx);
+
     let settings = ctx.settings.clone();
     ctx.app.on_session_seen(move |session_id| {
         let id = session_id.to_string();

@@ -108,3 +108,139 @@ fn an_old_clip_is_a_sealed_week_of_crew_history() {
     assert_eq!(week.teasers.row_count(), 1, "the clip is a locked teaser");
     assert_eq!(week.clips.row_count(), 0, "no clip plays without m3llo+");
 }
+
+// ── The zones payload (crew_feed with zones: true) ─────────────────────────
+
+fn zones_response(zones: serde_json::Value) -> FeedResponse {
+    let mut r = feed_of(vec![]);
+    r.zones = Some(serde_json::from_value(zones).expect("a zones payload"));
+    r
+}
+
+fn clip_json(id: &str, kind: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": id, "type": "clip", "ts": 1_700_000_000_000_i64,
+        "data": {"event_id": id, "clip_id": id, "clip_type": kind, "clipper_name": "Max",
+                 "duration_seconds": 30.0, "media_url": format!("https://media.example/{id}.mp4")}
+    })
+}
+
+/// The server's zones drive the feed: the stage clip, the clip carousel,
+/// the sessions, the board mode and the open seats come from the payload.
+#[test]
+fn the_zones_payload_drives_every_zone() {
+    let mut h = Harness::new();
+    zones_on(&mut h, 3);
+    h.emit(Event::FeedLoaded {
+        response: zones_response(serde_json::json!({
+            "free_days": 7,
+            "stage": {"kind": "game_clip", "entry": clip_json("hero", "game")},
+            "board": {"mode": "tabs"},
+            "clips": [clip_json("c1", "voice"), clip_json("c2", "game")],
+            "people": {"member_count": 3, "open_seats": 2},
+            "sessions": [{"id": "s1", "type": "session", "ts": 1_700_000_000_000_i64,
+                          "data": {"game_name": "Counter-Strike 2", "duration_min": 60, "player_ids": ["user-1"]}}],
+            "history": []
+        })),
+    });
+    let z = h.app().get_feed_zones();
+    assert_eq!(z.stage.as_str(), "card");
+    assert_eq!(z.stage_card.id.as_str(), "hero");
+    assert!(z.stage_card.is_hero, "the stage clip draws as the hero");
+    assert_eq!(z.board.as_str(), "tabs");
+    assert_eq!(z.clips.row_count(), 2);
+    assert_eq!(z.sessions.row_count(), 1);
+    assert_eq!(
+        z.sessions.row_data(0).map(|c| c.card_type.to_string()),
+        Some("game-session".into()),
+        "a game session is a real session card"
+    );
+    assert_eq!(z.open_seats, 2);
+    assert!(z.people);
+}
+
+/// A locked week of the payload shows sealed with its teasers, and the
+/// carousel's history tile counts it.
+#[test]
+fn a_locked_week_of_the_payload_is_sealed_with_teasers() {
+    let mut h = Harness::new();
+    zones_on(&mut h, 12);
+    h.emit(Event::FeedLoaded {
+        response: zones_response(serde_json::json!({
+            "board": {"mode": "tabs"},
+            "history": [{"week_start": 1_792_368_000_000_i64, "week_number": 44, "locked": true,
+                         "clip_count": 5, "stream_count": 1,
+                         "teasers": [{"kind": "clip", "actor_name": "Leo", "duration_seconds": 30.0, "ts": 1_792_400_000_000_i64},
+                                     {"kind": "stream", "actor_name": "Ida", "duration_seconds": 4320.0, "ts": 1_792_500_000_000_i64}]}],
+            "history_next": 0
+        })),
+    });
+    let z = h.app().get_feed_zones();
+    let week = z.history.row_data(0).expect("a week");
+    assert!(week.locked && week.seal.sealed);
+    assert_eq!(week.label.as_str(), "Week 44");
+    assert_eq!(week.teasers.row_count(), 2);
+    assert_eq!(
+        week.teasers.row_data(1).map(|t| t.duration.to_string()),
+        Some("1 h 12".into())
+    );
+    assert_eq!(week.more, 4, "six items, two teasers shown");
+    assert_eq!(week.clips.row_count(), 0, "nothing plays in a locked week");
+    assert!(!z.history_more);
+}
+
+/// Scrolling near the end asks for the next page once; the page appends its
+/// weeks and the next scroll asks for nothing more.
+#[test]
+fn crew_history_pages_by_week() {
+    let mut h = Harness::new();
+    zones_on(&mut h, 12);
+    let week =
+        |start: i64| serde_json::json!({"week_start": start, "locked": true, "clip_count": 1});
+    h.emit(Event::FeedLoaded {
+        response: zones_response(serde_json::json!({
+            "board": {"mode": "tabs"},
+            "history": [week(1_792_368_000_000)],
+            "history_next": 1_792_368_000_000_i64
+        })),
+    });
+    assert!(h.app().get_feed_zones().history_more);
+    h.commands();
+    h.app().invoke_zones_history_more();
+    h.app().invoke_zones_history_more();
+    h.pump();
+    let asked: Vec<i64> = h
+        .commands()
+        .into_iter()
+        .filter_map(|c| match c {
+            Command::LoadCrewHistory { before, .. } => Some(before),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        asked,
+        vec![1_792_368_000_000],
+        "one request for the next page"
+    );
+
+    h.emit(Event::FeedHistoryLoaded {
+        response: zones_response(serde_json::json!({
+            "history": [week(1_791_763_200_000)],
+            "history_next": 0
+        })),
+    });
+    let z = h.app().get_feed_zones();
+    assert_eq!(z.history.row_count(), 2, "the page appends its week");
+    assert!(!z.history_more, "the last page");
+}
+
+/// The m3llo+ coming soon modal closes with its Close button.
+#[test]
+fn the_coming_soon_modal_closes() {
+    let mut h = Harness::new();
+    zones_on(&mut h, 12);
+    h.app().set_plus_soon_open(true);
+    h.pump();
+    h.click_label("CLOSE");
+    assert!(!h.app().get_plus_soon_open());
+}

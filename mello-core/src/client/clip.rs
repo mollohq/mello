@@ -356,8 +356,25 @@ impl super::Client {
         }
     }
 
+    pub(super) async fn handle_load_crew_history(&self, crew_id: &str, before: i64) {
+        match self.nakama.crew_feed(crew_id, before).await {
+            Ok(response) => {
+                log::info!(
+                    "Crew history loaded for crew {}: {} week(s) before {}",
+                    crew_id,
+                    response.zones.as_ref().map_or(0, |z| z.history.len()),
+                    before
+                );
+                let _ = self.event_tx.send(Event::FeedHistoryLoaded { response });
+            }
+            Err(e) => {
+                log::warn!("crew_feed history page failed: {}", e);
+            }
+        }
+    }
+
     pub(super) async fn handle_load_crew_feed(&self, crew_id: &str) {
-        match self.nakama.crew_feed(crew_id).await {
+        match self.nakama.crew_feed(crew_id, 0).await {
             Ok(response) => {
                 log::info!(
                     "Feed loaded for crew {}: {} sections",

@@ -1396,10 +1396,10 @@ export struct ZonesData {
     voice-people: [H2hPerson],
     voice-more: int,
 
-    // Games: sessions, or what the crew has installed on a quiet week.
-    sessions: [BoardSession],
-    sessions-count: int,
-    sessions-more: string,
+    // Sessions: live sessions first, then every game, voice and stream
+    // session of the free window, as real cards in a carousel. Or what the
+    // crew has installed on a quiet week.
+    sessions: [FeedCardData],
     installed: [BoardGame],
 
     // The dormant strip.
@@ -1408,5 +1408,71 @@ export struct ZonesData {
 
     // Crew history: past weeks, newest first. `plus`: the crew has m3llo+.
     history: [HistoryWeek],
+    /// The server has another page of history (`history_next`).
+    history-more: bool,
     plus: bool,
+}
+
+/// m3llo+ has no purchase flow yet: every m3llo+ action opens this.
+export component PlusSoonModal inherits Rectangle {
+    callback close-requested();
+
+    width: 100%;
+    height: 100%;
+    background: Theme.scrim;
+
+    init => { keys.focus(); }
+
+    keys := FocusScope {
+        width: 100%;
+        height: 100%;
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.close-requested();
+                accept
+            } else {
+                reject
+            }
+        }
+
+        TouchArea {
+            // a11y: none (backdrop; the Close button is the control)
+            clicked => { root.close-requested(); }
+        }
+
+        BoardShell {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 380px;
+            height: col.preferred-height + 48px;
+            corner: "tr";
+            col := VerticalLayout {
+                x: 24px;
+                y: 24px;
+                width: parent.width - 48px;
+                spacing: 10px;
+                Kicker { text: "M3LLO+"; }
+                Text {
+                    text: "Coming soon";
+                    font-family: Theme.font-display;
+                    font-weight: Theme.weight-display;
+                    font-size: 22px;
+                    color: Theme.text-primary;
+                }
+                Text {
+                    text: "Every clip and recap of your crew, kept forever.";
+                    wrap: word-wrap;
+                    font-family: Theme.font-body;
+                    font-weight: Theme.weight-sentence;
+                    font-size: 13px;
+                    color: Theme.text-body;
+                }
+                HorizontalLayout {
+                    padding-top: 8px;
+                    alignment: end;
+                    ZoneButton { label: "CLOSE"; tone: "line"; clicked => { root.close-requested(); } }
+                }
+            }
+        }
+    }
 }

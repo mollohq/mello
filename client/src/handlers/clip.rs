@@ -554,7 +554,10 @@ fn hero_free(entries: &[mello_core::crew_events::FeedEntry]) -> bool {
 /// The joined cards of a feed response: one for each member who joined in the
 /// last 24 hours, newest first, three at most (CLIPS 7). The card is a plain
 /// cell. `feed_grid` places them after the first row, before the sessions.
-fn join_cards(ctx: &AppContext, joins: &[mello_core::crew_events::FeedJoin]) -> Vec<FeedCardData> {
+pub(super) fn join_cards(
+    ctx: &AppContext,
+    joins: &[mello_core::crew_events::FeedJoin],
+) -> Vec<FeedCardData> {
     let (viewer, members) = h2h_roster(ctx);
     let known = |id: &str| -> Option<&Person> {
         if id == viewer.id {
@@ -1798,8 +1801,8 @@ fn recent_games_header(session_count: i64, total_min: i64) -> String {
 }
 
 /// What the recent games card needs from the server's payload.
-struct RecentTiles {
-    tiles: Vec<RecentGameTile>,
+pub(super) struct RecentTiles {
+    pub(super) tiles: Vec<RecentGameTile>,
     /// The PCs behind the tiles. Two or more make the card a poster grid.
     pc_count: i64,
 }
@@ -1814,7 +1817,7 @@ struct RecentTiles {
 /// Art ladder: the runtime icon (cached or crew-shared), else the Steam header
 /// art on this disk, else the monogram. Nothing leaves the device. The log
 /// carries counts only.
-fn extract_recent_game_tiles(ctx: &AppContext, data: &serde_json::Value) -> RecentTiles {
+pub(super) fn extract_recent_game_tiles(ctx: &AppContext, data: &serde_json::Value) -> RecentTiles {
     let installed = ctx.installed_games.borrow();
     let installed_ids: std::collections::HashSet<String> =
         installed.iter().map(|g| g.game_id.clone()).collect();
@@ -2149,7 +2152,7 @@ pub(crate) fn game_clip_card(app: &MainWindow, path: &str) -> Option<FeedCardDat
 
 // Build a feed card from a server feed entry. card_type is the server-provided
 // feed type; the backend type is recovered for copy extraction.
-fn build_feed_card(
+pub(super) fn build_feed_card(
     ctx: &AppContext,
     id: &str,
     feed_type: &str,
@@ -2884,7 +2887,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
         Event::ClipUploaded { clip_id, media_url } => {
             log::info!("clip uploaded: clip_id={} media_url={}", clip_id, media_url);
         }
+        Event::FeedHistoryLoaded { response } => {
+            super::zones::append_history(ctx, response);
+        }
         Event::FeedLoaded { response } => {
+            ctx.zones_history_pending.set(0);
             log::info!(
                 "feed loaded for crew {}: {} sections",
                 response.crew_id,

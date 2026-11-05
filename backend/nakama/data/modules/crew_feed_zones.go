@@ -48,8 +48,8 @@ type FeedZones struct {
 	Clips    []FeedEntry `json:"clips"`
 	People   ZonePeople  `json:"people"`
 	Sessions []FeedEntry `json:"sessions"`
-	// Installed is set on a quiet week with no session: the games most
-	// members have.
+	// Installed is set on a quiet week with no session (the games most
+	// members have) and for a crew of one (its own games, the solo board).
 	Installed []RecentGameTile  `json:"installed,omitempty"`
 	History   []ZoneHistoryWeek `json:"history"`
 	// HistoryNext is the history_before of the next page. Zero at the end.
@@ -201,7 +201,9 @@ func buildFeedZones(in zonesInput) FeedZones {
 	z.Clips = zoneClips(in, start, stageID)
 	z.Board = zoneBoard(in)
 	z.Sessions = zoneSessions(in, start, stageID)
-	if z.Board.Mode == "quiet" && len(z.Sessions) == 0 {
+	// A quiet week with no session shows what the crew has installed; a crew
+	// of one shows its own games on the solo board.
+	if (z.Board.Mode == "quiet" && len(z.Sessions) == 0) || z.Board.Mode == "solo" {
 		z.Installed = zoneInstalled(in)
 	}
 	if in.H2h != nil {

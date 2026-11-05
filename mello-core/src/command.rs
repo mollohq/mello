@@ -548,6 +548,12 @@ pub enum Command {
     LoadCrewFeed {
         crew_id: String,
     },
+    /// The next page of Crew history of the zone feed: the weeks that start
+    /// before `before` (`FeedZones::history_next`).
+    LoadCrewHistory {
+        crew_id: String,
+        before: i64,
+    },
     /// The server pushed "feed changed" for a crew. The core loads the feed of
     /// the active crew again, at most once every five seconds
     /// (`feed_reload::FeedReloadGate`).

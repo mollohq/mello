@@ -787,6 +787,11 @@ pub enum Event {
     FeedLoaded {
         response: crate::crew_events::FeedResponse,
     },
+    /// A next page of Crew history (`Command::LoadCrewHistory`). The client
+    /// appends `zones.history` and keeps the rest of the feed.
+    FeedHistoryLoaded {
+        response: crate::crew_events::FeedResponse,
+    },
 
     // --- Crew events (event ledger) ---
     /// Catch-up data loaded for a crew.

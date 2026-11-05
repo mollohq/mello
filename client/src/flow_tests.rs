@@ -5043,6 +5043,7 @@ fn a_game_clip_in_the_feed_is_a_footage_card() {
             }],
         }],
         joined: vec![],
+        zones: None,
     };
 
     h.emit(Event::FeedLoaded { response: feed("") });
@@ -5776,6 +5777,7 @@ fn feed_loaded_decodes_clip_waveform() {
                 }],
             }],
             joined: vec![],
+            zones: None,
         },
     });
 
@@ -6044,6 +6046,7 @@ fn zero_telemetry_game_session_feed() -> mello_core::crew_events::FeedResponse {
             }],
         }],
         joined: vec![],
+        zones: None,
     }
 }
 
@@ -6107,6 +6110,7 @@ fn recent_games_feed() -> mello_core::crew_events::FeedResponse {
             }],
         }],
         joined: vec![],
+        zones: None,
     }
 }
 
@@ -6799,6 +6803,7 @@ fn feed_of(entries: Vec<FeedEntry>) -> FeedResponse {
             entries,
         }],
         joined: vec![],
+        zones: None,
     }
 }
 
@@ -9337,6 +9342,7 @@ fn recap_feed(data: serde_json::Value) -> mello_core::crew_events::FeedResponse 
             }],
         }],
         joined: vec![],
+        zones: None,
     }
 }
 
@@ -11547,6 +11553,7 @@ fn feed_with_memory(this_week: Vec<FeedEntry>, memory: Vec<FeedEntry>) -> FeedRe
             },
         ],
         joined: vec![],
+        zones: None,
     }
 }
 

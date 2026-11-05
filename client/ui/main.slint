@@ -48,7 +48,7 @@ import { VoiceChannelView } from "panels/voice_channel_view.slint";
 import { ChatPanel } from "panels/chat_panel.slint";
 import { ControlBar } from "panels/control_bar.slint";
 import { CrewFeed, CrewFeedZones } from "panels/crew_feed.slint";
-import { ZonesData } from "components/feed_board.slint";
+import { ZonesData, PlusSoonModal } from "components/feed_board.slint";
 import { Clock, SealedUi } from "components/sealed.slint";
 import { SettingsModal } from "panels/settings_modal.slint";
 import { NewCrewModal } from "panels/new_crew_modal.slint";
@@ -545,8 +545,12 @@ export component MainWindow inherits Window {
     /// The zone feed (prototype). Set at start from MELLO_FEED_ZONES=1.
     in property <bool> feed-zones-on: false;
     in property <ZonesData> feed-zones;
-    /// A locked week or the m3llo+ strip of the zone feed.
+    /// A locked week or the m3llo+ strip of the zone feed: the coming soon
+    /// modal opens (no purchase flow yet).
     callback zones-plus-clicked();
+    in-out property <bool> plus-soon-open: false;
+    /// The zone feed scrolled near the end: load the next page of history.
+    callback zones-history-more();
     // Skeleton trio (CLIPS 8): which of the three dashed cells show.
     in property <bool> feed-skeleton-stream: false;
     in property <bool> feed-skeleton-voice-clip: false;
@@ -1159,7 +1163,16 @@ export component MainWindow inherits Window {
                             seek-clip-ms(m) => { root.seek-clip-ms(m); }
                             invite-clicked => { root.invite-share-requested(); }
                             start-voice-clicked(channel-id) => { root.join-voice-channel(channel-id); }
-                            plus-clicked => { root.zones-plus-clicked(); }
+                            plus-clicked => {
+                                root.plus-soon-open = true;
+                                root.zones-plus-clicked();
+                            }
+                            you-strip: root.you-strip;
+                            you-strip-clicked => {
+                                root.stats-profile-open = true;
+                                root.stats-profile-opened();
+                            }
+                            history-more => { root.zones-history-more(); }
                             session-seen(id) => { root.session-seen(id); }
                             session-preview-request-frame(sid, idx) => {
                                 root.session-preview-request-frame(sid, idx);
@@ -1781,6 +1794,10 @@ export component MainWindow inherits Window {
         save(url) => { root.chat-image-save(url); }
         copy(url) => { root.chat-image-copy(url); }
         shown(i) => { root.chat-viewer-shown(i); }
+    }
+
+    if plus-soon-open: PlusSoonModal {
+        close-requested => { root.plus-soon-open = false; }
     }
 
     if invite-share-open: InviteShareModal {

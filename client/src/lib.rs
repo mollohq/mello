@@ -654,6 +654,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         dbg_hist: Rc::new(RefCell::new(DebugHistory::new())),
         avatar_cache: Rc::new(RefCell::new(std::collections::HashMap::new())),
         last_feed: Rc::new(RefCell::new(None)),
+        zones_history_pending: Rc::new(std::cell::Cell::new(0)),
         live_games: Rc::new(RefCell::new(Default::default())),
         game_icon_cache: Rc::new(RefCell::new(std::collections::HashMap::new())),
         art: match platform::exe_icon::art_cache_dir() {

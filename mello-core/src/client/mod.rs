@@ -1300,6 +1300,9 @@ impl Client {
             Command::LoadCrewFeed { crew_id } => {
                 self.handle_load_crew_feed(&crew_id).await;
             }
+            Command::LoadCrewHistory { crew_id, before } => {
+                self.handle_load_crew_history(&crew_id, before).await;
+            }
             Command::FeedChanged { crew_id } => {
                 let active = self.nakama.active_crew_id().map(String::from);
                 if self

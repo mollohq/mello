@@ -4205,6 +4205,7 @@ component ZonePeople inherits PeopleZone {
 /// watch, the sealed reveal and Say hi work as in CrewFeed.
 export component CrewFeedZones inherits Rectangle {
     in property <ZonesData> zones;
+    in property <YouStripData> you-strip;
     in property <[StreamCardData]> stream-cards: [];
     in property <int> clip-count: 0;
     in property <bool> is-hosting: false;
@@ -4233,6 +4234,9 @@ export component CrewFeedZones inherits Rectangle {
     callback session-preview-request-frame(/* session_id */ string, /* index */ int);
     /// A locked week or the m3llo+ strip.
     callback plus-clicked();
+    callback you-strip-clicked();
+    /// The feed scrolled near the end and the server has more history.
+    callback history-more();
 
     property <length> view-top: self.absolute-position.y;
     property <length> view-bottom: self.absolute-position.y + self.height;
@@ -4291,8 +4295,21 @@ export component CrewFeedZones inherits Rectangle {
         }
         Rectangle { height: 1px; background: Theme.card-border; }
 
+        // Pinned personal stats (only the viewer sees it), as in CrewFeed.
+        YouStrip {
+            data: root.you-strip;
+            clicked => { root.you-strip-clicked(); }
+        }
+
         feed-flick := Flickable {
             vertical-stretch: 1;
+            // Near the end with more history on the server: ask for a page.
+            changed content-y => {
+                if root.zones.history-more
+                    && self.content-height + self.content-y - self.height < 600px {
+                    root.history-more();
+                }
+            }
 
             VerticalLayout {
                 padding: 16px;
@@ -4445,11 +4462,21 @@ export component CrewFeedZones inherits Rectangle {
                     voice-clicked => { root.start-voice-clicked(zones.channel-id); }
                 }
 
-                if zones.sessions.length > 0: SessionsCard {
-                    height: 76px + 48px * zones.sessions.length;
-                    count: zones.sessions-count;
-                    sessions: zones.sessions;
-                    more-label: zones.sessions-more;
+                // Sessions: real session cards (now playing, game, voice,
+                // stream), the carousel of the clips.
+                if zones.sessions.length > 0: ClipCarousel {
+                    height: root.rh;
+                    clips: zones.sessions;
+                    per-page: 3;
+                    playing-path: root.clip-playing-path;
+                    clip-progress: root.clip-progress;
+                    clip-paused: root.clip-paused;
+                    clip-anim-tick: root.clip-anim-tick;
+                    clip-position-text: root.clip-position-text;
+                    clip-duration-text: root.clip-duration-text;
+                    clip-duration-ms: root.clip-duration-ms;
+                    play-clicked(path) => { root.card-clicked(path); }
+                    seek-clip-ms(m) => { root.seek-clip-ms(m); }
                 }
                 if zones.sessions.length == 0 && zones.installed.length > 0: MostInstalledCard {
                     height: 52px + 44px * zones.installed.length;
