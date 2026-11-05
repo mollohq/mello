@@ -10,6 +10,29 @@ import { nakamaTarget } from "./guard.ts";
 import { SlintMcp, type Control, type Point, type TextElement } from "./slint.ts";
 
 /** The state port snapshot (client/src/e2e_state.rs). */
+/** A feed card on the state port. */
+export type FeedCard = {
+    id: string;
+    card_type: string;
+    title: string;
+    actor_name: string;
+    clip_path: string;
+    /** "game" for a game clip, else "". */
+    clip_kind: string;
+    /** The poster file of a game clip on this PC. "" on other PCs. */
+    clip_poster_path: string;
+    /** The poster is up and the video is not. */
+    clip_uploading: boolean;
+    /** The video is up, or this PC has the clip file. */
+    clip_can_play: boolean;
+    /** The poster is on the card. */
+    poster: boolean;
+    /** The card counts as new (unread). */
+    new: boolean;
+    game_name: string;
+    art: "image" | "monogram";
+  };
+
 export type AppState = {
   screen: "onboarding" | "sign_in" | "app" | "blank";
   onboarding_step: number;
@@ -134,25 +157,51 @@ export type AppState = {
     /** The live stream cards of the active crew, in screen order. */
     cards: { host_id: string; streamer_name: string; viewer_count: number; width: number; height: number; can_watch: boolean }[];
   };
-  /** The feed of the active crew, in screen order (newest first), at most 20. */
-  /** The feed cards on screen. `row` is the grid row, one-based (0 in the stream rows above the grid); `wide` is a two-column slot. */
-  feed_cards: {
-    id: string;
-    card_type: string;
-    title: string;
-    actor_name: string;
-    clip_path: string;
-    /** "game" for a game clip, else "". */
-    clip_kind: string;
-    /** The poster file of a game clip on this PC. "" on other PCs. */
-    clip_poster_path: string;
-    /** The poster is up and the video is not. */
-    clip_uploading: boolean;
-    /** The video is up, or this PC has the clip file. */
-    clip_can_play: boolean;
-    row: number;
-    wide: boolean;
-  }[];
+  /** The zone feed of the active crew (client/src/handlers/zones.rs). */
+  feed_zones: {
+    /** "live", "card", "own" or "" (collapsed). */
+    stage: "live" | "card" | "own" | "";
+    /** The card on the Stage when `stage` is "card". */
+    stage_card: FeedCard | null;
+    /** The belt hero, when the Stage card is one. */
+    belt_hero: { headline: string; detail: string; age: string } | null;
+    /** The viewer's own chips on the Stage (a crew of one). */
+    own_chips: { title: string; value: string; sealed: boolean }[];
+    /** The viewer's octagon wears an image. */
+    you_avatar: boolean;
+    board: "sealed" | "tabs" | "quiet" | "past" | "solo" | "";
+    /** The belts of the board, in order. `title` is upper case, "THE CARRY". */
+    belts: { title: string; holder_name: string; sealed: boolean; unread: boolean }[];
+    /** Every belt of the crew. The board draws seven at most. */
+    belt_count: number;
+    quiet_line: string;
+    /** The Today tab of the board. */
+    today: { empty: boolean; hangout: string; clips: number; sessions: number; on: number; top_game: string };
+    /** The games of a crew of one on the solo board. */
+    solo_games: string[];
+    dormant: { text: string; age: string } | null;
+    clips: FeedCard[];
+    people: {
+      shown: boolean;
+      /** The octagons of the first five, and how many wear an image. */
+      members: number;
+      members_with_avatar: number;
+      open_seats: number;
+      /** Who joined in the last 24 hours. */
+      joined: string[];
+      joined_line: string;
+      /** The Say hi button shows. */
+      say_hi: boolean;
+      voice: "call" | "idle" | "";
+      channel: string;
+    };
+    sessions: FeedCard[];
+    /** The games most members have, on a quiet week with no session. */
+    installed: string[];
+    history: { label: string; locked: boolean; clips: number; teasers: number; more: number }[];
+    history_more: boolean;
+    plus: boolean;
+  };
   /** The clip that plays in the feed. `path` is "" when none plays. */
   clip: { path: string; paused: boolean; progress: number; duration_ms: number };
   /** The game clip player over the feed. `error` is "" when the clip plays. */
@@ -165,61 +214,10 @@ export type AppState = {
     ended: boolean;
     error: string;
   };
-  /** The head2head card of the feed. `present` is false (placement "none") when the feed has none. */
-  head2head: {
-    present: boolean;
-    /** "wide" is two columns wide: the chips of a crew of one, or the pair rows of two or more. */
-    placement: "wide" | "versus" | "none";
-    member_count: number;
-    open_seats: number;
-    /** The chips the card draws: the viewer's own values on the wide card. */
-    own_values: { title_id: string; display: string }[];
-    titles: { title_id: string; holder_name: string }[];
-    /** Every pair of the viewer, drawn or not. */
-    pairs_count: number;
-    /** The pair rows the card draws, in two columns. */
-    pair_rows: number;
-    /** The "+N more" line of the card. 0 when it does not show. */
-    more_pairs: number;
-    belt_moved_recent: boolean;
-    /** A fingerprint of the viewer's octagon image. "" when it shows initials. */
-    own_avatar_key: string;
-    /** The same for the opponent octagon of each pair row. */
-    pair_avatar_keys: string[];
-  };
-  /** The invite card of the feed. `present` is false when the feed has none. */
-  invite_card: { present: boolean; octagons: number; more_count: number; with_avatar: number };
-  /** The recent games card of the feed. Empty tiles when the feed has none. */
-  recent_games: {
-    /** The week's line ("14 sessions, 31 h this week"), or "". Never a note about the PCs. */
-    header_line: string;
-    /** "grid" from two PCs on, "list" for one, "" with no card. */
-    shape: "grid" | "list" | "";
-    pc_count: number;
-    /** `art` is what the shape draws: the header in the grid, the icon in the list. */
-    tiles: { name: string; owners: number; hours_text: string; launcher: string; tracked: boolean; art: "image" | "monogram"; has_icon: boolean; has_header: boolean }[];
-  };
   /** The stats strip of the feed: the viewer's last game, with its square icon. */
   you_strip: { has_stats: boolean; game_name: string; art: "image" | "monogram" };
-  /** The daily recap card of the feed. `present` is false when the feed has none. */
-  daily_recap: {
-    present: boolean;
-    day: string;
-    hangout: string;
-    clips: number;
-    sessions: number;
-    top_game: string;
-    members: number;
-    index: number;
-    belts: string[];
-    /** The day card: a day that is over, two columns wide with its sessions as rows. */
-    wide: boolean;
-    rows: number;
-  };
-  /** The live session cards (a game in progress), in screen order. `index` is the place in `feed_cards`. */
+  /** The live session cards (a game in progress), in screen order. `index` is the place in `feed_zones.sessions`. */
   live_sessions: { game_name: string; member_names: string[]; since_min: number; since_text: string; index: number; octagons: number; with_avatar: number; poster: boolean }[];
-  /** The joined cards of the feed, in grid order: a standard cell after the first row. */
-  joined: { name: string; title: string; invited: string; when: string; index: number }[];
   /** The chat input has the cursor. */
   chat_input_focused: boolean;
   /** Sealed belts and recap in the feed, and the card in the centre. */
@@ -235,8 +233,6 @@ export type AppState = {
     /** The card in the centre is at rest: the face shows and a click on the scrim closes it. */
     resting: boolean;
   };
-  /** The skeleton trio cells that show, 0 to 3. */
-  skeleton_trio: number;
   /** The audio page of the settings. */
   audio: { capture_device: string; playback_device: string; push_to_talk: boolean; push_to_talk_key: string };
   riot: { linked: boolean; id: string };

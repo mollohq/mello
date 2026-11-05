@@ -41,18 +41,15 @@ export async function fieldValue(app: App, label: string): Promise<string> {
 
 /**
  * Open the invite modal of the active crew. The one red invite on the feed is
- * "Invite your crew" (head2head cards, solo and versus). A crew with no
- * head2head card has the Invite card's "Share invite link". Without either,
- * the crew menu has "Invite". Every route opens the same modal, so a copy
- * change touches this one function.
+ * "Invite your crew", in the People zone while the first five have an open
+ * seat. Without it the crew menu has "Invite". Both open the same modal, so a
+ * copy change touches this one function.
  */
 export async function openInvite(app: App): Promise<void> {
   const labels = (await app.controls()).map((c) => c.label);
-  for (const label of ["Invite your crew", "Share invite link"]) {
-    if (labels.includes(label)) {
-      await app.click(label);
-      return;
-    }
+  if (labels.includes("Invite your crew")) {
+    await app.click("Invite your crew");
+    return;
   }
   await crewMenu(app, "Invite");
 }

@@ -12,7 +12,7 @@
 
 Stream session cards in the crew feed show still frames captured during a session. Cards with `snapshot_urls` render as **session-preview** tiles with a poster thumbnail and optional manual slideshow. This spec covers Nakama ledger fields, client loading (disk-first), and `SessionPreviewCard`.
 
-Feed curation (which cards appear, in what order, and their role/size, including the session-preview hero) is server-side in `crew_feed`; see [CLIPS.md](./CLIPS.md) §11.4 and [16-CREW-EVENT-LEDGER.md](../16-CREW-EVENT-LEDGER.md). This spec only covers how a `session-preview` entry loads and renders once the server has placed it.
+Feed curation (which cards appear and where, including the stream replay of the Stage) is server-side in `crew_feed`; see [CREW-FEED-ZONES.md](./CREW-FEED-ZONES.md) and [16-CREW-EVENT-LEDGER.md](../16-CREW-EVENT-LEDGER.md). This spec only covers how a `session-preview` entry loads and renders once the server has placed it.
 
 ---
 
@@ -31,9 +31,8 @@ StopStreamRPC (streaming.go)
     └── AppendCrewEvent → crew event ledger (recent window)
         └── UpsertStreamSession → crew_stream_sessions (durable replay)
                               │
-                              └── crew_feed RPC (curated, primary)
-                              └── crew_timeline RPC (raw, deep-scroll)
-                                      → entries[].data.snapshot_urls
+                              └── crew_feed RPC (the zones)
+                                      → entry.data.snapshot_urls
 ```
 
 The SFU writes JPEGs to R2 (`mello-snapshots`). `StopStreamRPC` lists the prefix, sorts by timestamp, and stores URLs on `StreamSessionData`. No runtime coordination between SFU and Nakama. Stream sessions feed the recent window from the ledger (via the shared `buildMergedTimeline` helper) and are also mirrored into the durable `crew_stream_sessions` store so replays survive the 7-day trim and appear in the `crew_feed` `memory` section. The snapshot backfill job updates both the ledger event and the durable copy.
@@ -71,7 +70,7 @@ Reuse `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` from clips. Nakama needs `
 
 ### 2.5 Feed RPCs
 
-`crew_feed` (`backend/nakama/data/modules/crew_feed.go`) is the curated primary read: it maps `stream_session` + `snapshot_urls` to a `session-preview` entry server-side and assigns its role/size. `crew_timeline` (`backend/nakama/data/modules/clips.go`) is the raw paginated source for deep scroll. Neither does snapshot-specific shaping beyond the type mapping.
+`crew_feed` (`backend/nakama/data/modules/crew_feed.go`, `crew_feed_zones.go`) is the one read: it maps `stream_session` + `snapshot_urls` to a `session-preview` entry server-side and puts it on the Stage, in the Sessions zone or in Crew history. It does no snapshot-specific shaping beyond the type mapping.
 
 Empty `snapshot_urls` when: pre-feature sessions, very short streams, or R2 list failure.
 
@@ -101,7 +100,7 @@ Only `session-preview` uses `SessionPreviewCard` and snapshot loading.
 
 ### 3.3 Events
 
-`crew_feed` → `Event::FeedLoaded` → `handlers/clip.rs` builds cards from the server-ordered `this_week` and `memory` sections (no client ordering), sets `feed_cards` + `memory_cards`, and triggers `SnapshotLoader` for `session-preview` posters in both models (replays in the memory band load their posters too).
+`crew_feed` → `Event::FeedLoaded` → `handlers/zones.rs` builds the zones from the payload (CREW-FEED-ZONES.md), sets `feed_zones`, and triggers `SnapshotLoader` for the `session-preview` and game clip posters of every zone (the Stage, the carousels, open weeks of Crew history). A rebuild keeps a loaded poster on its card.
 
 ---
 
@@ -132,15 +131,13 @@ Empty `snapshot-urls` or `snapshot-error`: placeholder UI (gradient + monitor ic
 
 ## 5. Crew feed curation (server-side)
 
-Curation moved off the client into `backend/nakama/data/modules/crew_feed.go`. The client no longer orders cards; it renders the server's `this_week`/`memory` sections by `role`/`size`. The session-preview quality score (below) lives in that file and decides the hero and the wide (`lg`) slot. Full contract: [CLIPS.md](./CLIPS.md) §11.4.
+Curation is on the server (`crew_feed_zones.go`). The session-preview quality score (below, `sessionPreviewQuality` in `crew_feed.go`) picks the stream replay of the Stage. Full contract: [CREW-FEED-ZONES.md](./CREW-FEED-ZONES.md).
 
-### 5.1 Goals (now enforced server-side)
+### 5.1 Goals
 
-- **Hero:** a `session-preview` from the last 24 hours leads, best by quality score. An older one leads only when nothing ranks above it. Order: [CLIPS.md](./CLIPS.md) §7.1. A clip is never the hero.
-- **Deprioritize** short streams (≤2 min, ≤4 snapshots) for hero/wide slots.
-- **Mix:** at least one of each present type: `clip`, `session`, `session-preview`, plus pinned `recap` and the daily recaps.
-- **Priority fill:** clips (standard size only) → strong previews → generic sessions.
-- **Wide slot:** strongest visual among fillers (preview or clip) gets `size: lg`.
+- **Stage:** with no live stream and no game clip with a poster, the best stream replay of the free window is on the Stage, by quality score; a tie goes to the newer one (`zoneStage`). A voice clip is never on the Stage.
+- **Deprioritize** short streams (≤2 min, ≤4 snapshots).
+- **Sessions:** every other stream of the window is a card in the Sessions carousel, newest first.
 
 ### 5.2 Quality score (session-preview)
 
@@ -175,7 +172,7 @@ Aligned with `00-ARCHITECTURE.md`. **Disk is the cache; RAM is the exception.**
 | `StreamSessionData` | `backend/nakama/data/modules/crew_events.go` |
 | `StopStreamRPC`, `listSnapshotURLs` | `backend/nakama/data/modules/streaming.go` |
 | Snapshot S3 client | `backend/nakama/data/modules/main.go` |
-| `crew_feed` / `crew_timeline` RPCs | `backend/nakama/data/modules/crew_feed.go`, `clips.go` |
+| `crew_feed` RPC | `backend/nakama/data/modules/crew_feed.go`, `crew_feed_zones.go` |
 | Durable stream-replay store | `backend/nakama/data/modules/stream_sessions_store.go` |
 | Feed curation + ordering (server) | `backend/nakama/data/modules/crew_feed.go` |
 | Feed → feed cards | `client/src/handlers/clip.rs` |
@@ -190,6 +187,6 @@ Aligned with `00-ARCHITECTURE.md`. **Disk is the cache; RAM is the exception.**
 
 ## 8. Testing
 
-- RPC: `crew_feed` with `{ "crew_id": "<uuid>" }` — inspect the `this_week` `session-preview` entries and `data.snapshot_urls`.
+- RPC: `crew_feed` with `{ "crew_id": "<uuid>" }` — inspect the `session-preview` entries of `zones.stage` and `zones.sessions`, and `data.snapshot_urls`.
 - Backend unit tests: `crew_feed_test.go` (hero, diversity, quiet/size, preview-by-snapshots).
 - Client unit tests: `snapshot_cache` JPEG decode.

@@ -281,6 +281,9 @@ struct FeedCardSnap {
     poster: bool,
     /// The card counts as new (unread).
     new: bool,
+    game_name: String,
+    /// The game art of the card: `"image"` or `"monogram"`.
+    art: &'static str,
 }
 
 fn card_snap(c: &crate::FeedCardData) -> FeedCardSnap {
@@ -296,6 +299,12 @@ fn card_snap(c: &crate::FeedCardData) -> FeedCardSnap {
         clip_can_play: c.clip_can_play,
         poster: c.snapshot_poster_ready,
         new: c.is_new,
+        game_name: c.game_name.to_string(),
+        art: if c.game_has_icon || c.game_has_capsule {
+            "image"
+        } else {
+            "monogram"
+        },
     }
 }
 
@@ -309,7 +318,9 @@ struct ZonesSnap {
     /// The belt hero, when the Stage card is one.
     belt_hero: Option<BeltHeroSnap>,
     /// The viewer's own chips on the Stage (a crew of one).
-    own_chips: usize,
+    own_chips: Vec<OwnChipSnap>,
+    /// The viewer's octagon wears an image.
+    you_avatar: bool,
     /// `"sealed"`, `"tabs"`, `"quiet"`, `"past"`, `"solo"` or `""`.
     board: String,
     /// The belts of the board, in order.
@@ -317,6 +328,10 @@ struct ZonesSnap {
     /// Every belt of the crew. The board draws seven at most.
     belt_count: i32,
     quiet_line: String,
+    /// The Today tab of the board.
+    today: TodaySnap,
+    /// The games of a crew of one on the solo board.
+    solo_games: Vec<String>,
     /// The dormant strip, if it shows.
     dormant: Option<DormantSnap>,
     clips: Vec<FeedCardSnap>,
@@ -332,6 +347,37 @@ struct ZonesSnap {
 }
 
 #[derive(Serialize)]
+struct OwnChipSnap {
+    title: String,
+    /// The value as the chip draws it, for example `"4,167"`.
+    value: String,
+    sealed: bool,
+}
+
+/// The Today tab of the board: the daily recap of the current day.
+#[derive(Serialize)]
+struct TodaySnap {
+    /// Nothing today: the tab is dim.
+    empty: bool,
+    /// For example `"6 h 40"` or `"48 min"`.
+    hangout: String,
+    clips: i64,
+    sessions: i64,
+    /// The members who took part.
+    on: i64,
+    /// Empty when the day has no top game.
+    top_game: String,
+}
+
+fn stat_text(s: &crate::BoardStat) -> String {
+    [s.value.as_str(), s.unit.as_str(), s.tail.as_str()]
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[derive(Serialize)]
 struct BoardBeltSnap {
     title: String,
     holder_name: String,
@@ -343,8 +389,9 @@ struct BoardBeltSnap {
 struct PeopleSnap {
     /// The People zone shows.
     shown: bool,
-    /// The octagons of the first five.
+    /// The octagons of the first five, and how many wear an image.
     members: usize,
+    members_with_avatar: usize,
     open_seats: i32,
     /// Who joined in the last 24 hours.
     joined: Vec<String>,
@@ -380,7 +427,16 @@ fn read_zones(app: &MainWindow) -> ZonesSnap {
                 detail: c.head2head.belt.detail.to_string(),
                 age: c.head2head.belt.age.to_string(),
             }),
-        own_chips: z.own_chips.row_count(),
+        own_chips: z
+            .own_chips
+            .iter()
+            .map(|t| OwnChipSnap {
+                title: t.title.to_string(),
+                value: t.value.to_string(),
+                sealed: t.belt.sealed,
+            })
+            .collect(),
+        you_avatar: z.you.has_avatar,
         board: z.board.to_string(),
         belts: z
             .titles
@@ -394,6 +450,28 @@ fn read_zones(app: &MainWindow) -> ZonesSnap {
             .collect(),
         belt_count: z.title_count,
         quiet_line: z.quiet_line.to_string(),
+        today: {
+            let n = |label: &str| {
+                z.today_stats
+                    .iter()
+                    .find(|s| s.label == label)
+                    .and_then(|s| s.value.parse::<i64>().ok())
+                    .unwrap_or(0)
+            };
+            TodaySnap {
+                empty: z.today_empty,
+                hangout: stat_text(&z.today_big),
+                clips: n("CLIPS"),
+                sessions: n("SESSIONS"),
+                on: n("ON"),
+                top_game: if z.today_has_top {
+                    z.today_top.name.to_string()
+                } else {
+                    String::new()
+                },
+            }
+        },
+        solo_games: z.solo_games.iter().map(|g| g.name.to_string()).collect(),
         dormant: (!z.dormant_line.is_empty()).then(|| DormantSnap {
             text: z.dormant_line.to_string(),
             age: z.dormant_age.to_string(),
@@ -407,6 +485,7 @@ fn read_zones(app: &MainWindow) -> ZonesSnap {
         people: PeopleSnap {
             shown: z.people,
             members: z.members.row_count(),
+            members_with_avatar: z.members.iter().filter(|m| m.has_avatar).count(),
             open_seats: z.open_seats,
             joined: z.joined.iter().map(|p| p.name.to_string()).collect(),
             joined_line: z.joined_line.to_string(),
@@ -1376,7 +1455,8 @@ mod tests {
             s["messages"],
             json!([{"sender": "bob", "text": "@alice yes", "id": "m1",
                     "reply_to_name": "alice", "reply_preview": "ready?",
-                    "edited": true, "deleted": false, "gif": true, "mentions_me": true}])
+                    "edited": true, "deleted": false, "gif": true, "mentions_me": true,
+                    "images": 0, "reactions": 0}])
         );
         assert_eq!(
             s["stream"],
@@ -1391,7 +1471,8 @@ mod tests {
                     "actor_name": "alice", "clip_path": "/clips/a.mp4",
                     "clip_kind": "game", "clip_poster_path": "/clips/a.jpg",
                     "clip_uploading": true, "clip_can_play": true,
-                    "poster": false, "new": true}])
+                    "poster": false, "new": true, "game_name": "",
+                    "art": "monogram"}])
         );
         assert_eq!(
             s["clip"],
@@ -1509,6 +1590,29 @@ mod tests {
             },
             board: "quiet".into(),
             quiet_line: "No crew time last week.".into(),
+            today_big: crate::BoardStat {
+                value: "6".into(),
+                unit: "h".into(),
+                tail: "40".into(),
+                label: "HANGOUT".into(),
+            },
+            today_stats: model(vec![
+                crate::BoardStat {
+                    value: "2".into(),
+                    label: "SESSIONS".into(),
+                    ..Default::default()
+                },
+                crate::BoardStat {
+                    value: "3".into(),
+                    label: "ON".into(),
+                    ..Default::default()
+                },
+            ]),
+            today_has_top: true,
+            today_top: crate::BoardGame {
+                name: "Counter-Strike 2".into(),
+                ..Default::default()
+            },
             titles: model(vec![crate::BoardTitle {
                 title: "NIGHT OWL".into(),
                 person: person("Sara"),
@@ -1549,13 +1653,18 @@ mod tests {
         assert_eq!(z["board"], "quiet");
         assert_eq!(z["quiet_line"], "No crew time last week.");
         assert_eq!(
+            z["today"],
+            json!({"empty": false, "hangout": "6 h 40", "clips": 0, "sessions": 2, "on": 3,
+                   "top_game": "Counter-Strike 2"})
+        );
+        assert_eq!(
             z["belts"],
             json!([{"title": "NIGHT OWL", "holder_name": "Sara", "sealed": false, "unread": true}])
         );
         assert_eq!(z["belt_count"], 13);
         assert_eq!(
             z["people"],
-            json!({"shown": true, "members": 2, "open_seats": 3, "joined": ["Jonas"],
+            json!({"shown": true, "members": 2, "members_with_avatar": 0, "open_seats": 3, "joined": ["Jonas"],
                    "joined_line": "Jonas joined", "say_hi": true, "voice": "idle",
                    "channel": "Lounge"})
         );

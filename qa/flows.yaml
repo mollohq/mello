@@ -478,7 +478,7 @@ flows:
     issues: []
 
   - id: FEED-04
-    title: "Crew feed with 2 members: one pair, three open seats, contested titles, avatars on the octagons"
+    title: "Crew feed with 2 members: the board with contested belts, the first five with three open seats, the join with Say hi, a session card with art"
     priority: P1
     users: 2
     harness: [zone_octagons_show_the_loaded_avatar_and_initials_without_one, a_feed_that_loads_before_the_member_list_is_built_again_with_the_roster, a_joiner_is_in_the_people_zone_with_the_inviter_the_time_and_say_hi, say_hi_sends_a_greeting_that_mentions_the_joiner_and_a_second_click_does_nothing, said_hi_survives_a_restart_and_is_once_for_each_joiner, the_joins_keep_three_newest_and_drop_old_and_own_joins, no_join_in_the_last_day_gives_no_join]
@@ -487,7 +487,7 @@ flows:
     issues: []
 
   - id: FEED-05
-    title: "Crew feed with 5 members: head2head without seats, the invite card with five octagons"
+    title: "Crew feed with 5 members: the first five complete with avatars and no invite, today on the board, a belt that moves between others is unread until the next open"
     priority: P1
     users: 1
     harness: []
@@ -496,7 +496,7 @@ flows:
     issues: []
 
   - id: FEED-06
-    title: "Crew feed with 20 members: six closest pairs with +N more in the last row, no invite card"
+    title: "Crew feed with 20 members: the board holds seven belts at most, no open seat, no invite, one clip carousel"
     priority: P1
     users: 1
     harness: []
@@ -514,7 +514,7 @@ flows:
     issues: []
 
   - id: FEED-08
-    title: "A game in progress shows as a live card for the viewer and the crew, and becomes the session card at the end"
+    title: "A game in progress is a live card at the front of the Sessions zone for the viewer and the crew, and becomes the session card at the end"
     priority: P1
     users: 1
     harness: [a_live_session_for_the_viewer_shows_the_pip_and_since_n_min, two_crewmates_in_the_same_game_share_one_card, the_live_card_is_gone_after_the_session_end_and_the_session_card_is_there_once]
@@ -523,7 +523,7 @@ flows:
     issues: []
 
   - id: FEED-09
-    title: "A day that adds something (a clip, a belt move or three active members) shows as one daily recap card: the day, hangout, clips, sessions, top game, members, belts"
+    title: "A day that adds something (a clip, a belt move or three active members) is Today on the board: hangout, clips, sessions, the members, the top game"
     priority: P1
     users: 2
     harness: []
@@ -532,7 +532,7 @@ flows:
     issues: []
 
   - id: FEED-11
-    title: "The day card: a daily recap with sessions is two columns wide with the day's sessions as rows, and a voice session is never a card"
+    title: "Today on the board with three members playing, and the day's sessions as cards in the Sessions zone"
     priority: P1
     users: 1
     harness: []
@@ -541,7 +541,7 @@ flows:
     issues: []
 
   - id: FEED-10
-    title: "A belt that moved is sealed in the feed, opens in the centre with the reveal, and returns open with the dot cleared"
+    title: "A belt that moved is sealed on the board, opens in the centre with the reveal, and returns open; the weekly recap opens to the Week tab"
     priority: P1
     users: 1
     harness: [a_belt_that_moved_is_sealed_and_not_a_title_that_did_not, a_move_older_than_seven_days_is_open, a_click_sends_the_card_to_the_centre_and_a_click_on_the_scrim_brings_it_back_open, opening_a_belt_opens_it_in_every_slot, the_recap_is_sealed_by_week, opening_the_recap_stores_the_week_and_the_card_returns_open, a_sealed_belt_stays_off_the_stage_until_it_is_opened, a_frame_at_a_fixed_clock_time_renders, the_card_rests_from_1250_ms, the_sealed_cards_and_the_scrim_are_controls_with_a_role_and_a_label]

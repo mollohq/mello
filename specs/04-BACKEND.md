@@ -92,7 +92,7 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `crew_state.go` | Crew state streaming (sidebar, presence) |
 | `presence.go` | Presence hooks (status tracking) |
 | `push.go` | Push notification helpers |
-| `clips.go` | `PostClipRPC`, `CrewTimelineRPC`, `CrewClipsRPC`, `CrewRecapsRPC`, `ClipUploadURLRPC`, `ClipUploadCompleteRPC`, `WeeklyRecapJob`; durable `crew_clips`/`crew_recaps` storage |
+| `clips.go` | `PostClipRPC`, `ClipUploadURLRPC`, `ClipUploadCompleteRPC`, `WeeklyRecapJob`; durable `crew_clips`/`crew_recaps` storage |
 | `crew_feed.go` | `CrewFeedRPC` — server-side feed curation (order, role, size, locked card) |
 | `stream_sessions_store.go` | Durable `crew_stream_sessions` store (`UpsertStreamSession`, cap) so stream replays outlive the ledger trim |
 | `s3.go` | S3/R2 presign client singleton, `GeneratePresignedPUT`, `S3PublicURL` helpers; the chat bucket (`MEDIA_S3_BUCKET`, `MEDIA_S3_PUBLIC_URL`) with `GeneratePresignedPUTChat` and `DeleteChatObjects` |
@@ -126,10 +126,7 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `stream_viewer_left` | Yes | `{crew_id, viewer_id}`. The host calls it on the SFU `member_left` of a viewer. Removes the viewer from `stream_meta.viewer_ids`, which `watch_stream` fills; crew state `viewer_count` is its length. Only the host can call it (PERMISSION_DENIED otherwise). |
 | `upload_thumbnail` | Yes | Stores stream thumbnail (base64) in Nakama storage. |
 | `post_clip` | Yes | Stores clip metadata in the durable per-crew `crew_clips` document (capped, outside the 7-day ledger trim). Pushes notification to crew. |
-| `crew_feed` | Yes | Server-curated primary feed: merges ledger + durable clips/recaps, returns `this_week` + `memory` sections with per-entry `role`/`size` and a server-emitted `locked` card for non-premium users. |
-| `crew_timeline` | Yes | Raw paginated merge (ledger + recent clips + latest recap) for deep scroll. Cursor-based. |
-| `crew_clips` | Yes | Paginated access to durable clips. |
-| `crew_recaps` | Yes | Paginated access to durable recaps. |
+| `crew_feed` | Yes | The crew feed: the zones (Stage, Board, clips and sessions of the free window, People) and one page of Crew history by week (`history_before`). See features/CREW-FEED-ZONES.md. |
 | `clip_upload_url` | Yes | Returns a presigned PUT URL for direct S3/R2 upload and the public `media_url`. Only the clipper, a crew member, after `post_clip`. |
 | `clip_upload_complete` | Yes | Updates the clip's `media_url` after successful upload. |
 | `chat_upload_url` | Yes | A presigned PUT on the chat images bucket for a crew member: key `{crew_id}/{user_id}/{uuid}.{ext}`, 15 min, `image/jpeg`, `image/png` or `image/gif`, at most 8 MB. Returns `upload_url`, `media_url`, `key`. Empty URLs when the bucket is off. |
@@ -336,9 +333,9 @@ Nakama's key-value storage is used for data that doesn't fit built-in models:
 | `crew_avatars` | `{crew_id}` | System user (`""`) | `{"data":"<base64 JPEG>"}` | `create_crew`, `get_crew_avatar` |
 | `invite_codes` | `{code}` | System user (`""`) | `{"crew_id":"...","crew_name":"...","created_by":"..."}` | `GenerateInviteCode`, `join_by_invite_code` |
 | `stream_thumbnails` | `{crew_id}` | Streaming user | `{"data":"<base64 JPEG>"}` | `upload_thumbnail` |
-| `crew_events` | `{crew_id}` | System user (`""`) | 7-day rolling JSON event ledger (sessions, joins, chat, moments) | `crew_timeline`, `crew_feed`, `post_moment` |
-| `crew_clips` | `{crew_id}` | System user (`""`) | Durable capped list of clip metadata (outside ledger trim) | `post_clip`, `crew_clips`, `crew_feed`, `clip_upload_complete` |
-| `crew_recaps` | `{crew_id}` | System user (`""`) | Durable list of weekly recaps | `WeeklyRecapJob`, `crew_recaps`, `crew_feed` |
+| `crew_events` | `{crew_id}` | System user (`""`) | 7-day rolling JSON event ledger (sessions, joins, chat, moments) | `crew_feed`, `post_moment` |
+| `crew_clips` | `{crew_id}` | System user (`""`) | Durable capped list of clip metadata (outside ledger trim) | `post_clip`, `crew_feed`, `clip_upload_complete` |
+| `crew_recaps` | `{crew_id}` | System user (`""`) | Durable list of weekly recaps | `WeeklyRecapJob`, `crew_feed` |
 | `crew_stream_sessions` | `{crew_id}` | System user (`""`) | Durable capped list of stream replays (outside ledger trim) | `stop_stream`, snapshot backfill, `crew_feed` |
 | `stream_resume` | `{host user_id}` | System user (`""`) | The stream records that `StreamCleanupUser` removed, the ledger event id and the time. Read 0, write 0. | `StreamCleanupUser` writes, `start_stream` with `resume_session_id` reads and deletes |
 | `discover` | `curation` | System user | Featured and hidden crew lists (§4.3). Read 0, write 0. | `discover_crews`, `admin_discover_curation_get`, `admin_discover_curation_set` |
@@ -534,8 +531,7 @@ Estimated cost: ~$2,000-5,000/mo
 | POST | `/v2/rpc/refresh_stream_token` | Yes | New SFU token for a stream session (host or viewer) |
 | POST | `/v2/rpc/upload_thumbnail` | Yes | Upload stream thumbnail |
 | POST | `/v2/rpc/post_clip` | Yes | Store clip metadata in durable `crew_clips` |
-| POST | `/v2/rpc/crew_feed` | Yes | Server-curated crew feed (`this_week` + `memory`) |
-| POST | `/v2/rpc/crew_timeline` | Yes | Raw paginated merge for deep scroll |
+| POST | `/v2/rpc/crew_feed` | Yes | The crew feed: the zones and Crew history |
 | POST | `/v2/rpc/clip_upload_url` | Yes | Get presigned PUT URL for S3/R2 upload |
 | POST | `/v2/rpc/clip_upload_complete` | Yes | Confirm upload, set media_url |
 | POST | `/v2/rpc/chat_upload_url` | Yes | Presigned PUT for a chat image |

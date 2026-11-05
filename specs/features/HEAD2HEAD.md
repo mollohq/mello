@@ -1,9 +1,9 @@
 # HEAD2HEAD
 
 > **Component:** Crew Feed, Crew Memory
-> **Version:** 1.1
-> **Status:** shipping with feat/next-gen-feed (backend only; client rendering is the next task)
-> **Depends on:** 16-CREW-EVENT-LEDGER.md (section 3.6, library documents), 19 (per-game stats and recap), CLIPS.md (feed hero order)
+> **Version:** 1.2
+> **Status:** built. The zone feed draws head2head as the belts of the Board, the belt hero and the own chips of the Stage, and the seats of the People zone (CREW-FEED-ZONES.md). The pairs view is not drawn (section 8).
+> **Depends on:** 16-CREW-EVENT-LEDGER.md (section 3.6, library documents), 19 (per-game stats and recap), CREW-FEED-ZONES.md
 
 ---
 
@@ -159,7 +159,9 @@ A member who joins or leaves does not trigger a recompute. The next trigger corr
 
 ## 5. Feed payload
 
-The `this_week` section has one entry for every crew: `type` `head2head`, `id` `head2head`. It is not a ledger event.
+The zones carry the head2head data of the crew for the viewer:
+`zones.head2head` of `crew_feed` (CREW-FEED-ZONES.md section 8). It is not a
+ledger event.
 
 | Field | Meaning |
 |---|---|
@@ -172,57 +174,25 @@ The `this_week` section has one entry for every crew: `type` `head2head`, `id` `
 | `updated_at` | Doc time. Zero when no doc exists |
 | `own_values` | The viewer's own value in every title their data can compute, contested or not. Each entry has `title_id`, `value`, `unit` and `display`. A title with no data for the viewer is absent. Never null |
 
-`own_values` is computed from the viewer's library, game stats and activity doc at read time. It does not use the holders doc. It lets a crew of one show chips. The `display` field is the value as text: whole hours from 100 up, one decimal below, thousands separated, `HH:MM` for the two clock titles.
+`own_values` is computed from the viewer's library, game stats and activity doc at read time. It does not use the holders doc. It lets a crew of one show chips. The `display` field is the value as text: whole hours from 100 up, one decimal below, thousands separated, `HH:MM` for the two clock titles. The client draws `display` as it is.
 
-Role and size:
+Where the feed draws it:
 
-- When a belt moved in the last 24 hours, the entry is the hero (`hero`, `lg`). The hero order is: live stream, belt moved, stream preview from the last 24 hours, recap on Monday, best session.
-- Otherwise the entry is `standard`, `lg`. It leads a feed with no hero. Behind a hero it takes the first wide slot after it. It never takes a filler slot.
-- The card is always two grid columns wide, at every crew size. There is no one-column form (`feed_grid.rs`, `place_wide_cards`). A crew of one has the chips (section "Solo card"), two or more have the pair rows.
-- A quiet feed has no hero (CLIPS.md 7.1, frame E). The client then leads with the newest belt move that involves the viewer, up to 14 days old, and the head2head card is the wide card under it. The payload does not change: the client reads `moved_at_ms` and `previous_holder_user_id` of every title, and the values of the pair. The card has its own headline: "Sara took Night Owl from Bob".
+- **Board belts.** Every contested title is a row of the board: the holder, the title and the value. Belts that moved or are sealed come first; the board draws seven and counts the rest.
+- **Belt hero.** The Stage holds the newest move that involves the viewer, as holder or as previous holder, up to 14 days old, in a crew of two or more (`stage.kind` `belt`). The card says who held the title, the title, who holds it now, a headline ("Sara took Night Owl from Bob") and the values ("03:40 beats 03:14."). The client builds it from `moved_at_ms`, `previous_holder_user_id` and the values. While the belt is sealed on the board, the Stage does not show it. A move between two other members is no belt hero.
+- **Own chips.** A crew of one: the Stage holds the viewer's octagon, the full name, up to four chips from `own_values` in display order (The Carry, Night Owl, The Collector, Locked In, Has a Life, Sampler, One Trick) in the viewer's identity hue, and "Go head2head with your crew". On a new crew the chips are sealed (SEALED-REVEAL.md section 9); an opened chip shows its title and value.
+- **Seats.** The People zone draws `open_seats` and the red invite while a seat is open.
 
-The client decides if a card renders. A card with no titles, no `own_values` and no open seats has no data.
+### Unread belt
 
-### Solo card
-
-A crew of one gets the wide card (frame A of the mockup). The card shows the viewer as an octagon with the full name, then four chips in a 2 by 2 grid, a keyline divider, "Go head2head with your crew", four open seats each labelled "Open", and the red invite button.
-
-- The chips come from `own_values`: the first four in display order (The Carry, Night Owl, The Collector, Locked In, Has a Life, Sampler, One Trick). They wear the viewer's identity hue. There is no holder octagon.
-- On a new crew the chips are sealed. A click opens one in the centre of the feed, with the reveal of a belt that moved and the viewer as "You" (specs/features/SEALED-REVEAL.md section 9).
-- The mockup also shows an "Old Guard" chip (the year of the Steam account). The client has no Steam account year, so the card does not show it. The next title in the display order takes its place.
-
-### Pair rows on the wide card
-
-The card shows the viewer's closest pairs (smallest gap first) in two columns, up to six: the card fills its height, three rows in each column. A pair with no contested title (0:0, `values` empty) is not a row: it would sort as the closest of all and say nothing. From five members the card needs two contested pairs; with fewer there is no head2head card, and the belts show in the recaps (`MIN_PAIR_ROWS`). The first column fills first: two members show one pair on each side, three pairs show two and one, five members show two rows of pairs side by side (frame D), nine members show three rows in each column. With three rows in a column the "held N days" line under the chip is left out, and the row spacing stays. "+N more" stands in the last row, after the tally, only when pairs remain, from eight members. Under five members the card also has the deciding chips, the open seats and the red invite. From five members the seats and the button are gone, and the invite card stands beside the head2head card, for 5 to 9 members. From 10 members there is no invite card.
-
-### Unread dot on a pair row
-
-- A pair row is unread when a title held by the viewer or by the other member has `moved_at_ms` less than 24 hours old and after the last time the viewer had the crew feed open.
-- An unread row shows a small red dot before the "You vs Name" label (red is state, "unread"). The client derives this from `titles`. The payload has no field for it.
-- Unread rows sort first. The other rows keep the closest-tally order.
-- The versus hero shows only when the moved title involves the viewer, as holder or as previous holder. A move between two other members has no hero. The wide card carries it as the dot.
-- The client stores the time of the last feed view for each crew, locally. Opening a crew takes the stored time as the baseline for that visit, and every feed load of the visit updates the stored time. The dot shows for the whole visit and clears on the next open.
-- The state port reports `head2head.pair_rows_dot`: the number of pair rows with the dot.
-
-### Deciding chip
-
-Each pair row on the card shows one chip: the title that decides the pair. The client picks it from `values`.
-
-- The gap of a title is `abs(a_value - b_value) / max(a_value, b_value)`. For `night_owl` the values are minutes after 18:00.
-- A title where both values are equal, or the gap is zero, decides nothing and is skipped.
-- Of the rest, the title with the largest gap wins. A tie goes to the title that comes first in the display order.
-- When every contested title of the pair ties, the row shows the first contested title in the display order, without the deciding emphasis: the chip loses the holder's hue (`chip_ties`).
-- Rows pick from the top down. A title that is the deciding chip of a higher row is skipped when the pair has another contested title. When every deciding title of the pair is used, the largest gap wins. This keeps a count title with small values (6 against 1) from deciding every row.
-- The chip shows the value of the member who would hold the title in the pair. Held days come from the crew holder, only when the crew holder is that member.
-- A pair with no `values` shows no chip.
+- A belt is unread when its `moved_at_ms` is less than 24 hours old and after the last time the viewer had the crew feed open.
+- The client stores the time of the last feed view for each crew, locally. Opening a crew takes the stored time as the baseline for that visit, and every feed load of the visit updates the stored time. The mark shows for the whole visit and clears on the next open.
+- An unread belt that is not sealed wears a red dot on its board row (red is state, "unread"). A sealed belt hides it.
+- The state port reports it as `feed_zones.belts[].unread`.
 
 ### Chip tooltip
 
-A pointer on an open chip shows a tooltip above the chip. The tooltip is the stat sentence of the title (`sealed::stat_line`), for example "Most hours in the top shared game."
-
-- A sealed chip has no tooltip.
-- The tooltip shows on the pair rows, the wide card, the versus hero, and the belts moved rows of the weekly and the daily recap.
-- The tooltip lines up with the right edge of the chip. The first chip of the versus hero is at the left edge of the card, so its tooltip lines up with the left edge.
+A pointer on an open chip shows a tooltip above the chip. The tooltip is the stat sentence of the title (`sealed::stat_line`), for example "Most hours in the top shared game." A sealed chip has no tooltip. The tooltip shows on the own chips and the belts moved rows of the weekly recap.
 
 ---
 
@@ -259,6 +229,9 @@ A belt move sends a push to the previous holder. A new member sends a push to th
 
 ## 8. Later
 
+- The pairs view: the viewer against every member, with the deciding title of
+  each pair. The payload has `pairs`; the zone feed does not draw them. It
+  comes back with the redesign of the You strip.
 - The opened view with the round robin of all pairs.
 - A per-crew off switch.
 - Recompute on member join and leave.

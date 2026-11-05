@@ -20,6 +20,8 @@ use crate::{
 
 /// Belt rows on the board before "+N more".
 const BOARD_BELTS: usize = 7;
+/// The octagons of the People zone: the first five of a crew.
+const FIRST_FIVE: usize = 5;
 /// People in the voice part before "+N".
 const VOICE_PEOPLE: usize = 5;
 /// Locked teasers in a week row before "+N".
@@ -366,10 +368,16 @@ fn build_from_zones(ctx: &AppContext, zs: &mello_core::crew_events::FeedZones) -
 
     // ── People.
     z.open_seats = zs.people.open_seats;
-    z.members = match &h2h_data {
-        Some(d) if d.members.row_count() > 0 => d.members.clone(),
-        _ => model(vec![you.clone()]),
-    };
+    // The first five: the viewer, then the crew in roster order.
+    let mut first_five = vec![you.clone()];
+    first_five.extend(
+        members
+            .iter()
+            .filter(|m| m.id != viewer.id)
+            .take(FIRST_FIVE - 1)
+            .map(|m| super::clip::live_person(ctx, m)),
+    );
+    z.members = model(first_five);
     people_joined(&mut z, &super::clip::join_cards(ctx, &zs.people.joined));
     let last_call = zs
         .sessions

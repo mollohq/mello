@@ -325,7 +325,7 @@ Any other text is ignored. The client does not log, store or send it. The client
 
 **Entry points:**
 - "Invite" icon button in the crew panel header (`crew_panel.slint`)
-- "Share invite link" button on the invite card in the crew feed (`crew_feed.slint`)
+- "Invite your crew" in the People zone of the crew feed, while a seat of the first five is open (`feed_board.slint`)
 
 **Flow:**
 1. User clicks invite button.
@@ -334,14 +334,11 @@ Any other text is ignored. The client does not log, store or send it. The client
 4. Opens the `InviteShareModal` (`invite_share_modal.slint`) showing the URL and a "Copy link" button.
 5. Clicking "Copy link" writes the URL to the system clipboard via `arboard` and visually confirms with "Copied!" + green button state.
 
-### 8.2 Invite card in the crew feed
+### 8.2 Invite in the crew feed
 
-**File:** `client/src/handlers/clip.rs`, `client/ui/panels/crew_feed.slint`
+**Files:** `client/src/handlers/zones.rs`, `client/ui/components/feed_board.slint` (`PeopleZone`)
 
-An `InviteCard` component is injected client-side at a fixed position (slot 2) in the feed layout. It shows "Invite your crew" with a description, a primary "Share invite link" button, and a "Hide" link.
-
-- **Visibility:** Shown for 5 to 9 members, unless the user hides it. From 10 members the card is not emitted. The share link stays in the crew menu. Hidden crew IDs are persisted in `settings.hidden_invite_crew_ids`.
-- **Hide action:** `on_hide_invite_card` removes the card from the current feed model and saves the crew ID to settings.
+The People zone of the feed (CREW-FEED-ZONES.md section 5) draws the first five: an octagon for each member, an open seat for each free one, and the red "Invite your crew" button while a seat is open. The button opens the invite share modal (section 8.1). Once the first five are complete the button goes, and the share link stays in the crew menu.
 
 ### 8.3 Join Crew confirmation screen
 

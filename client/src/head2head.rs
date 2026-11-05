@@ -727,9 +727,17 @@ pub fn build_rows_sealed(
     let mut sorted: Vec<&WireTitle> = known.clone();
     sorted.sort_by_key(|t| display_rank(&t.title_id));
     let moved_id = wire.belt_moved_recent.as_ref().map(|t| t.title_id.clone());
+    // A title is unread when it moved in the last 24 hours, after the
+    // viewer's last open of the feed, and the belt is not opened (HEAD2HEAD.md,
+    // "Unread belt").
     let titles: Vec<Chip> = sorted
         .iter()
-        .map(|t| chip_of(t, roster, now_ms, moved_id.as_deref() == Some(&t.title_id)))
+        .map(|t| {
+            let unread = t.moved_at_ms > seen_ms
+                && now_ms - t.moved_at_ms < DAY_MS
+                && !opened(&crate::sealed::belt_key(&t.title_id, t.moved_at_ms));
+            chip_of(t, roster, now_ms, unread)
+        })
         .collect();
 
     // The viewer is A in every pair. Rows keep the payload order. A pair with

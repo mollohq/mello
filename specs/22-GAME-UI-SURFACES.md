@@ -148,8 +148,9 @@ disabled activity sharing. See section 5.
 
 ### 3.3a Live session card
 
-The crew feed shows a game in progress as a `LiveSessionCard`. See
-[CLIPS.md](./features/CLIPS.md) section 7.1 for the placement rule.
+The crew feed shows a game in progress as a `LiveSessionCard` at the front
+of the Sessions zone ([CREW-FEED-ZONES.md](./features/CREW-FEED-ZONES.md)
+section 6, [CLIPS.md](./features/CLIPS.md) section 7.1).
 
 | Source | Data |
 |---|---|
@@ -159,31 +160,28 @@ The crew feed shows a game in progress as a `LiveSessionCard`. See
 The `presence_change` push carries `game`, so the card needs no crew state load.
 The client sends no new data. The card is never a ledger event.
 
-### 3.4 Recent games data
+### 3.4 Installed games data
 
-The recent games card gets its data from the `crew_feed` RPC. Entry type: `recent-games`. No `recent_games` field on `crew_catchup` and no `crew_recent_games` RPC exist.
+The zone feed shows the games most members have installed on a quiet week
+with no session (`zones.installed`), and a crew of one's own games on the
+solo board. Both come from one builder, `buildRecentGames` in
+`crew_feed.go`, read by `zoneInstalled` in `crew_feed_zones.go`.
 
 ```json
-{ "games": [ { "game_id": "valorant", "game_name": "Valorant", "launcher": "steam",
-               "minutes": 600, "last_played": 1760000000000, "member_ids": ["<user id>"] } ],
-  "session_count": 14, "total_min": 1860 }
+{ "game_id": "valorant", "game_name": "Valorant", "launcher": "steam",
+  "minutes": 600, "last_played": 1760000000000, "member_ids": ["<user id>"] }
 ```
 
-- Source: the library documents of the crew members plus the `game_session` events of the week. Builder: `buildRecentGames` in `crew_feed.go`. Spec [19](./19-FEED-CURATION-PERSONAL-STATS.md) section 3.3 has the rules.
-- Library documents: one per member, in the `user_library` collection. The client writes them with `library_report`. See spec [16](./16-CREW-EVENT-LEDGER.md) section 3.6. The feed RPC reads the documents of the crew members as the system. A member with no document adds nothing.
+- Source: the library documents of the crew members plus the `game_session` events of the window. Library documents: one per member, in the `user_library` collection. The client writes them with `library_report`. See spec [16](./16-CREW-EVENT-LEDGER.md) section 3.6. The feed RPC reads the documents of the crew members as the system. A member with no document adds nothing.
 - Merge: the union of both sources by game id. A library game with no matching id falls back to a match on the lower-case name, because sessions carry catalogue ids and the library carries launcher ids.
 - Name: the library name when present, else the session name.
 - `minutes`: the summed `playtime_min` of the members when present, else the session minutes.
-- `last_played`: the newer of the library and the sessions, in milliseconds. The tiles sort by it, newest first.
-- `member_ids`: members who have the game installed or played it in the week. The client card does not draw them yet.
-- The header line comes from sessions only. With no sessions the line is empty.
-- Tiles: at most six, keyed by game id. A legacy event with no id uses the lower-case game name.
+- `member_ids`: members who have the game installed or played it. The quiet week sorts by it, the most owners first, at most three. The card shows the owner count.
 - `launcher`: the launcher prefix of the library entry (`steam`, `epic`, `gog`). Absent for a game only seen in sessions.
-- Art ladder: one art form per frame shape (section 6.1). The list row draws the icon slot. The poster grid draws the header slot.
+- Art ladder: one art form per frame shape (section 6.1).
 - Local Steam art: `mello_core::library::local_steam_art` reads `<steam root>/appcache/librarycache/`. It tries `<appid>_header.jpg`, then `header.jpg` and `library_header.jpg` in `<appid>/` and in each hash folder under it, then `library_600x900.jpg`. It reads the disk only. Nothing is fetched or uploaded. The log carries counts only.
 - Monogram: two letters, the first letters of the first two words of the name (one word: its first two letters), on a two-corner tile in an identity hue chosen from the game id.
-- Client: `RecentGamesCard` in `crew_feed.slint`. The list variant (one owner, or the side column) has one row per game, at most three. The columns are the same on every row: a square icon slot (48 px; the icon slot ladder of section 6.1, never header art), the name in Oxanium on one line with elision at the column width, and under it the last played time and the hours in Barlow 300 on one line ("2 days ago, 4 h"; the launcher alone when both are unknown). The owner octagons stand at the right of the row. No row says TRACKED, in the list or in the grid.
-- Header: "RECENT GAMES" on the left. The right side is the sessions line (`subtitle`), or empty. It never says where the games come from.
+- Client: `MostInstalledCard` and the solo board in `client/ui/components/feed_board.slint`.
 - The sidebar list still uses live presence only.
 
 ---
@@ -192,8 +190,9 @@ The recent games card gets its data from the `crew_feed` RPC. Entry type: `recen
 
 File: `client/ui/panels/crew_feed.slint`.
 
-Spec [19](./19-FEED-CURATION-PERSONAL-STATS.md) selects which cards reach the
-feed. This section defines what they render.
+Every session of the free window is a card in the Sessions zone (spec
+[19](./19-FEED-CURATION-PERSONAL-STATS.md) section 3). This section defines
+what the cards render.
 
 ### 4.1 `GameSessionCard`
 
@@ -207,16 +206,6 @@ The card has two bodies. The presence of a telemetry record selects the body.
 A card must not render an empty stat slot. See spec 19 section 3.6. Before this
 split, the card assumed a record and drew empty W/L boxes for all games without
 an adapter.
-
-### 4.2 `GameRollupCard`
-
-One `CREW PLAY` card per crew per day. It aggregates the sessions that curation
-removed.
-
-| Element | Content |
-|---|---|
-| Member line | `ostkatt · Valorant · 4h`, rendered by `GameRollupLineRow` |
-| Footer | Session count and total crew hours |
 
 ### 4.3 Duration copy — the overnight guard
 
@@ -234,11 +223,10 @@ Three implementations apply this rule. Keep them in step.
 |---|---|---|
 | One session | `game_session_duration_display` | `client/src/handlers/clip.rs` |
 | One week | `weekly_time_text` | `client/src/handlers/stats.rs` |
-| Recent games total | `reportableMinutes` | `backend/nakama/data/modules/crew_feed.go` |
+| Server totals (sessions, Today) | `reportableMinutes` | `backend/nakama/data/modules/crew_feed.go` |
 
-The rollup implementation was added last. Before it, a 10-hour overnight session
-showed 40 minutes on its own card and added 10 hours to the `CREW PLAY` card
-above it. The recent games card replaced that card and keeps the same rule.
+Before the server rule, a 10-hour overnight session showed 40 minutes on its
+own card and added 10 hours to the total above it.
 
 ### 4.4 Co-play copy
 
@@ -337,12 +325,11 @@ The `capsule` slot is not used in any frame.
 | Session card, stream card | Square 40 px | `icon` |
 | Game session compact body | Square 32 or 36 px | `icon` |
 | Live session card tile | Square 40 px | `icon` |
-| Recent games, poster grid | Wide | `header` |
 | Recap card, game tile | Wide | `header` |
 | Recap games played strip | Wide | `header` |
 | Opened recap, games grid | Wide | `header` |
-| Daily recap card, game tile | Wide | `header` |
-| Live session card, wide slot | Poster | `hero` |
+| Board top game (Today, Week) | Wide | `header` |
+| Live session card, 420 px or wider | Poster | `hero` |
 
 `GameArt` enforces the rule. A frame with `art-width` set draws `capsule`
 (header art) and never `icon`. A frame without it draws `icon` and never
@@ -361,8 +348,7 @@ cover thumbnail.
 | `GameSessionCard` | `crew_feed.slint` | Session card shell |
 | `GameSessionRecordPanel` | `crew_feed.slint` | W/L body |
 | `GameSessionCompactBody` | `crew_feed.slint` | Body without telemetry |
-| `RecentGamesCard` | `crew_feed.slint` | Recent games: header line and tiles |
-| `RecentGameTileCell` | `crew_feed.slint` | One game tile |
+| `MostInstalledCard` | `feed_board.slint` | The most installed games of a quiet week |
 | `PlayingBadge` | `crew_feed.slint` | Live playing marker |
 | `LiveSessionCard` | `crew_feed.slint` | NOW PLAYING card of the crew feed: pip, game art, game name, octagons, "since N min" |
 

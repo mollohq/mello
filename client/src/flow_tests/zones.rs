@@ -246,3 +246,90 @@ fn a_loaded_poster_stays_through_a_rebuild() {
     crate::handlers::zones::refresh(h.ctx());
     assert_eq!(held(&h), (true, 4, true), "the posters stay");
 }
+
+/// The People zone draws the first five from the roster: the viewer first,
+/// then the crew. The head2head data names no members to draw.
+#[test]
+fn the_first_five_are_the_viewer_then_the_crew() {
+    let mut h = Harness::new();
+    zones_on(&mut h, 7);
+    set_roster(
+        &h,
+        &[
+            ("user-1", "Test User"),
+            ("u2", "Jonas"),
+            ("u3", "Max"),
+            ("u4", "Sara"),
+            ("u5", "Leo"),
+            ("u6", "Ida"),
+            ("u7", "Nils"),
+        ],
+    );
+    let mut feed = feed_of(vec![h2h_entry(7, vec![], vec![], None)]);
+    feed.zones.people.open_seats = 0;
+    h.emit(Event::FeedLoaded { response: feed });
+    let names: Vec<String> = h
+        .app()
+        .get_feed_zones()
+        .members
+        .iter()
+        .map(|m| m.name.to_string())
+        .collect();
+    assert_eq!(names, ["Test User", "Jonas", "Max", "Sara", "Leo"]);
+
+    let mut h = Harness::new();
+    zones_on(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+    let mut feed = feed_of(vec![h2h_entry(2, vec![], vec![], None)]);
+    feed.zones.people.open_seats = 3;
+    h.emit(Event::FeedLoaded { response: feed });
+    let z = h.app().get_feed_zones();
+    assert_eq!(z.members.row_count(), 2, "two octagons and three seats");
+    assert_eq!(z.open_seats, 3);
+}
+
+/// A belt that moved is unread on the board only when the move is after the
+/// viewer's last open of the feed (HEAD2HEAD.md, "Unread belt").
+#[test]
+fn a_moved_belt_is_unread_until_the_feed_is_opened_again() {
+    let mut h = Harness::new();
+    zones_on(&mut h, 3);
+    set_roster(
+        &h,
+        &[("user-1", "Test User"), ("u2", "Jonas"), ("u3", "Max")],
+    );
+    let now = crate::head2head::now_ms();
+    let moved_at = now - 3_600_000;
+    let carry = serde_json::json!({
+        "title_id": "the_carry", "holder_user_id": "u2", "value": 4201.0, "unit": "h",
+        "since_ms": moved_at, "moved_at_ms": moved_at, "previous_holder_user_id": "u3",
+    });
+    let feed = feed_of(vec![h2h_entry(3, vec![carry], vec![], None)]);
+    let unread = |h: &Harness| {
+        h.app()
+            .get_feed_zones()
+            .titles
+            .iter()
+            .find(|t| t.title == "THE CARRY")
+            .expect("the_carry on the board")
+            .unread
+    };
+
+    // The last open was before the move.
+    h.settings()
+        .borrow_mut()
+        .feed_baseline_ms
+        .insert("crew-0".into(), moved_at - 3_600_000);
+    h.emit(Event::FeedLoaded {
+        response: feed.clone(),
+    });
+    assert!(unread(&h), "a move after the last open is unread");
+
+    // The feed was opened after the move.
+    h.settings()
+        .borrow_mut()
+        .feed_baseline_ms
+        .insert("crew-0".into(), now);
+    h.emit(Event::FeedLoaded { response: feed });
+    assert!(!unread(&h), "a move before the last open is read");
+}
