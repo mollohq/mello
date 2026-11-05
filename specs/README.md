@@ -18,7 +18,7 @@ This directory contains the technical specifications for Mello.
   `19-FEED-CURATION-PERSONAL-STATS.md`, `22-GAME-UI-SURFACES.md` - the game
   stack; read the section below before any of them
 - `features/SFU-INTEGRATION.md` - Client/backend integration with the SFU
-- `EXTERNAL-SFU.md` - Bring-your-own / self-hosted SFU
+- `EXTERNAL-SFU.md` - SFU integration: token signing, the SFU RPCs, region selection, the client side
 - Additional feature specs under `features/`
 
 ## The game stack: 16, 17, 18, 19, 22

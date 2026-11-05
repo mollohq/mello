@@ -416,7 +416,7 @@ type SFURegion struct {
 }
 ```
 
-The regions are the backend's `SFU_REGIONS` (EXTERNAL-SFU section 7.4).
+The regions are the backend's `SFU_REGIONS` (EXTERNAL-SFU section 4.4).
 The health URL comes from the region's signaling endpoint: the same host,
 the SFU health port (`SFU_HEALTH_PORT`, default 8080, mello-sfu
 `SFU_ADMIN_ADDR`), `https` for `wss`
