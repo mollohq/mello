@@ -1,0 +1,1412 @@
+import { Theme } from "../theme.slint";
+import { CutShape, CutMask, CutButtonShape } from "./cut.slint";
+import { UserAvatar } from "./avatar.slint";
+import { StatValue } from "./stat.slint";
+import { DotWaveform } from "./clip_wave.slint";
+import { StreamTag, PlayButton, FootageWash, MediaChip } from "./stream_hero.slint";
+import { CardLabel, OpenSeat, InviteButton } from "./head2head.slint";
+import { H2hPerson, BeltReveal, RecapSeal, FeedCardData, ChatFocus } from "../types.slint";
+import { BeltSlot } from "./sealed.slint";
+import { CutButton } from "./cut.slint";
+import { GameClipCard } from "../panels/game_clip_card.slint";
+
+// ============================================================
+//  The board layout of the crew feed, for a big crew.
+//
+//  Content on the left (the hero, the clip shelf), numbers on the
+//  right (one board). The board replaces head2head, the day card and
+//  the weekly recap. It never grows: Today and Week share the card,
+//  and the titles stop at seven rows.
+//
+//  Not wired to CrewFeed yet. Previews: previews/feed_board_preview.slint.
+// ============================================================
+
+/// "6 h 40" is value "6", unit "h", tail "40". "14 clips" is value "14",
+/// label "CLIPS".
+export struct BoardStat {
+    value: string,
+    unit: string,
+    tail: string,
+    label: string,
+}
+
+export struct BoardGame {
+    name: string,
+    art: image,
+    count: string,
+}
+
+/// One title on the board: who holds it, the title, the value.
+/// `unread` is a move in the last 24 hours (HEAD2HEAD.md 5, unread dot).
+export struct BoardTitle {
+    person: H2hPerson,
+    title: string,
+    icon: image,
+    value: string,
+    unit: string,
+    tail: string,
+    unread: bool,
+    /// A belt that moved. Sealed until opened (SEALED-REVEAL.md). Empty key: never sealed.
+    belt: BeltReveal,
+}
+
+/// One clip in the clip row. `kind` "game": footage (GameClipCard, CLIPS.md 15.6).
+/// `kind` "voice": the waveform tile. Both have the same size and corner.
+export struct MixedClip {
+    kind: string,
+    person: H2hPerson,
+    game: string,
+    duration: string,
+    poster: image,
+    peaks: [float],
+    unread: bool,
+}
+
+/// One game session row: the game, who played, the record or nothing, the length.
+export struct BoardSession {
+    art: image,
+    game: string,
+    players: string,
+    result: string,
+    length: string,
+}
+
+export component Kicker inherits Text {
+    font-family: Theme.font-label;
+    font-size: 9.5px;
+    font-weight: Theme.weight-label;
+    letter-spacing: Theme.track-kicker;
+    color: Theme.text-dim;
+}
+
+/// A card: one corner cut, a keyline, the card fill.
+export component BoardShell inherits Rectangle {
+    in property <string> corner: "tr";
+    background: transparent;
+
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: root.corner;
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: root.corner; inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
+    @children
+}
+
+/// A game in a two-corner tile, header art (460:215).
+component ArtTile inherits Rectangle {
+    in property <image> art;
+    in property <color> bg-color: Theme.card-bg;
+    width: 64px;
+    height: 30px;
+    clip: true;
+    background: Theme.raised;
+
+    Image { source: root.art; width: parent.width; height: parent.height; image-fit: cover; }
+    CutMask { width: parent.width; height: parent.height; n: 6px; corner: "tl"; fill: root.bg-color; }
+    CutMask { width: parent.width; height: parent.height; n: 6px; corner: "br"; fill: root.bg-color; }
+}
+
+component NumLabel inherits VerticalLayout {
+    in property <BoardStat> stat;
+    in property <length> size: 17px;
+    spacing: 4px;
+    alignment: start;
+
+    StatValue {
+        value: root.stat.value;
+        unit: root.stat.unit;
+        tail: root.stat.tail;
+        value-size: root.size;
+        unit-size: root.size * 0.5;
+    }
+    Kicker { text: root.stat.label; }
+}
+
+component BoardTab inherits Rectangle {
+    in property <string> label;
+    in property <bool> active: false;
+    in property <bool> dim: false;
+    /// The red key of a sealed card: the unread state.
+    in property <bool> key: false;
+    callback clicked();
+
+    width: tab-text.preferred-width + (root.key ? 14px : 0px);
+    height: 30px;
+    accessible-role: tab;
+    accessible-label: root.label;
+
+    tab-text := Text {
+        y: 0;
+        height: parent.height - 2px;
+        text: root.label;
+        vertical-alignment: center;
+        font-family: Theme.font-label;
+        font-size: 10px;
+        font-weight: Theme.weight-label;
+        letter-spacing: Theme.track-kicker;
+        color: root.active ? Theme.text-primary : root.dim ? Theme.text-tertiary : Theme.text-dim;
+    }
+    if root.key: Rectangle {
+        x: tab-text.preferred-width + 8px;
+        y: (parent.height - 2px - self.height) / 2;
+        width: 6px; height: 6px;
+        background: Theme.live;
+    }
+    if root.active: Rectangle {
+        x: 0; y: parent.height - 2px;
+        width: parent.width; height: 2px;
+        background: Theme.action;
+    }
+    TouchArea { clicked => { root.clicked(); } }
+}
+
+component TitleRow inherits Rectangle {
+    in property <BoardTitle> entry;
+    height: 44px;
+
+    HorizontalLayout {
+        spacing: 10px;
+        cross-axis-alignment: center;
+
+        Rectangle {
+            width: 6px; height: 6px; border-radius: 3px;
+            background: root.entry.unread && !root.entry.belt.sealed ? Theme.live : transparent;
+        }
+        // A sealed belt hides its holder: a muted octagon with "?".
+        UserAvatar {
+            size: 28px;
+            initials: root.entry.belt.sealed ? "?" : root.entry.person.initials;
+            muted: root.entry.belt.sealed;
+            color-index: root.entry.person.hue-index;
+            avatar: root.entry.person.avatar;
+            has-avatar: root.entry.person.has-avatar && !root.entry.belt.sealed;
+            bg-color: Theme.card-bg;
+        }
+        BeltSlot {
+            horizontal-stretch: 1;
+            height: 34px;
+            belt: root.entry.belt;
+            slot-id: "board:" + root.entry.belt.key;
+            tight: true;
+
+            HorizontalLayout {
+                spacing: 10px;
+                cross-axis-alignment: center;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: 3px;
+                    Text {
+                        text: root.entry.person.name;
+                        font-family: Theme.font-display;
+                        font-weight: Theme.weight-display;
+                        font-size: 13px;
+                        color: Theme.text-primary;
+                        overflow: elide;
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        cross-axis-alignment: center;
+                        Image { source: root.entry.icon; width: 11px; height: 11px; colorize: Theme.text-dim; }
+                        Kicker { text: root.entry.title; font-size: 8.5px; letter-spacing: Theme.track-label; }
+                    }
+                }
+                StatValue {
+                    horizontal-stretch: 0;
+                    value: root.entry.value;
+                    unit: root.entry.unit;
+                    tail: root.entry.tail;
+                    value-size: 13px;
+                    unit-size: 10px;
+                    hue: Theme.text-body;
+                }
+            }
+        }
+    }
+}
+
+/// The sealed week inside the board: the field and the key of the sealed recap
+/// (SEALED-REVEAL.md 2.2), drawn in the same 160 by 248 box, and the week.
+component SealedWeek inherits Rectangle {
+    in property <RecapSeal> seal;
+    in property <string> week;
+    callback clicked();
+
+    property <length> key-size: root.width * 9 / 160;
+    property <length> key-x: root.width * (14 + 10 * 11 + 2.5) / 160;
+    property <length> key-y: root.height * (8 + 15 * 12 + 2.5) / 248;
+
+    accessible-role: button;
+    accessible-label: "Sealed recap, open it";
+
+    Path {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        viewbox-width: 160; viewbox-height: 248;
+        commands: root.seal.dim;
+        fill: Theme.card-border;
+    }
+    Path {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        viewbox-width: 160; viewbox-height: 248;
+        commands: root.seal.bright;
+        fill: Theme.action-quiet;
+    }
+    Rectangle {
+        x: root.key-x - self.width / 2;
+        y: root.key-y - self.height / 2;
+        width: root.key-size;
+        height: root.key-size;
+        background: Theme.live;
+    }
+    Text {
+        x: 0; y: 4px;
+        text: root.week;
+        font-family: Theme.font-display;
+        font-size: 36px;
+        font-weight: Theme.weight-display-bold;
+        color: Theme.text-primary;
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+/// A person line of the week: label, octagon, name, value.
+component WeekPerson inherits HorizontalLayout {
+    in property <string> label;
+    in property <H2hPerson> person;
+    in property <string> value;
+    in property <string> unit;
+    in property <string> tail;
+    spacing: 8px;
+    cross-axis-alignment: center;
+    height: 26px;
+    Kicker { text: root.label; width: 94px; }
+    UserAvatar {
+        size: 20px;
+        initials: root.person.initials;
+        color-index: root.person.hue-index;
+        avatar: root.person.avatar;
+        has-avatar: root.person.has-avatar;
+        bg-color: Theme.card-bg;
+    }
+    Text {
+        horizontal-stretch: 1;
+        text: root.person.name;
+        overflow: elide;
+        font-family: Theme.font-display;
+        font-weight: Theme.weight-display;
+        font-size: 13px;
+        color: Theme.text-primary;
+    }
+    StatValue { horizontal-stretch: 0; value: root.value; unit: root.unit; tail: root.tail; value-size: 13px; unit-size: 10px; hue: Theme.text-body; }
+}
+
+/// The board. `mode`:
+/// - "tabs": Today and Week. `today-empty` dims Today (quiet today, C1).
+/// - "quiet": no tabs, the quiet row instead of the numbers (C2).
+/// - "past": the last real week, with its age (dormant, C3).
+export component FeedBoard inherits BoardShell {
+    in property <string> mode: "tabs";
+    in property <int> active-tab: 0;
+    in property <bool> today-empty: false;
+    in property <string> past-label;
+    in property <string> past-age;
+    in property <BoardStat> big;
+    in property <[BoardStat]> stats;
+    in property <bool> has-top-game: false;
+    in property <BoardGame> top-game;
+    in property <image> quiet-icon: @image-url("../icons/h2h-night-owl.svg");
+    in property <string> quiet-line;
+    in property <string> quiet-sub;
+    in property <[BoardTitle]> titles;
+    in property <int> title-count: 13;
+    in property <string> more-label;
+    in property <bool> show-titles: true;
+    in property <bool> show-numbers: true;
+    /// Day 0: your games, from the library scan.
+    in property <string> game-rows-label;
+    in property <[BoardGame]> game-rows;
+    /// Monday: the week is sealed until the viewer opens it.
+    in property <bool> week-sealed: false;
+    in property <RecapSeal> seal;
+    in property <string> week-title;
+    /// The opened week keeps every recap data point (rule 10).
+    in property <bool> week-extra: false;
+    in property <H2hPerson> most-active;
+    in property <string> most-active-value;
+    in property <string> most-active-unit;
+    in property <string> most-active-tail;
+    in property <int> games-more: 0;
+    in property <H2hPerson> most-clipped;
+    in property <string> most-clipped-value;
+    in property <[image]> games-played;
+    callback tab-clicked(int);
+    callback open-week();
+
+    corner: "bl";
+
+    VerticalLayout {
+        padding: 16px;
+        padding-top: 10px;
+        spacing: 10px;
+
+        if root.mode != "quiet": Rectangle {
+            height: 30px;
+            vertical-stretch: 0;
+            Rectangle { x: 0; y: parent.height - 1px; width: parent.width; height: 1px; background: Theme.card-border; }
+            HorizontalLayout {
+                spacing: 18px;
+                if root.mode == "tabs": BoardTab {
+                    label: "TODAY";
+                    active: root.active-tab == 0;
+                    dim: root.today-empty;
+                    clicked => { root.tab-clicked(0); }
+                }
+                if root.mode == "tabs": BoardTab {
+                    label: "WEEK";
+                    key: root.week-sealed;
+                    active: root.active-tab == 1;
+                    clicked => { root.tab-clicked(1); }
+                }
+                if root.mode == "past": BoardTab { label: root.past-label; active: true; }
+                Rectangle { horizontal-stretch: 1; }
+                if root.mode == "past": Text {
+                    text: root.past-age;
+                    vertical-alignment: center;
+                    font-family: Theme.font-body;
+                    font-weight: Theme.weight-sentence;
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                }
+            }
+        }
+
+        if root.mode == "tabs" && root.week-sealed && root.active-tab == 1: SealedWeek {
+            height: 330px;
+            vertical-stretch: 0;
+            seal: root.seal;
+            week: root.week-title;
+            clicked => { root.open-week(); }
+        }
+
+        if root.show-numbers && root.mode != "quiet" && !(root.week-sealed && root.active-tab == 1): VerticalLayout {
+            spacing: 12px;
+            vertical-stretch: 0;
+            padding-top: 4px;
+            NumLabel { stat: root.big; size: 34px; }
+            HorizontalLayout {
+                spacing: 8px;
+                for s in root.stats: NumLabel { stat: s; size: 17px; horizontal-stretch: 1; }
+            }
+            if root.has-top-game: HorizontalLayout {
+                spacing: 10px;
+                alignment: start;
+                cross-axis-alignment: center;
+                ArtTile { art: root.top-game.art; }
+                VerticalLayout {
+                    spacing: 3px;
+                    Text {
+                        text: root.top-game.name;
+                        font-family: Theme.font-display;
+                        font-weight: Theme.weight-display;
+                        font-size: 12.5px;
+                        color: Theme.text-primary;
+                    }
+                    Kicker { text: "TOP GAME"; }
+                }
+            }
+        }
+
+        if root.game-rows.length > 0: VerticalLayout {
+            spacing: 0px;
+            vertical-stretch: 0;
+            Rectangle { height: 1px; background: Theme.card-border; }
+            Kicker { text: root.game-rows-label; height: 34px; vertical-alignment: center; }
+            for g[i] in root.game-rows: Rectangle {
+                height: 40px;
+                HorizontalLayout {
+                    spacing: 10px;
+                    cross-axis-alignment: center;
+                    ArtTile { art: g.art; width: 48px; height: 24px; }
+                    Text {
+                        horizontal-stretch: 1;
+                        text: g.name;
+                        overflow: elide;
+                        font-family: Theme.font-display;
+                        font-weight: Theme.weight-display;
+                        font-size: 12.5px;
+                        color: Theme.text-primary;
+                    }
+                    Text {
+                        text: g.count;
+                        font-family: Theme.font-display;
+                        font-weight: Theme.weight-display;
+                        font-size: 12px;
+                        color: Theme.text-body;
+                    }
+                }
+            }
+        }
+
+        if root.week-extra: VerticalLayout {
+            spacing: 2px;
+            vertical-stretch: 0;
+            WeekPerson { label: "MOST ACTIVE"; person: root.most-active; value: root.most-active-value; unit: root.most-active-unit; tail: root.most-active-tail; }
+            WeekPerson { label: "MOST CLIPPED"; person: root.most-clipped; value: root.most-clipped-value; unit: "clips"; }
+            HorizontalLayout {
+                height: 30px;
+                spacing: 6px;
+                cross-axis-alignment: center;
+                Kicker { text: "GAMES PLAYED"; width: 94px; }
+                for g in root.games-played: ArtTile { art: g; width: 30px; height: 15px; }
+                if root.games-more > 0: Text {
+                    text: "+" + root.games-more;
+                    vertical-alignment: center;
+                    font-family: Theme.font-display;
+                    font-weight: Theme.weight-display;
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+        }
+
+        if root.mode == "quiet": HorizontalLayout {
+            spacing: 12px;
+            vertical-stretch: 0;
+            padding-top: 6px;
+            padding-bottom: 4px;
+            Rectangle {
+                width: 22px;
+                Image { y: 1px; source: root.quiet-icon; width: 20px; height: 20px; colorize: Theme.text-body; }
+            }
+            VerticalLayout {
+                spacing: 5px;
+                horizontal-stretch: 1;
+                Text {
+                    text: root.quiet-line;
+                    wrap: word-wrap;
+                    font-family: Theme.font-display;
+                    font-weight: Theme.weight-display;
+                    font-size: 16px;
+                    color: Theme.text-primary;
+                }
+                Text {
+                    text: root.quiet-sub;
+                    wrap: word-wrap;
+                    font-family: Theme.font-body;
+                    font-weight: Theme.weight-sentence;
+                    font-size: 12px;
+                    color: Theme.text-dim;
+                }
+            }
+        }
+
+        // Belts: standing state, so they show in every mode.
+        if root.show-titles: VerticalLayout {
+            spacing: 0px;
+            vertical-stretch: 0;
+            Rectangle { height: 1px; background: Theme.card-border; }
+            HorizontalLayout {
+                height: 34px;
+                Kicker { text: "BELTS"; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; }
+                Text {
+                    text: root.title-count;
+                    vertical-alignment: center;
+                    font-family: Theme.font-display;
+                    font-weight: Theme.weight-display;
+                    font-size: 12px;
+                    color: Theme.text-dim;
+                }
+            }
+            for t in root.titles: TitleRow { entry: t; }
+        }
+
+        Rectangle { vertical-stretch: 1; }
+        Kicker { text: root.more-label; color: Theme.text-body; }
+    }
+}
+
+
+
+/// Footage edge to edge, cut at the top right (CLIPS.md 7.1, frame C).
+/// A live stream wears the red LIVE tag and a red keyline; a stream preview
+/// the white STREAM tag and the grey keyline. The game leads; a stream has
+/// no name of its own.
+export component BoardHero inherits Rectangle {
+    in property <image> footage;
+    in property <bool> live: false;
+    in property <string> when;
+    in property <H2hPerson> host;
+    in property <string> game;
+    in property <string> watchers;
+    in property <string> length;
+    in property <color> ground: Theme.bg-app;
+
+    background: transparent;
+
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr";
+        fill: root.live ? Theme.live : Theme.card-border;
+    }
+    Rectangle {
+        x: Theme.keyline; y: Theme.keyline;
+        width: parent.width - 2 * Theme.keyline;
+        height: parent.height - 2 * Theme.keyline;
+        clip: true;
+        background: Theme.media-ground;
+
+        Image { source: root.footage; width: parent.width; height: parent.height; image-fit: cover; }
+        FootageWash { width: parent.width; height: parent.height; }
+
+        StreamTag { x: 17px; y: 15px; live: root.live; label: root.live ? "LIVE" : "STREAM"; }
+        PlayButton { x: (parent.width - self.width) / 2; y: parent.height * 0.46 - self.height / 2; }
+
+        VerticalLayout {
+            x: 21px;
+            y: parent.height - self.height - 17px;
+            width: parent.width - 42px;
+            height: 96px;
+            alignment: end;
+            spacing: 4px;
+            Kicker { text: root.when; color: Theme.text-body; }
+            Text {
+                text: root.game;
+                overflow: elide;
+                font-family: Theme.font-display;
+                font-weight: Theme.weight-display;
+                font-size: 28px;
+                letter-spacing: -0.8px;
+                color: Theme.on-media;
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                padding-top: 4px;
+                cross-axis-alignment: center;
+                UserAvatar {
+                    size: 20px;
+                    initials: root.host.initials;
+                    color-index: root.host.hue-index;
+                    avatar: root.host.avatar;
+                    has-avatar: root.host.has-avatar;
+                    bg-color: #000000;
+                }
+                Text { text: root.host.name; font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 13px; color: Theme.on-media; }
+                Text { text: root.watchers; font-family: Theme.font-body; font-weight: Theme.weight-sentence; font-size: 12.5px; color: Theme.text-body; }
+                Rectangle { horizontal-stretch: 1; }
+                MediaChip {
+                    Text { text: root.length; font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 12px; color: Theme.on-media; }
+                }
+            }
+        }
+    }
+    // The footage is a rectangle: put the cut corner back, with its keyline.
+    CutMask { width: parent.width; height: parent.height; n: Theme.notch; corner: "tr"; fill: root.ground; }
+    Path {
+        width: parent.width; height: parent.height;
+        viewbox-width: self.width / 1px;
+        viewbox-height: self.height / 1px;
+        stroke: root.live ? Theme.live : Theme.card-border;
+        stroke-width: 1px;
+        commands: "M \{(self.width - Theme.notch) / 1px} 0 L \{self.width / 1px} \{Theme.notch / 1px}";
+    }
+}
+
+/// The voice channel when nobody is in it, with who is online.
+/// `online` empty: the card is the idle voice card of CLIPS.md 7.1.
+export component BoardVoiceCard inherits BoardShell {
+    in property <string> channel;
+    in property <string> state-line;
+    in property <[H2hPerson]> online;
+    in property <int> online-count;
+    callback start-voice();
+
+    corner: "br";
+
+    HorizontalLayout {
+        padding-left: 18px;
+        padding-right: 18px;
+        spacing: 14px;
+        cross-axis-alignment: center;
+
+        VerticalLayout {
+            spacing: 4px;
+            alignment: center;
+            horizontal-stretch: 0;
+            Kicker { text: "VOICE"; }
+            Text { text: root.channel; font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 17px; color: Theme.text-primary; }
+            Text { text: root.state-line; font-family: Theme.font-body; font-weight: Theme.weight-sentence; font-size: 12px; color: Theme.text-dim; }
+        }
+        if root.online.length > 0: Rectangle { width: 1px; height: 56px; background: Theme.card-border; }
+        if root.online.length > 0: VerticalLayout {
+            spacing: 8px;
+            alignment: center;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                Kicker { text: "ONLINE"; vertical-alignment: center; }
+                Text { text: root.online-count; font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 12px; color: Theme.text-body; vertical-alignment: center; }
+            }
+            HorizontalLayout {
+                spacing: 4px;
+                alignment: start;
+                for p in root.online: UserAvatar {
+                    size: 28px;
+                    initials: p.initials;
+                    color-index: p.hue-index;
+                    avatar: p.avatar;
+                    has-avatar: p.has-avatar;
+                    bg-color: Theme.card-bg;
+                }
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        Rectangle {
+            width: 120px;
+            height: 40px;
+            horizontal-stretch: 0;
+            accessible-role: button;
+            accessible-label: "Start voice";
+            CutButtonShape { width: parent.width; height: parent.height; n: Theme.cut; fill: Theme.action; }
+            Text {
+                text: "START VOICE";
+                font-family: Theme.font-label;
+                font-weight: Theme.weight-label;
+                font-size: 10px;
+                letter-spacing: Theme.track-kicker;
+                color: Theme.on-action;
+            }
+            TouchArea { clicked => { root.start-voice(); } }
+        }
+    }
+}
+
+/// The recent games tiles, sorted by how many members have each game.
+export component MostInstalledCard inherits BoardShell {
+    in property <[BoardGame]> games;
+    corner: "tr";
+
+    VerticalLayout {
+        padding: 14px;
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 6px;
+        CardLabel { text: "MOST INSTALLED"; height: 16px; vertical-alignment: center; }
+        for g[i] in root.games: Rectangle {
+            height: 44px;
+            Rectangle {
+                visible: i > 0;
+                x: 0; y: 0; width: parent.width; height: 1px;
+                background: Theme.card-border;
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                cross-axis-alignment: center;
+                ArtTile { art: g.art; }
+                Text {
+                    horizontal-stretch: 1;
+                    text: g.name;
+                    overflow: elide;
+                    font-family: Theme.font-display;
+                    font-weight: Theme.weight-display;
+                    font-size: 12.5px;
+                    color: Theme.text-primary;
+                }
+                Text {
+                    text: g.count;
+                    font-family: Theme.font-display;
+                    font-weight: Theme.weight-display;
+                    font-size: 14px;
+                    color: Theme.text-primary;
+                }
+            }
+        }
+        Rectangle { vertical-stretch: 1; }
+    }
+}
+
+/// Nothing for 14 days or more (CLIPS.md 7.1, frame F).
+export component BoardDormantStrip inherits BoardShell {
+    in property <string> line;
+    in property <string> age;
+    corner: "br";
+
+    HorizontalLayout {
+        padding-left: 18px;
+        padding-right: 22px;
+        spacing: 16px;
+        cross-axis-alignment: center;
+        Kicker { text: "QUIET"; }
+        Text {
+            horizontal-stretch: 1;
+            text: root.line;
+            font-family: Theme.font-body;
+            font-weight: Theme.weight-sentence;
+            font-size: 13.5px;
+            color: Theme.text-primary;
+        }
+        Text {
+            text: root.age;
+            font-family: Theme.font-display;
+            font-weight: Theme.weight-display;
+            font-size: 13px;
+            color: Theme.text-body;
+        }
+    }
+}
+
+
+/// Game sessions as one list, newest first, "+N more" for the rest.
+export component SessionsCard inherits BoardShell {
+    in property <int> count;
+    in property <[BoardSession]> sessions;
+    in property <string> more-label;
+
+    corner: "tr";
+
+    VerticalLayout {
+        padding: 14px;
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 4px;
+
+        HorizontalLayout {
+            height: 16px;
+            vertical-stretch: 0;
+            CardLabel { text: "GAME SESSIONS"; vertical-alignment: center; }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: root.count;
+                vertical-alignment: center;
+                font-family: Theme.font-display;
+                font-weight: Theme.weight-display;
+                font-size: 12px;
+                color: Theme.text-body;
+            }
+        }
+        for g[i] in root.sessions: Rectangle {
+            height: 48px;
+            Rectangle {
+                visible: i > 0;
+                x: 0; y: 0; width: parent.width; height: 1px;
+                background: Theme.card-border;
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                cross-axis-alignment: center;
+                ArtTile { art: g.art; width: 48px; height: 24px; }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: 2px;
+                    Text {
+                        text: g.game;
+                        overflow: elide;
+                        font-family: Theme.font-display;
+                        font-weight: Theme.weight-display;
+                        font-size: 12.5px;
+                        color: Theme.text-primary;
+                    }
+                    Text {
+                        text: g.players;
+                        overflow: elide;
+                        font-family: Theme.font-body;
+                        font-weight: Theme.weight-sentence;
+                        font-size: 11px;
+                        color: Theme.text-dim;
+                    }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 0;
+                    alignment: center;
+                    spacing: 2px;
+                    Text {
+                        text: g.length;
+                        horizontal-alignment: right;
+                        font-family: Theme.font-display;
+                        font-weight: Theme.weight-display;
+                        font-size: 12px;
+                        color: Theme.text-body;
+                    }
+                    if g.result != "": Text {
+                        text: g.result;
+                        horizontal-alignment: right;
+                        font-family: Theme.font-display;
+                        font-weight: Theme.weight-display;
+                        font-size: 11px;
+                        color: Theme.text-dim;
+                    }
+                }
+            }
+        }
+        Rectangle { vertical-stretch: 1; }
+        Kicker { text: root.more-label; color: Theme.text-body; }
+    }
+}
+
+/// A voice clip at the size of a game clip: the same corner and tag, the
+/// waveform in the place of the poster. The tag is red while unread; the
+/// border never is (red borders are for live streams).
+export component VoiceClipTile inherits Rectangle {
+    in property <MixedClip> item;
+    callback play();
+
+    background: transparent;
+    clip: true;
+
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr"; inset: Theme.keyline;
+        fill: Theme.card-bg-inset;
+    }
+    MediaChip {
+        x: 10px; y: 9px; pad-x: 8px;
+        Image {
+            source: @image-url("../icons/mic.svg");
+            colorize: root.item.unread ? Theme.clip-amber : Theme.text-primary;
+            width: 9px; height: 9px;
+        }
+        Text {
+            text: "VOICE";
+            font-family: Theme.font-label;
+            font-weight: Theme.weight-label;
+            font-size: 9px;
+            letter-spacing: 1.4px;
+            color: root.item.unread ? Theme.clip-amber : Theme.text-primary;
+        }
+    }
+    DotWaveform {
+        x: 12px; y: 40px;
+        width: parent.width - 24px;
+        height: parent.height - 40px - 50px;
+        peaks: root.item.peaks;
+        rows: Math.max(4, Math.floor(self.height / 4px) - 1);
+        dot-size: 2px;
+        row-pitch: 4px;
+        tone: Theme.text-body;
+    }
+    HorizontalLayout {
+        x: 10px;
+        y: parent.height - self.height - 10px;
+        width: parent.width - 20px;
+        height: 26px;
+        spacing: 8px;
+        cross-axis-alignment: center;
+        UserAvatar {
+            size: 24px;
+            initials: root.item.person.initials;
+            color-index: root.item.person.hue-index;
+            avatar: root.item.person.avatar;
+            has-avatar: root.item.person.has-avatar;
+            bg-color: Theme.card-bg-inset;
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            Text {
+                text: root.item.person.name;
+                overflow: elide;
+                font-family: Theme.font-display;
+                font-weight: Theme.weight-display;
+                font-size: 12.5px;
+                color: Theme.text-primary;
+            }
+            if root.item.game != "": Text {
+                text: root.item.game;
+                overflow: elide;
+                font-family: Theme.font-body;
+                font-weight: Theme.weight-sentence;
+                font-size: 11px;
+                color: Theme.text-body;
+            }
+        }
+        Rectangle {
+            width: len.preferred-width + 14px;
+            height: 22px;
+            horizontal-stretch: 0;
+            CutButtonShape { width: parent.width; height: parent.height; n: 4px; fill: Theme.over-media; }
+            len := Text {
+                x: 7px;
+                height: parent.height;
+                text: root.item.duration;
+                vertical-alignment: center;
+                font-family: Theme.font-display;
+                font-weight: Theme.weight-display-bold;
+                font-size: 13px;
+                color: Theme.text-primary;
+            }
+        }
+    }
+    CutMask { width: parent.width; height: parent.height; n: Theme.notch; corner: "tr"; fill: Theme.bg-app; }
+    TouchArea {
+        accessible-role: button;
+        accessible-label: "Play the voice clip of " + root.item.person.name;
+        mouse-cursor: pointer;
+        clicked => { root.play(); }
+    }
+}
+
+/// Every clip in one row, game and voice mixed, ranked (game footage first,
+/// unread first). "+N" opens the rest. No header: the feed has only cards.
+export component ClipRow inherits Rectangle {
+    in property <[MixedClip]> clips;
+    in property <int> more: 0;
+    callback show-all();
+
+    VerticalLayout {
+        HorizontalLayout {
+            spacing: 12px;
+            vertical-stretch: 1;
+            for c in root.clips: Rectangle {
+                horizontal-stretch: 1;
+                if c.kind == "game": GameClipCard {
+                    width: parent.width;
+                    height: parent.height;
+                    is-new: c.unread;
+                    poster: c.poster;
+                    poster-ready: true;
+                    can-play: true;
+                    clipper-name: c.person.name;
+                    clipper-initials: c.person.initials;
+                    clipper-hue-index: c.person.hue-index;
+                    clipper-avatar: c.person.avatar;
+                    clipper-has-avatar: c.person.has-avatar;
+                    game-name: c.game;
+                    duration: c.duration;
+                }
+                if c.kind == "voice": VoiceClipTile {
+                    width: parent.width;
+                    height: parent.height;
+                    item: c;
+                }
+            }
+            if root.more > 0: Rectangle {
+                width: 80px;
+                horizontal-stretch: 0;
+                accessible-role: button;
+                accessible-label: "Show all clips";
+                BoardShell { width: parent.width; height: parent.height; corner: "tr"; }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 4px;
+                    Text {
+                        text: "+" + root.more;
+                        horizontal-alignment: center;
+                        font-family: Theme.font-display;
+                        font-weight: Theme.weight-display;
+                        font-size: 16px;
+                        color: Theme.text-primary;
+                    }
+                    Kicker { text: "CLIPS"; horizontal-alignment: center; }
+                }
+                TouchArea { mouse-cursor: pointer; clicked => { root.show-all(); } }
+            }
+        }
+    }
+}
+
+// ============================================================
+//  Zones. The feed is five fixed zones: Stage, Board, Clips, People,
+//  Games. A zone with nothing to show collapses; the zones under it move up.
+// ============================================================
+
+component ZoneButton inherits Rectangle {
+    in property <string> label;
+    /// "white": the one filled action. "red": a commit (join, invite).
+    /// "line": a white outline action.
+    in property <string> tone: "line";
+    callback clicked();
+
+    width: btn-text.preferred-width + 36px;
+    height: 36px;
+    accessible-role: button;
+    accessible-label: root.label;
+
+    CutButton {
+        width: parent.width; height: parent.height;
+        fill-color: root.tone == "red" ? Theme.confirm : Theme.action;
+        outlined: root.tone == "line";
+        line-color: Theme.text-primary;
+        surface-color: Theme.card-bg;
+    }
+    btn-text := Text {
+        text: root.label;
+        font-family: Theme.font-label;
+        font-weight: Theme.weight-label;
+        font-size: 10px;
+        letter-spacing: Theme.track-kicker;
+        color: root.tone == "white" ? Theme.on-action : Theme.text-primary;
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+component Keyline inherits Rectangle {
+    width: 1px;
+    height: 64px;
+    background: Theme.card-border;
+}
+
+/// People: who is here, who just joined, who is in voice. Each part shows
+/// only when it has someone. Until the crew has five, the open seats and the
+/// red Invite are part of it (the first five).
+export component PeopleZone inherits BoardShell {
+    in property <[H2hPerson]> members;
+    in property <int> open-seats: 0;
+    in property <[H2hPerson]> joined;
+    in property <string> joined-line;
+    in property <string> joined-sub;
+    /// "": no voice part. "idle": the channel is empty. "call": a call is on.
+    in property <string> voice: "";
+    in property <string> channel;
+    in property <string> voice-line;
+    in property <[H2hPerson]> voice-people;
+    in property <int> voice-more: 0;
+    /// The joined card that Say hi greets (ChatFocus.say-hi). Empty: no button.
+    in property <string> say-hi-card;
+    in property <bool> said-hi: false;
+    callback invite();
+    callback voice-clicked();
+
+    corner: "br";
+
+    HorizontalLayout {
+        padding-left: 20px;
+        padding-right: 20px;
+        spacing: 20px;
+        cross-axis-alignment: center;
+
+        // The first five: who is here, the open seats, the red invite.
+        if root.open-seats > 0: HorizontalLayout {
+            spacing: 8px;
+            cross-axis-alignment: center;
+            for m in root.members: UserAvatar {
+                size: 40px;
+                initials: m.initials;
+                color-index: m.hue-index;
+                avatar: m.avatar;
+                has-avatar: m.has-avatar;
+                bg-color: Theme.card-bg;
+            }
+            for i in root.open-seats: OpenSeat { size: 40px; show-label: false; }
+        }
+        if root.open-seats > 0: Rectangle { horizontal-stretch: 1; }
+        if root.open-seats > 0: InviteButton {
+            label-text: "Invite";
+            a11y-label: "Invite your crew";
+            width: 112px;
+            clicked => { root.invite(); }
+        }
+
+        if root.joined.length > 0: HorizontalLayout {
+            spacing: 12px;
+            cross-axis-alignment: center;
+            horizontal-stretch: 1;
+            HorizontalLayout {
+                spacing: 4px;
+                horizontal-stretch: 0;
+                for p in root.joined: UserAvatar {
+                    size: 36px;
+                    initials: p.initials;
+                    color-index: p.hue-index;
+                    avatar: p.avatar;
+                    has-avatar: p.has-avatar;
+                    bg-color: Theme.card-bg;
+                }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 3px;
+                Text { text: root.joined-line; overflow: elide; font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 15px; color: Theme.text-primary; }
+                Text { text: root.joined-sub; overflow: elide; font-family: Theme.font-body; font-weight: Theme.weight-sentence; font-size: 12px; color: Theme.text-dim; }
+            }
+            if root.say-hi-card != "" && !root.said-hi: ZoneButton {
+                label: "SAY HI";
+                tone: "line";
+                clicked => { ChatFocus.say-hi(root.say-hi-card); }
+            }
+        }
+
+        if root.joined.length > 0 && root.voice != "": Keyline {}
+
+        if root.voice != "": HorizontalLayout {
+            spacing: 14px;
+            cross-axis-alignment: center;
+            horizontal-stretch: 1;
+            VerticalLayout {
+                spacing: 4px;
+                alignment: center;
+                horizontal-stretch: 0;
+                Kicker { text: "VOICE"; }
+                Text { text: root.channel; font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 15px; color: Theme.text-primary; }
+                Text { text: root.voice-line; font-family: Theme.font-body; font-weight: Theme.weight-sentence; font-size: 12px; color: Theme.text-dim; }
+            }
+            HorizontalLayout {
+                spacing: 4px;
+                alignment: start;
+                cross-axis-alignment: center;
+                horizontal-stretch: 1;
+                for p in root.voice-people: UserAvatar {
+                    size: 28px;
+                    initials: p.initials;
+                    color-index: p.hue-index;
+                    avatar: p.avatar;
+                    has-avatar: p.has-avatar;
+                    bg-color: Theme.card-bg;
+                }
+                if root.voice-more > 0: Text {
+                    text: "+" + root.voice-more;
+                    vertical-alignment: center;
+                    font-family: Theme.font-display;
+                    font-weight: Theme.weight-display;
+                    font-size: 12px;
+                    color: Theme.text-dim;
+                }
+            }
+            if root.voice == "idle": ZoneButton { label: "START VOICE"; tone: "white"; clicked => { root.voice-clicked(); } }
+            if root.voice == "call": ZoneButton { label: "JOIN"; tone: "red"; clicked => { root.voice-clicked(); } }
+        }
+    }
+}
+
+/// Stage, day 0: a crew of one has nothing to watch yet. The viewer's own
+/// belts arrive sealed (SEALED-REVEAL.md 9), so the stage is something to open.
+export component StageOwnBelts inherits BoardShell {
+    in property <H2hPerson> you;
+    in property <[BeltReveal]> belts;
+
+    corner: "tr";
+
+    VerticalLayout {
+        padding: 22px;
+        padding-top: 16px;
+        spacing: 18px;
+        CardLabel { text: "HEAD2HEAD"; height: 16px; vertical-alignment: center; }
+        HorizontalLayout {
+            spacing: 14px;
+            alignment: start;
+            cross-axis-alignment: center;
+            UserAvatar {
+                size: 64px;
+                initials: root.you.initials;
+                color-index: root.you.hue-index;
+                avatar: root.you.avatar;
+                has-avatar: root.you.has-avatar;
+                bg-color: Theme.card-bg;
+            }
+            Text { text: root.you.name; font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 26px; color: Theme.text-primary; }
+        }
+        Rectangle {
+            vertical-stretch: 1;
+            property <length> block: 72px * 2 + 14px;
+            for b[i] in root.belts: BeltSlot {
+                x: Math.mod(i, 2) * (parent.width + 14px) / 2;
+                y: (parent.height - parent.block) / 2 + Math.floor(i / 2) * 86px;
+                width: (parent.width - 14px) / 2;
+                height: 72px;
+                belt: b;
+                slot-id: "stage:" + b.key;
+            }
+        }
+        Text {
+            text: "Go head2head with your crew";
+            font-family: Theme.font-body;
+            font-weight: Theme.weight-sentence;
+            font-size: 14px;
+            color: Theme.text-body;
+        }
+    }
+}
+
+
+/// Something in a locked week: who, what kind, how long. The content stays
+/// hidden behind a code field until the crew has m3llo+.
+export struct LockedTeaser {
+    person: H2hPerson,
+    kind: string,
+    duration: string,
+    code: string,
+}
+
+/// One past week of Crew history. Free is the last 7 days; every week before
+/// it is m3llo+. `locked`: the week shows sealed, with teasers.
+export struct HistoryWeek {
+    label: string,
+    age: string,
+    locked: bool,
+    seal: RecapSeal,
+    big: BoardStat,
+    stats: [BoardStat],
+    has-top: bool,
+    top: BoardGame,
+    clips: [FeedCardData],
+    teasers: [LockedTeaser],
+    more: int,
+}
+
+/// A locked clip or stream of a past week: the shape of a clip tile, a code
+/// field and the red key in the place of the footage, who and how long under it.
+export component LockedTeaserTile inherits BoardShell {
+    in property <LockedTeaser> item;
+    callback clicked();
+    corner: "tr";
+    accessible-role: button;
+    accessible-label: "Locked " + root.item.kind.to-lowercase() + ", m3llo+";
+
+    Rectangle {
+        x: 18px; y: 18px;
+        width: parent.width - 36px;
+        height: parent.height - 72px;
+        Path {
+            width: Math.min(parent.width, 150px);
+            height: Math.min(parent.width, 150px) * 30 / 75;
+            x: (parent.width - self.width) / 2 - 10px;
+            y: (parent.height - self.height) / 2;
+            viewbox-width: 75;
+            viewbox-height: 30;
+            commands: root.item.code;
+            fill: Theme.action-quiet;
+        }
+        Rectangle {
+            x: (parent.width + Math.min(parent.width, 150px)) / 2 - 2px;
+            y: (parent.height - self.height) / 2;
+            width: 12px; height: 12px;
+            background: Theme.live;
+        }
+    }
+    HorizontalLayout {
+        x: 12px;
+        y: parent.height - self.height - 12px;
+        width: parent.width - 24px;
+        height: 26px;
+        spacing: 8px;
+        cross-axis-alignment: center;
+        UserAvatar {
+            size: 24px;
+            initials: root.item.person.initials;
+            color-index: root.item.person.hue-index;
+            avatar: root.item.person.avatar;
+            has-avatar: root.item.person.has-avatar;
+            bg-color: Theme.card-bg;
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            Text { text: root.item.person.name; overflow: elide; font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 12.5px; color: Theme.text-primary; }
+            Kicker { text: root.item.kind + "  " + root.item.duration; font-size: 8.5px; letter-spacing: Theme.track-label; }
+        }
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+/// The head of Crew history for a crew without m3llo+: one line and one action.
+export component PlusStrip inherits BoardShell {
+    in property <int> weeks;
+    callback clicked();
+    corner: "br";
+    HorizontalLayout {
+        padding-left: 20px;
+        padding-right: 20px;
+        spacing: 16px;
+        cross-axis-alignment: center;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 4px;
+            Text { text: "Unlock your crew's full story"; font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 16px; color: Theme.text-primary; }
+            Text {
+                text: "Keep every clip and recap forever with m3llo+. " + root.weeks + (root.weeks == 1 ? " week" : " weeks") + " so far.";
+                font-family: Theme.font-body; font-weight: Theme.weight-sentence; font-size: 12px; color: Theme.text-dim;
+            }
+        }
+        ZoneButton { label: "M3LLO+"; tone: "line"; clicked => { root.clicked(); } }
+    }
+}
+
+/// Everything the zone feed draws, built in Rust (`handlers/zones.rs`) from
+/// the feed the client already has. A prototype: the server still sends the
+/// card list, the client folds it into zones.
+export struct ZonesData {
+    // Stage. "live": the live stream panel. "card": `stage-card` drawn as a
+    // feed card (a game clip, a stream preview, the belt hero). "own": the
+    // viewer's own sealed belts (a crew of one). "": collapsed.
+    stage: string,
+    stage-card: FeedCardData,
+    stage-short: bool,
+    own-belts: [BeltReveal],
+    you: H2hPerson,
+
+    // Board. "sealed": the sealed weekly recap (`recap-card`). "tabs",
+    // "quiet", "past", "solo". "": collapsed.
+    board: string,
+    recap-card: FeedCardData,
+    today-empty: bool,
+    today-big: BoardStat,
+    today-stats: [BoardStat],
+    today-has-top: bool,
+    today-top: BoardGame,
+    week-big: BoardStat,
+    week-stats: [BoardStat],
+    week-has-top: bool,
+    week-top: BoardGame,
+    most-active: H2hPerson,
+    most-active-value: string,
+    most-clipped: H2hPerson,
+    most-clipped-value: string,
+    games-played: [image],
+    games-more: int,
+    past-label: string,
+    past-age: string,
+    quiet-line: string,
+    quiet-sub: string,
+    titles: [BoardTitle],
+    title-count: int,
+    more-label: string,
+    solo-games: [BoardGame],
+
+    // Clips: game and voice mixed, ranked, then "+N".
+    clips: [FeedCardData],
+    clips-more: int,
+
+    // People.
+    people: bool,
+    members: [H2hPerson],
+    open-seats: int,
+    joined: [H2hPerson],
+    joined-line: string,
+    joined-sub: string,
+    say-hi-card: string,
+    said-hi: bool,
+    voice: string,
+    channel: string,
+    channel-id: string,
+    voice-line: string,
+    voice-people: [H2hPerson],
+    voice-more: int,
+
+    // Games: sessions, or what the crew has installed on a quiet week.
+    sessions: [BoardSession],
+    sessions-count: int,
+    sessions-more: string,
+    installed: [BoardGame],
+
+    // The dormant strip.
+    dormant-line: string,
+    dormant-age: string,
+
+    // Crew history: past weeks, newest first. `plus`: the crew has m3llo+.
+    history: [HistoryWeek],
+    plus: bool,
+}

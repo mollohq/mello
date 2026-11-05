@@ -1,0 +1,906 @@
+import { Theme } from "../theme.slint";
+import { H2hPerson, BeltHeroData, BeltReveal, RecapSeal, FeedCardData } from "../types.slint";
+import { BeltHero } from "../components/head2head.slint";
+import { SealedRecap } from "../components/sealed.slint";
+import { SealedFixtures } from "./sealed_fixtures.slint";
+import { GameClipCard } from "../panels/game_clip_card.slint";
+import { CrewFeedZones } from "../panels/crew_feed.slint";
+import { CutButtonShape } from "../components/cut.slint";
+import { ControlBar } from "../panels/control_bar.slint";
+import { FeedBoard, BoardHero, BoardVoiceCard, MostInstalledCard, BoardDormantStrip, BoardStat, BoardGame, BoardTitle, MixedClip, ClipRow, SessionsCard, BoardSession, PeopleZone, StageOwnBelts, ZonesData, HistoryWeek } from "../components/feed_board.slint";
+
+// ============================================================
+//  The board layout of the crew feed for a crew of 40.
+//
+//  One screen of the feed panel at 1x (865 by 865) with the header and
+//  the control bar. Grid: three columns of 267 px, 12 px gap, 20 px side
+//  padding, rows of Theme.feed-row (232 px).
+//
+//  Members are fake. Avatars are DiceBear output from the approved
+//  styles (AVATAR-SYSTEM.md 2.1). Art is the abstract preview fixtures.
+//
+//    slint-viewer --component PreviewMixLive --screenshot out.png \
+//      client/ui/previews/feed_board_preview.slint
+// ============================================================
+
+global Crew {
+    out property <H2hPerson> bob: { id: "u-bob", name: "b0bben", initials: "B0", hue-index: 1, avatar: @image-url("fixtures/avatars/b0bben.svg"), has-avatar: true };
+    out property <H2hPerson> you: { id: "u-bob", name: "You", initials: "B0", hue-index: 1, avatar: @image-url("fixtures/avatars/b0bben.svg"), has-avatar: true };
+    out property <H2hPerson> max: { id: "u-max", name: "Max", initials: "MA", hue-index: 0, avatar: @image-url("fixtures/avatars/max.svg"), has-avatar: true };
+    out property <H2hPerson> jonas: { id: "u-jonas", name: "Jonas", initials: "JO", hue-index: 2, avatar: @image-url("fixtures/avatars/jonas.svg"), has-avatar: true };
+    out property <H2hPerson> sara: { id: "u-sara", name: "Sara", initials: "SA", hue-index: 3, avatar: @image-url("fixtures/avatars/sara.svg"), has-avatar: true };
+    out property <H2hPerson> leo: { id: "u-leo", name: "Leo", initials: "LE", hue-index: 4, avatar: @image-url("fixtures/avatars/leo.svg"), has-avatar: true };
+    out property <H2hPerson> oskar: { id: "u-oskar", name: "Oskar", initials: "OS", hue-index: 3, avatar: @image-url("fixtures/avatars/oskar.svg"), has-avatar: true };
+    out property <H2hPerson> ida: { id: "u-ida", name: "Ida", initials: "ID", hue-index: 2, avatar: @image-url("fixtures/avatars/ida.svg"), has-avatar: true };
+    out property <H2hPerson> nils: { id: "u-nils", name: "Nils", initials: "NI", hue-index: 1, avatar: @image-url("fixtures/avatars/nils.svg"), has-avatar: true };
+    out property <H2hPerson> theo: { id: "u-theo", name: "Theo", initials: "TH", hue-index: 4, avatar: @image-url("fixtures/avatars/theo.svg"), has-avatar: true };
+    out property <H2hPerson> vera: { id: "u-vera", name: "Vera", initials: "VE", hue-index: 0, avatar: @image-url("fixtures/avatars/vera.svg"), has-avatar: true };
+    out property <H2hPerson> alva: { id: "u-alva", name: "Alva", initials: "AL", hue-index: 0, avatar: @image-url("fixtures/avatars/alva.svg"), has-avatar: true };
+    out property <H2hPerson> hugo: { id: "u-hugo", name: "Hugo", initials: "HU", hue-index: 2, avatar: @image-url("fixtures/avatars/hugo.svg"), has-avatar: true };
+    out property <H2hPerson> elin: { id: "u-elin", name: "Elin", initials: "EL", hue-index: 2, avatar: @image-url("fixtures/avatars/elin.svg"), has-avatar: true };
+    out property <H2hPerson> noah: { id: "u-noah", name: "Noah", initials: "NO", hue-index: 0, avatar: @image-url("fixtures/avatars/noah.svg"), has-avatar: true };
+    out property <H2hPerson> saga: { id: "u-saga", name: "Saga", initials: "SA", hue-index: 4, avatar: @image-url("fixtures/avatars/saga.svg"), has-avatar: true };
+    out property <H2hPerson> juni: { id: "u-juni", name: "Juni", initials: "JU", hue-index: 3, avatar: @image-url("fixtures/avatars/juni.svg"), has-avatar: true };
+
+    out property <image> cs2: @image-url("fixtures/capsule-sample-1.png");
+    out property <image> rl: @image-url("fixtures/capsule-sample-2.png");
+    out property <image> drg: @image-url("fixtures/capsule-sample-4.png");
+    out property <image> hd2: @image-url("fixtures/capsule-sample-5.png");
+
+    out property <image> i-carry: @image-url("../icons/h2h-carry.svg");
+    out property <image> i-owl: @image-url("../icons/h2h-night-owl.svg");
+    out property <image> i-marathon: @image-url("../icons/h2h-belt.svg");
+    out property <image> i-clipper: @image-url("../icons/scissors.svg");
+    out property <image> i-collector: @image-url("../icons/h2h-collector.svg");
+    out property <image> i-locked: @image-url("../icons/h2h-locked-in.svg");
+    out property <image> i-mouth: @image-url("../icons/mic.svg");
+    out property <[float]> wave-a: [0.18, 0.63, 0.51, 0.22, 0.03, 0.03, 0.03, 0.35, 0.73, 0.30, 0.03, 0.03, 0.03, 0.14, 0.36, 0.62, 0.45, 0.32, 0.17, 0.03, 0.03, 0.06, 0.13, 0.29, 0.22, 0.32, 0.28, 0.14, 0.06, 0.03, 0.03, 0.12, 0.41, 0.57, 0.80, 0.53, 0.51, 0.28, 0.13, 0.03, 0.03, 0.10, 0.24, 0.41, 0.45, 0.44, 0.42, 0.28, 0.11, 0.03, 0.03, 0.03, 0.43, 0.75, 0.29, 0.03, 0.03, 0.16, 0.49, 0.55, 0.83, 0.67, 0.40, 0.12];
+    out property <[float]> wave-b: [0.22, 0.46, 0.85, 0.47, 0.24, 0.03, 0.03, 0.03, 0.11, 0.22, 0.22, 0.11, 0.03, 0.03, 0.03, 0.39, 0.77, 0.29, 0.03, 0.03, 0.03, 0.07, 0.22, 0.24, 0.28, 0.22, 0.08, 0.03, 0.03, 0.03, 0.08, 0.31, 0.39, 0.46, 0.67, 0.59, 0.49, 0.30, 0.11, 0.03, 0.03, 0.14, 0.36, 0.62, 0.60, 0.35, 0.15, 0.03, 0.03, 0.03, 0.20, 0.44, 0.84, 0.55, 0.47, 0.20, 0.03, 0.15, 0.27, 0.48, 0.53, 0.40, 0.11, 0.03];
+    out property <[float]> wave-c: [0.21, 0.56, 0.66, 0.79, 0.42, 0.21, 0.03, 0.03, 0.09, 0.31, 0.39, 0.57, 0.67, 0.51, 0.33, 0.11, 0.03, 0.03, 0.13, 0.37, 0.62, 0.49, 0.48, 0.63, 0.37, 0.14, 0.03, 0.03, 0.12, 0.35, 0.49, 0.41, 0.32, 0.16, 0.03, 0.03, 0.20, 0.52, 0.62, 0.66, 0.61, 0.37, 0.19, 0.03, 0.03, 0.32, 0.84, 0.40, 0.03, 0.18, 0.35, 0.44, 0.14, 0.03, 0.15, 0.32, 0.42, 0.53, 0.65, 0.41, 0.10, 0.03, 0.06, 0.21];
+    out property <[float]> wave-d: [0.07, 0.14, 0.21, 0.27, 0.30, 0.26, 0.18, 0.06, 0.03, 0.03, 0.27, 0.68, 0.89, 0.46, 0.24, 0.03, 0.13, 0.37, 0.24, 0.10, 0.03, 0.27, 0.66, 0.27, 0.03, 0.03, 0.19, 0.51, 0.79, 0.62, 0.66, 0.50, 0.18, 0.03, 0.03, 0.14, 0.26, 0.35, 0.10, 0.03, 0.03, 0.15, 0.46, 0.54, 0.53, 0.41, 0.12, 0.03, 0.12, 0.29, 0.33, 0.13, 0.03, 0.10, 0.33, 0.39, 0.36, 0.32, 0.08, 0.03, 0.21, 0.40, 0.48, 0.49];
+}
+
+/// Grid positions of the feed panel.
+global G {
+    out property <length> x0: 20px;
+    out property <length> x2: 578px;
+    out property <length> y0: 16px;
+    out property <length> y1: 260px;
+    out property <length> y2: 504px;
+    out property <length> y3: 748px;
+    out property <length> w1: 267px;
+    out property <length> w2: 546px;
+    out property <length> w3: 825px;
+    out property <length> h1: 232px;
+    out property <length> h2: 476px;
+    out property <length> h3: 720px;
+}
+
+/// The feed panel: header, the grid, the control bar.
+component FeedFrame inherits Rectangle {
+    in property <string> badge;
+    /// Tall: the feed scrolled out, no control bar, a line at the first screen.
+    in property <bool> tall: false;
+    width: 865px;
+    height: 865px;
+    background: Theme.bg-app;
+
+    VerticalLayout {
+        Rectangle {
+            height: 56px;
+            HorizontalLayout {
+                padding-left: 24px;
+                spacing: 12px;
+                alignment: start;
+                cross-axis-alignment: center;
+                Text { text: "Crew feed"; font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 17px; color: Theme.text-primary; }
+                if root.badge != "": Rectangle {
+                    width: badge-text.preferred-width + 18px;
+                    height: 22px;
+                    CutButtonShape { width: parent.width; height: parent.height; n: 4px; fill: Theme.raised; }
+                    badge-text := Text {
+                        text: root.badge;
+                        font-family: Theme.font-label; font-weight: Theme.weight-label;
+                        font-size: 9px; letter-spacing: Theme.track-label;
+                        color: Theme.text-dim;
+                    }
+                }
+            }
+            Rectangle { x: 0; y: parent.height - 1px; width: parent.width; height: 1px; background: Theme.card-border; }
+        }
+        Rectangle {
+            vertical-stretch: 1;
+            clip: true;
+            @children
+        }
+        if !root.tall: ControlBar {
+            height: Theme.control-bar-height;
+            user-name: "b0bben";
+            user-initials: "B0";
+            user-avatar: Crew.bob.avatar;
+            has-user-avatar: true;
+            can-stream: true;
+        }
+    }
+    // Preview only: where the first screen ends above the control bar.
+    if root.tall: Rectangle {
+        x: 0; y: 865px - Theme.control-bar-height;
+        width: parent.width; height: 1px;
+        background: Theme.text-tertiary;
+    }
+    if root.tall: Rectangle {
+        x: parent.width - fold-text.preferred-width - 20px;
+        y: 865px - Theme.control-bar-height - 8px;
+        width: fold-text.preferred-width + 12px; height: 16px;
+        background: Theme.bg-app;
+        fold-text := Text {
+            text: "FIRST SCREEN";
+            font-family: Theme.font-label; font-weight: Theme.weight-label;
+            font-size: 9px; letter-spacing: Theme.track-label;
+            color: Theme.text-body;
+        }
+    }
+}
+
+
+global Data {
+    out property <BeltReveal> marathon-sealed: {
+        key: "marathon:911", sealed: true, seed: 911,
+        code: SealedFixtures.marathon-code, cells: SealedFixtures.marathon-cells,
+        title: "Marathon", icon: Crew.i-marathon, hue-index: Crew.sara.hue-index, kind: 1, amount: 232,
+        stat: "Longest single game session.", holder: Crew.sara, prev: Crew.leo,
+    };
+    out property <BeltReveal> carry-sealed: {
+        key: "the_carry:1307", sealed: true, seed: 1307,
+        code: SealedFixtures.carry-code, cells: SealedFixtures.carry-cells,
+        title: "The Carry", icon: Crew.i-carry, hue-index: Crew.leo.hue-index, kind: 0, amount: 412, unit: "h",
+        stat: "Most hours in the top shared game.", holder: Crew.leo, prev: Crew.max,
+    };
+    out property <RecapSeal> week-seal: {
+        key: "recap:45", sealed: true, seed: 4421,
+        bright: SealedFixtures.recap-bright, dim: SealedFixtures.recap-dim,
+    };
+
+    out property <[BoardStat]> today: [
+        { value: "14", label: "CLIPS" },
+        { value: "9", label: "SESSIONS" },
+        { value: "17", label: "ON" },
+    ];
+    /// Today: Marathon moved last night and is still sealed.
+    out property <[BoardTitle]> titles-today: [
+        { person: Crew.sara, title: "MARATHON", icon: Crew.i-marathon, value: "3", unit: "h", tail: "52", unread: true, belt: Data.marathon-sealed },
+        { person: Crew.oskar, title: "CLIPPER", icon: Crew.i-clipper, value: "41", unit: "clips", unread: true },
+        { person: Crew.leo, title: "THE CARRY", icon: Crew.i-carry, value: "412", unit: "h" },
+        { person: Crew.you, title: "NIGHT OWL", icon: Crew.i-owl, value: "03:14" },
+        { person: Crew.max, title: "THE COLLECTOR", icon: Crew.i-collector, value: "37", unit: "installed" },
+        { person: Crew.jonas, title: "LOCKED IN", icon: Crew.i-locked, value: "21", unit: "h" },
+        { person: Crew.ida, title: "MOUTH", icon: Crew.i-mouth, value: "1,140", unit: "min" },
+    ];
+    /// Monday: two belts moved in the week and are still sealed.
+    out property <[BoardTitle]> titles-monday: [
+        { person: Crew.sara, title: "MARATHON", icon: Crew.i-marathon, value: "3", unit: "h", tail: "52", belt: Data.marathon-sealed },
+        { person: Crew.leo, title: "THE CARRY", icon: Crew.i-carry, value: "412", unit: "h", belt: Data.carry-sealed },
+        { person: Crew.oskar, title: "CLIPPER", icon: Crew.i-clipper, value: "41", unit: "clips" },
+        { person: Crew.you, title: "NIGHT OWL", icon: Crew.i-owl, value: "03:14" },
+        { person: Crew.max, title: "THE COLLECTOR", icon: Crew.i-collector, value: "37", unit: "installed" },
+    ];
+    /// Monday, the week opened: the belts are open, the moves show the dot.
+    out property <[BoardTitle]> titles-opened: [
+        { person: Crew.sara, title: "MARATHON", icon: Crew.i-marathon, value: "3", unit: "h", tail: "52", unread: true },
+        { person: Crew.leo, title: "THE CARRY", icon: Crew.i-carry, value: "412", unit: "h", unread: true },
+        { person: Crew.oskar, title: "CLIPPER", icon: Crew.i-clipper, value: "41", unit: "clips" },
+        { person: Crew.you, title: "NIGHT OWL", icon: Crew.i-owl, value: "03:14" },
+    ];
+
+    out property <MixedClip> c-sara-game: { kind: "game", person: Crew.sara, game: "Counter-Strike 2", duration: "0:31", poster: @image-url("fixtures/stream-sample-3.png"), unread: true };
+    out property <MixedClip> c-jonas-voice: { kind: "voice", person: Crew.jonas, game: "Counter-Strike 2", duration: "0:30", peaks: Crew.wave-b, unread: true };
+    out property <MixedClip> c-hugo-game: { kind: "game", person: Crew.hugo, game: "Helldivers 2", duration: "0:30", poster: @image-url("fixtures/stream-sample-1.png") };
+    out property <MixedClip> c-ida-voice: { kind: "voice", person: Crew.ida, game: "Deep Rock Galactic", duration: "0:18", peaks: Crew.wave-c };
+    out property <MixedClip> c-max-game: { kind: "game", person: Crew.max, game: "Rocket League", duration: "0:22", poster: @image-url("fixtures/stream-sample-2.png") };
+    out property <MixedClip> c-leo-voice: { kind: "voice", person: Crew.leo, game: "", duration: "0:30", peaks: Crew.wave-d };
+
+    out property <[BoardSession]> sessions: [
+        { art: Crew.cs2, game: "Counter-Strike 2", result: "3W 0L", players: "Jonas, Leo and 9 more", length: "9 h 20" },
+        { art: Crew.drg, game: "Deep Rock Galactic", players: "Nils, Alva and Hugo", length: "2 h 05" },
+        { art: Crew.rl, game: "Rocket League", result: "1W 2L", players: "Max and Theo", length: "48 min" },
+    ];
+}
+
+component TodayBoard inherits FeedBoard {
+    mode: "tabs";
+    active-tab: 0;
+    big: { value: "6", unit: "h", tail: "40", label: "HANGOUT" };
+    stats: Data.today;
+    has-top-game: true;
+    top-game: { name: "Counter-Strike 2", art: Crew.cs2 };
+    titles: Data.titles-today;
+    more-label: "+6 MORE, YOU VS 39";
+}
+
+// ------------------------------------------------------------
+//  Clips mixed. Wednesday 22:40. Max is live. One clip row, game and voice
+//  together, ranked: game footage first, unread first. The board carries
+//  Marathon sealed (it moved last night). Tall: the feed scrolled out.
+// ------------------------------------------------------------
+export component PreviewMixLive inherits FeedFrame {
+    badge: "14 CLIPS TODAY";
+    tall: true;
+    height: 1056px;
+
+    BoardHero {
+        x: G.x0; y: G.y0; width: G.w2; height: G.h2;
+        footage: @image-url("fixtures/stream-sample-2.png");
+        live: true;
+        when: "NOW";
+        host: Crew.max;
+        game: "Counter-Strike 2";
+        watchers: "6 watching";
+        length: "42 min";
+    }
+    TodayBoard { x: G.x2; y: G.y0; width: G.w1; height: G.h3; }
+    ClipRow {
+        x: G.x0; y: G.y2; width: G.w2; height: G.h1;
+        more: 12;
+        clips: [Data.c-sara-game, Data.c-jonas-voice];
+    }
+    SessionsCard { x: G.x0; y: G.y3; width: G.w3; height: G.h1; count: 9; sessions: Data.sessions; more-label: "+6 MORE"; }
+}
+
+/// Nobody live: the best game clip leads, the clip row goes on mixed.
+export component PreviewMixClipHero inherits FeedFrame {
+    badge: "14 CLIPS TODAY";
+
+    GameClipCard {
+        x: G.x0; y: G.y0; width: G.w2; height: G.h2;
+        is-hero: true;
+        is-new: true;
+        poster: @image-url("fixtures/stream-sample-3.png");
+        poster-ready: true;
+        can-play: true;
+        clipper-name: Crew.sara.name;
+        clipper-initials: Crew.sara.initials;
+        clipper-hue-index: Crew.sara.hue-index;
+        clipper-avatar: Crew.sara.avatar;
+        clipper-has-avatar: true;
+        game-name: "Counter-Strike 2";
+        duration: "0:31";
+    }
+    TodayBoard { x: G.x2; y: G.y0; width: G.w1; height: G.h3; }
+    ClipRow {
+        x: G.x0; y: G.y2; width: G.w2; height: G.h1;
+        more: 11;
+        clips: [Data.c-jonas-voice, Data.c-hugo-game];
+    }
+}
+
+// ------------------------------------------------------------
+//  Monday 09:10. The weekly recap arrived sealed. Two options.
+// ------------------------------------------------------------
+
+/// Monday, sealed. The weekly recap takes the side column at its own size
+/// (one column, two rows) and there is no board until it is opened: Today
+/// lives inside the opened recap. The clip row takes the full width under it.
+export component PreviewMondaySealed inherits FeedFrame {
+    badge: "3 CLIPS TODAY";
+
+    GameClipCard {
+        x: G.x0; y: G.y0; width: G.w2; height: G.h2;
+        is-hero: true;
+        is-new: true;
+        poster: @image-url("fixtures/stream-sample-1.png");
+        poster-ready: true;
+        can-play: true;
+        clipper-name: Crew.hugo.name;
+        clipper-initials: Crew.hugo.initials;
+        clipper-hue-index: Crew.hugo.hue-index;
+        clipper-avatar: Crew.hugo.avatar;
+        clipper-has-avatar: true;
+        game-name: "Helldivers 2";
+        duration: "0:30";
+    }
+    SealedRecap {
+        x: G.x2; y: G.y0; width: G.w1; height: G.h2;
+        seal: Data.week-seal;
+        week: "Week 45";
+    }
+    ClipRow {
+        x: G.x0; y: G.y2; width: G.w3; height: G.h1;
+        clips: [Data.c-ida-voice, Data.c-max-game, Data.c-leo-voice];
+    }
+}
+
+/// Monday, opened. The recap landed open as the board, on the Week tab.
+/// Today is the other tab. The clip row is two columns again.
+export component PreviewMondayOpened inherits FeedFrame {
+    badge: "3 CLIPS TODAY";
+
+    GameClipCard {
+        x: G.x0; y: G.y0; width: G.w2; height: G.h2;
+        is-hero: true;
+        poster: @image-url("fixtures/stream-sample-1.png");
+        poster-ready: true;
+        can-play: true;
+        clipper-name: Crew.hugo.name;
+        clipper-initials: Crew.hugo.initials;
+        clipper-hue-index: Crew.hugo.hue-index;
+        clipper-avatar: Crew.hugo.avatar;
+        clipper-has-avatar: true;
+        game-name: "Helldivers 2";
+        duration: "0:30";
+    }
+    FeedBoard {
+        x: G.x2; y: G.y0; width: G.w1; height: G.h3;
+        mode: "tabs";
+        active-tab: 1;
+        big: { value: "43", unit: "h", tail: "12", label: "HANGOUT" };
+        stats: [
+            { value: "31", label: "CLIPS" },
+            { value: "3", unit: "h", tail: "58", label: "LONGEST" },
+            { value: "34", label: "ON" },
+        ];
+        has-top-game: true;
+        top-game: { name: "Counter-Strike 2", art: Crew.cs2 };
+        week-extra: true;
+        most-active: Crew.sara;
+        most-active-value: "25";
+        most-active-unit: "h";
+        most-active-tail: "34";
+        most-clipped: Crew.oskar;
+        most-clipped-value: "7";
+        games-played: [Crew.cs2, Crew.drg, Crew.rl];
+        games-more: 4;
+        titles: Data.titles-opened;
+        more-label: "+9 MORE, YOU VS 39";
+    }
+    ClipRow {
+        x: G.x0; y: G.y2; width: G.w2; height: G.h1;
+        more: 1;
+        clips: [Data.c-ida-voice, Data.c-max-game];
+    }
+}
+
+// ------------------------------------------------------------
+//  C1 · Quiet today. Thursday 15:10. Nothing today, a full week.
+// ------------------------------------------------------------
+export component PreviewBoardQuietToday inherits FeedFrame {
+    badge: "31 CLIPS THIS WEEK";
+
+    BoardHero {
+        x: G.x0; y: G.y0; width: G.w2; height: G.h2;
+        footage: @image-url("fixtures/stream-sample-1.png");
+        when: "MONDAY";
+        host: Crew.nils;
+        game: "Rocket League";
+        watchers: "14 watched";
+        length: "1 h 12 min";
+    }
+    FeedBoard {
+        x: G.x2; y: G.y0; width: G.w1; height: G.h3;
+        mode: "tabs";
+        active-tab: 1;
+        today-empty: true;
+        big: { value: "43", unit: "h", tail: "12", label: "HANGOUT" };
+        stats: [
+            { value: "31", label: "CLIPS" },
+            { value: "18", label: "SESSIONS" },
+            { value: "34", label: "ON" },
+        ];
+        has-top-game: true;
+        top-game: { name: "Counter-Strike 2", art: Crew.cs2 };
+        titles: Data.titles-opened;
+        more-label: "+9 MORE, YOU VS 39";
+    }
+    BoardVoiceCard {
+        x: G.x0; y: G.y2; width: G.w2; height: 112px;
+        channel: "Lounge";
+        state-line: "Empty. Last call yesterday, 23:40";
+        online-count: 5;
+        online: [Crew.nils, Crew.ida, Crew.theo, Crew.vera, Crew.juni];
+    }
+    ClipRow {
+        x: G.x0; y: G.y2 + 124px; width: G.w2; height: G.h1;
+        more: 29;
+        clips: [Data.c-hugo-game, Data.c-leo-voice];
+    }
+}
+
+// ------------------------------------------------------------
+//  C2 · Quiet week. Sunday 20:30. No crew time for 9 days.
+// ------------------------------------------------------------
+export component PreviewBoardQuietWeek inherits FeedFrame {
+    BeltHero {
+        x: G.x0; y: G.y0; width: G.w2; height: G.h1;
+        belt: {
+            title-id: "night_owl",
+            title: "Night Owl",
+            icon: Crew.i-owl,
+            hue-index: Crew.sara.hue-index,
+            prev: Crew.you,
+            prev-value: "03:14",
+            holder: Crew.sara,
+            holder-value: "03:40",
+            age: "6 days ago",
+            headline: "Sara took Night Owl from you",
+            detail: "03:40 beats 03:14.",
+        };
+    }
+    FeedBoard {
+        x: G.x2; y: G.y0; width: G.w1; height: G.h3;
+        mode: "quiet";
+        quiet-line: "No crew time last week.";
+        quiet-sub: "Sara, Max and 2 more still played.";
+        titles: [
+            { person: Crew.sara, title: "NIGHT OWL", icon: Crew.i-owl, value: "03:40" },
+            { person: Crew.sara, title: "MARATHON", icon: Crew.i-marathon, value: "3", unit: "h", tail: "52" },
+            { person: Crew.oskar, title: "CLIPPER", icon: Crew.i-clipper, value: "43", unit: "clips" },
+            { person: Crew.leo, title: "THE CARRY", icon: Crew.i-carry, value: "418", unit: "h" },
+            { person: Crew.max, title: "THE COLLECTOR", icon: Crew.i-collector, value: "38", unit: "installed" },
+            { person: Crew.max, title: "LOCKED IN", icon: Crew.i-locked, value: "9", unit: "h" },
+            { person: Crew.ida, title: "MOUTH", icon: Crew.i-mouth, value: "880", unit: "min" },
+        ];
+        more-label: "+6 MORE, YOU VS 39";
+    }
+    BoardVoiceCard {
+        x: G.x0; y: G.y1; width: G.w2; height: 96px;
+        channel: "Lounge";
+        state-line: "Empty. Last call 6 November";
+    }
+    MostInstalledCard {
+        x: G.x0; y: G.y1 + 108px; width: G.w2; height: 184px;
+        games: [
+            { name: "Deep Rock Galactic", art: Crew.drg, count: "23" },
+            { name: "Helldivers 2", art: Crew.hd2, count: "19" },
+            { name: "Rocket League", art: Crew.rl, count: "17" },
+        ];
+    }
+}
+
+// ------------------------------------------------------------
+//  C3 · Dormant. Monday 7 December. Nothing for 24 days.
+// ------------------------------------------------------------
+export component PreviewBoardDormant inherits FeedFrame {
+    BoardDormantStrip {
+        x: G.x0; y: G.y0; width: G.w3; height: 60px;
+        line: "Nothing new since 13 November. Leo holds The Carry.";
+        age: "3 weeks";
+    }
+    BoardHero {
+        x: G.x0; y: G.y0 + 72px; width: G.w2; height: G.h2;
+        footage: @image-url("fixtures/stream-sample-3.png");
+        when: "13 NOVEMBER";
+        host: Crew.jonas;
+        game: "Fall Guys";
+        watchers: "11 watched";
+        length: "58 min";
+    }
+    FeedBoard {
+        x: G.x2; y: G.y0 + 72px; width: G.w1; height: G.h2;
+        mode: "past";
+        past-label: "WEEK 46";
+        past-age: "3 weeks ago";
+        big: { value: "38", unit: "h", tail: "05", label: "HANGOUT" };
+        stats: [
+            { value: "22", label: "CLIPS" },
+            { value: "15", label: "SESSIONS" },
+            { value: "29", label: "ON" },
+        ];
+        titles: [
+            { person: Crew.leo, title: "THE CARRY", icon: Crew.i-carry, value: "418", unit: "h" },
+            { person: Crew.sara, title: "NIGHT OWL", icon: Crew.i-owl, value: "03:40" },
+            { person: Crew.oskar, title: "CLIPPER", icon: Crew.i-clipper, value: "43", unit: "clips" },
+            { person: Crew.max, title: "THE COLLECTOR", icon: Crew.i-collector, value: "38", unit: "installed" },
+        ];
+        more-label: "+9 MORE";
+    }
+    BoardVoiceCard {
+        x: G.x0; y: G.y0 + 72px + G.h2 + 12px; width: G.w3; height: 96px;
+        channel: "Lounge";
+        state-line: "Empty. Last call 13 November";
+    }
+}
+
+
+
+// ============================================================
+//  The zone matrix. Five fixed zones: Stage (two columns, two rows),
+//  Board (the side column), Clips (one row), People (one row), Games (a
+//  list). A zone with nothing to show collapses and the zones under it move
+//  up. Six crews, one preview each.
+// ============================================================
+
+global Z {
+    // Left column under the board is two columns wide; after the board, three.
+    out property <length> people-h: 120px;
+}
+
+global Own {
+    out property <BeltReveal> carry: { key: "own:the_carry:c1", sealed: true, seed: 11, code: SealedFixtures.carry-code, cells: SealedFixtures.carry-cells, title: "The Carry", icon: Crew.i-carry, hue-index: 1, holder: Crew.you };
+    out property <BeltReveal> owl: { key: "own:night_owl:c1", sealed: true, seed: 12, code: SealedFixtures.owl-code, cells: SealedFixtures.owl-cells, title: "Night Owl", icon: Crew.i-owl, hue-index: 1, holder: Crew.you };
+    out property <BeltReveal> collector: { key: "own:the_collector:c1", sealed: true, seed: 13, code: SealedFixtures.marathon-code, cells: SealedFixtures.marathon-cells, title: "The Collector", icon: Crew.i-collector, hue-index: 1, holder: Crew.you };
+    out property <BeltReveal> locked: { key: "own:locked_in:c1", sealed: true, seed: 14, code: SealedFixtures.owl-code, cells: SealedFixtures.owl-cells, title: "Locked In", icon: Crew.i-locked, hue-index: 1, holder: Crew.you };
+    out property <BeltReveal> owl-moved: {
+        key: "night_owl:3301", sealed: true, seed: 3301, code: SealedFixtures.owl-code, cells: SealedFixtures.owl-cells,
+        title: "Night Owl", icon: Crew.i-owl, hue-index: Crew.jonas.hue-index, holder: Crew.jonas, prev: Crew.you,
+    };
+}
+
+/// 1 · A crew of one, day 0. Nothing to watch: the stage is your own belts,
+/// sealed. The board is you this week. People is the first five: you, four
+/// open seats, the red Invite. No clips, no games, no skeletons.
+export component PreviewZonesDay0 inherits FeedFrame {
+    StageOwnBelts {
+        x: G.x0; y: G.y0; width: G.w2; height: G.h2;
+        you: Crew.bob;
+        belts: [Own.carry, Own.owl, Own.collector, Own.locked];
+    }
+    FeedBoard {
+        x: G.x2; y: G.y0; width: G.w1; height: G.h2;
+        mode: "past";
+        past-label: "YOU, THIS WEEK";
+        big: { value: "6", unit: "h", tail: "00", label: "PLAYED" };
+        stats: [
+            { value: "3", label: "GAMES" },
+            { value: "4", label: "SESSIONS" },
+            { value: "03:14", label: "LATEST" },
+        ];
+        show-titles: false;
+        game-rows-label: "YOUR GAMES";
+        game-rows: [
+            { name: "Counter-Strike 2", art: Crew.cs2, count: "4,167 h" },
+            { name: "Rocket League", art: Crew.rl, count: "812 h" },
+            { name: "Deep Rock Galactic", art: Crew.drg, count: "96 h" },
+            { name: "Helldivers 2", art: Crew.hd2, count: "41 h" },
+        ];
+    }
+    PeopleZone {
+        x: G.x0; y: G.y2; width: G.w3; height: Z.people-h;
+        members: [Crew.bob];
+        open-seats: 4;
+    }
+}
+
+/// 2 · Three members, a little activity. Max clipped today: the stage. The
+/// board holds today and the belts (Night Owl moved, sealed). No other clip,
+/// so the clip row collapses and People moves up: two open seats and Invite.
+export component PreviewZonesSmall inherits FeedFrame {
+    badge: "1 CLIP TODAY";
+
+    GameClipCard {
+        x: G.x0; y: G.y0; width: G.w2; height: G.h2;
+        is-hero: true;
+        is-new: true;
+        poster: @image-url("fixtures/stream-sample-2.png");
+        poster-ready: true;
+        can-play: true;
+        clipper-name: Crew.max.name;
+        clipper-initials: Crew.max.initials;
+        clipper-hue-index: Crew.max.hue-index;
+        clipper-avatar: Crew.max.avatar;
+        clipper-has-avatar: true;
+        game-name: "Counter-Strike 2";
+        duration: "0:28";
+    }
+    FeedBoard {
+        x: G.x2; y: G.y0; width: G.w1; height: G.h3;
+        mode: "tabs";
+        active-tab: 0;
+        big: { value: "1", unit: "h", tail: "10", label: "HANGOUT" };
+        stats: [
+            { value: "1", label: "CLIPS" },
+            { value: "2", label: "SESSIONS" },
+            { value: "3", label: "ON" },
+        ];
+        has-top-game: true;
+        top-game: { name: "Counter-Strike 2", art: Crew.cs2 };
+        titles: [
+            { person: Crew.jonas, title: "NIGHT OWL", icon: Crew.i-owl, value: "02:10", belt: Own.owl-moved },
+            { person: Crew.you, title: "THE CARRY", icon: Crew.i-carry, value: "4,167", unit: "h" },
+            { person: Crew.max, title: "THE COLLECTOR", icon: Crew.i-collector, value: "37", unit: "installed" },
+            { person: Crew.jonas, title: "LOCKED IN", icon: Crew.i-locked, value: "9", unit: "h" },
+            { person: Crew.you, title: "MARATHON", icon: Crew.i-marathon, value: "2", unit: "h", tail: "40" },
+            { person: Crew.max, title: "CLIPPER", icon: Crew.i-clipper, value: "6", unit: "clips" },
+            { person: Crew.jonas, title: "MOUTH", icon: Crew.i-mouth, value: "310", unit: "min" },
+        ];
+        more-label: "+6 MORE";
+    }
+    PeopleZone {
+        x: G.x0; y: G.y2; width: G.w2; height: Z.people-h;
+        members: [Crew.bob, Crew.jonas, Crew.max];
+        open-seats: 2;
+    }
+    SessionsCard {
+        x: G.x0; y: G.y2 + Z.people-h + 12px; width: G.w2; height: G.h1;
+        count: 2;
+        sessions: [
+            { art: Crew.cs2, game: "Counter-Strike 2", result: "1W 2L", players: "You and Jonas", length: "1 h 10" },
+            { art: Crew.rl, game: "Rocket League", players: "Max, solo", length: "35 min" },
+        ];
+    }
+}
+
+/// 3 · Seven members, some activity. A stream ended last night: the stage.
+/// Clips mixed. People below: Elin joined, a call is on in Lounge.
+export component PreviewZonesMid inherits FeedFrame {
+    badge: "4 CLIPS TODAY";
+    tall: true;
+    height: 1188px;
+
+    BoardHero {
+        x: G.x0; y: G.y0; width: G.w2; height: G.h2;
+        footage: @image-url("fixtures/stream-sample-1.png");
+        when: "YESTERDAY";
+        host: Crew.leo;
+        game: "Rocket League";
+        watchers: "5 watched";
+        length: "1 h 04 min";
+    }
+    FeedBoard {
+        x: G.x2; y: G.y0; width: G.w1; height: G.h3;
+        mode: "tabs";
+        active-tab: 0;
+        big: { value: "3", unit: "h", tail: "25", label: "HANGOUT" };
+        stats: [
+            { value: "4", label: "CLIPS" },
+            { value: "3", label: "SESSIONS" },
+            { value: "6", label: "ON" },
+        ];
+        has-top-game: true;
+        top-game: { name: "Rocket League", art: Crew.rl };
+        titles: Data.titles-today;
+        more-label: "+6 MORE, YOU VS 6";
+    }
+    ClipRow {
+        x: G.x0; y: G.y2; width: G.w2; height: G.h1;
+        more: 2;
+        clips: [Data.c-sara-game, Data.c-jonas-voice];
+    }
+    PeopleZone {
+        x: G.x0; y: G.y3; width: G.w3; height: Z.people-h;
+        joined: [Crew.elin];
+        joined-line: "Elin joined";
+        joined-sub: "invited by Max, 20:46";
+        voice: "call";
+        channel: "Lounge";
+        voice-line: "3 in the call, 48 min";
+        voice-people: [Crew.jonas, Crew.max, Crew.sara];
+    }
+    SessionsCard {
+        x: G.x0; y: G.y3 + Z.people-h + 12px; width: G.w3; height: G.h1;
+        count: 3;
+        sessions: [
+            { art: Crew.rl, game: "Rocket League", result: "4W 1L", players: "Leo, Max and Sara", length: "2 h 10" },
+            { art: Crew.cs2, game: "Counter-Strike 2", result: "1W 2L", players: "You and Jonas", length: "1 h 05" },
+            { art: Crew.drg, game: "Deep Rock Galactic", players: "Ida, solo", length: "50 min" },
+        ];
+    }
+}
+
+/// 4 · Forty members, a busy evening. Max is live: the stage, red keyline.
+/// Clips mixed with "+12". People: three joined, five in the call.
+export component PreviewZonesBig inherits FeedFrame {
+    badge: "14 CLIPS TODAY";
+    tall: true;
+    height: 1188px;
+
+    BoardHero {
+        x: G.x0; y: G.y0; width: G.w2; height: G.h2;
+        footage: @image-url("fixtures/stream-sample-2.png");
+        live: true;
+        when: "NOW";
+        host: Crew.max;
+        game: "Counter-Strike 2";
+        watchers: "6 watching";
+        length: "42 min";
+    }
+    TodayBoard { x: G.x2; y: G.y0; width: G.w1; height: G.h3; }
+    ClipRow {
+        x: G.x0; y: G.y2; width: G.w2; height: G.h1;
+        more: 12;
+        clips: [Data.c-sara-game, Data.c-jonas-voice];
+    }
+    PeopleZone {
+        x: G.x0; y: G.y3; width: G.w3; height: Z.people-h;
+        joined: [Crew.elin, Crew.noah, Crew.saga];
+        joined-line: "Elin, Noah and Saga joined";
+        joined-sub: "invited by Max, Ida and Leo";
+        voice: "call";
+        channel: "Lounge";
+        voice-line: "5 in the call, 1 h 20";
+        voice-people: [Crew.jonas, Crew.sara, Crew.ida, Crew.oskar];
+        voice-more: 1;
+    }
+    SessionsCard {
+        x: G.x0; y: G.y3 + Z.people-h + 12px; width: G.w3; height: G.h1;
+        count: 9;
+        sessions: Data.sessions;
+        more-label: "+6 MORE";
+    }
+}
+
+/// 5 · Quiet week. No crew time for 9 days. The stage is the belt hero, one
+/// row. People: the empty channel and Start voice. Games: nothing played, so
+/// it shows what the crew has installed.
+export component PreviewZonesQuiet inherits FeedFrame {
+    BeltHero {
+        x: G.x0; y: G.y0; width: G.w2; height: G.h1;
+        belt: {
+            title-id: "night_owl",
+            title: "Night Owl",
+            icon: Crew.i-owl,
+            hue-index: Crew.sara.hue-index,
+            prev: Crew.you,
+            prev-value: "03:14",
+            holder: Crew.sara,
+            holder-value: "03:40",
+            age: "6 days ago",
+            headline: "Sara took Night Owl from you",
+            detail: "03:40 beats 03:14.",
+        };
+    }
+    FeedBoard {
+        x: G.x2; y: G.y0; width: G.w1; height: G.h3;
+        mode: "quiet";
+        quiet-line: "No crew time last week.";
+        quiet-sub: "Sara, Max and 2 more still played.";
+        titles: [
+            { person: Crew.sara, title: "NIGHT OWL", icon: Crew.i-owl, value: "03:40" },
+            { person: Crew.sara, title: "MARATHON", icon: Crew.i-marathon, value: "3", unit: "h", tail: "52" },
+            { person: Crew.oskar, title: "CLIPPER", icon: Crew.i-clipper, value: "43", unit: "clips" },
+            { person: Crew.leo, title: "THE CARRY", icon: Crew.i-carry, value: "418", unit: "h" },
+            { person: Crew.max, title: "THE COLLECTOR", icon: Crew.i-collector, value: "38", unit: "installed" },
+            { person: Crew.max, title: "LOCKED IN", icon: Crew.i-locked, value: "9", unit: "h" },
+            { person: Crew.ida, title: "MOUTH", icon: Crew.i-mouth, value: "880", unit: "min" },
+        ];
+        more-label: "+6 MORE, YOU VS 39";
+    }
+    PeopleZone {
+        x: G.x0; y: G.y1; width: G.w2; height: Z.people-h;
+        voice: "idle";
+        channel: "Lounge";
+        voice-line: "Empty. Last call 6 November";
+    }
+    MostInstalledCard {
+        x: G.x0; y: G.y1 + Z.people-h + 12px; width: G.w2; height: 184px;
+        games: [
+            { name: "Deep Rock Galactic", art: Crew.drg, count: "23" },
+            { name: "Helldivers 2", art: Crew.hd2, count: "19" },
+            { name: "Rocket League", art: Crew.rl, count: "17" },
+        ];
+    }
+}
+
+/// 6 · Dormant, 24 days. The strip, the last real stream with its date, the
+/// last real week with its age, and the empty channel.
+export component PreviewZonesDormant inherits FeedFrame {
+    BoardDormantStrip {
+        x: G.x0; y: G.y0; width: G.w3; height: 60px;
+        line: "Nothing new since 13 November. Leo holds The Carry.";
+        age: "3 weeks";
+    }
+    BoardHero {
+        x: G.x0; y: G.y0 + 72px; width: G.w2; height: G.h2;
+        footage: @image-url("fixtures/stream-sample-3.png");
+        when: "13 NOVEMBER";
+        host: Crew.jonas;
+        game: "Fall Guys";
+        watchers: "11 watched";
+        length: "58 min";
+    }
+    FeedBoard {
+        x: G.x2; y: G.y0 + 72px; width: G.w1; height: G.h2;
+        mode: "past";
+        past-label: "WEEK 46";
+        past-age: "3 weeks ago";
+        big: { value: "38", unit: "h", tail: "05", label: "HANGOUT" };
+        stats: [
+            { value: "22", label: "CLIPS" },
+            { value: "15", label: "SESSIONS" },
+            { value: "29", label: "ON" },
+        ];
+        titles: [
+            { person: Crew.leo, title: "THE CARRY", icon: Crew.i-carry, value: "418", unit: "h" },
+            { person: Crew.sara, title: "NIGHT OWL", icon: Crew.i-owl, value: "03:40" },
+            { person: Crew.oskar, title: "CLIPPER", icon: Crew.i-clipper, value: "43", unit: "clips" },
+            { person: Crew.max, title: "THE COLLECTOR", icon: Crew.i-collector, value: "38", unit: "installed" },
+        ];
+        more-label: "+9 MORE";
+    }
+    PeopleZone {
+        x: G.x0; y: G.y0 + 72px + G.h2 + 12px; width: G.w3; height: Z.people-h;
+        voice: "idle";
+        channel: "Lounge";
+        voice-line: "Empty. Last call 13 November";
+    }
+}
+
+
+// ============================================================
+//  The zone feed panel itself (CrewFeedZones) with the clips carousel and
+//  Crew history. Free is the last 7 days; every week before it is m3llo+.
+// ============================================================
+
+global Hist {
+    out property <FeedCardData> g1: { id: "g1", card-type: "clip", clip-kind: "game", clip-path: "g1", clip-can-play: true,
+        snapshot-poster: @image-url("fixtures/stream-sample-2.png"), snapshot-poster-ready: true,
+        actor-name: "Max", actor-initials: "MA", actor-avatar: Crew.max.avatar, actor-has-avatar: true, game-name: "Counter-Strike 2", duration: "0:30", is-new: true };
+    out property <FeedCardData> v1: { id: "v1", card-type: "clip", clip-kind: "voice", clip-path: "v1",
+        actor-name: "Jonas", actor-initials: "JO", actor-avatar: Crew.jonas.avatar, actor-has-avatar: true, game-name: "Counter-Strike 2", duration: "0:24", waveform: Crew.wave-b };
+    out property <FeedCardData> g2: { id: "g2", card-type: "clip", clip-kind: "game", clip-path: "g2", clip-can-play: true,
+        snapshot-poster: @image-url("fixtures/stream-sample-1.png"), snapshot-poster-ready: true,
+        actor-name: "Hugo", actor-initials: "HU", actor-avatar: Crew.hugo.avatar, actor-has-avatar: true, game-name: "Rocket League", duration: "0:22" };
+    out property <FeedCardData> v2: { id: "v2", card-type: "clip", clip-kind: "voice", clip-path: "v2",
+        actor-name: "Sara", actor-initials: "SA", actor-avatar: Crew.sara.avatar, actor-has-avatar: true, duration: "0:30", waveform: Crew.wave-c };
+    out property <FeedCardData> g3: { id: "g3", card-type: "clip", clip-kind: "game", clip-path: "g3", clip-can-play: true,
+        snapshot-poster: @image-url("fixtures/stream-sample-3.png"), snapshot-poster-ready: true,
+        actor-name: "Leo", actor-initials: "LE", actor-avatar: Crew.leo.avatar, actor-has-avatar: true, game-name: "Fall Guys", duration: "0:18" };
+
+    out property <[HistoryWeek]> locked: [
+        { label: "Week 44", age: "Last week", locked: true, seal: Data.week-seal, more: 9,
+          teasers: [
+            { person: Crew.leo, kind: "CLIP", duration: "0:30", code: SealedFixtures.carry-code },
+            { person: Crew.ida, kind: "STREAM", duration: "1 h 12 min", code: SealedFixtures.owl-code },
+          ] },
+        { label: "Week 43", age: "2 weeks ago", locked: true, seal: { key: "plus:43", sealed: true, seed: 911, bright: SealedFixtures.recap-bright, dim: SealedFixtures.recap-dim }, more: 4,
+          teasers: [
+            { person: Crew.sara, kind: "VOICE", duration: "0:24", code: SealedFixtures.marathon-code },
+            { person: Crew.max, kind: "CLIP", duration: "0:28", code: SealedFixtures.owl-code },
+          ] },
+    ];
+    out property <[HistoryWeek]> open: [
+        { label: "Week 44", age: "Last week", locked: false,
+          big: { value: "38", unit: "h", tail: "05", label: "HANGOUT" },
+          stats: [ { value: "22", label: "CLIPS" }, { value: "3", unit: "h", tail: "58", label: "LONGEST" }, { value: "5", label: "GAMES" } ],
+          has-top: true, top: { name: "Counter-Strike 2", art: Crew.cs2 },
+          clips: [Hist.g3, Hist.v2, Hist.g2] },
+        { label: "Week 43", age: "2 weeks ago", locked: false,
+          big: { value: "29", unit: "h", tail: "40", label: "HANGOUT" },
+          stats: [ { value: "17", label: "CLIPS" }, { value: "2", unit: "h", tail: "10", label: "LONGEST" }, { value: "4", label: "GAMES" } ],
+          has-top: true, top: { name: "Rocket League", art: Crew.rl },
+          clips: [Hist.g2, Hist.v1] },
+    ];
+}
+
+component ZonesPanel inherits Rectangle {
+    in property <bool> plus: false;
+    width: 865px;
+    height: 1830px;
+    background: Theme.bg-app;
+    CrewFeedZones {
+        width: parent.width;
+        height: parent.height;
+        zones: {
+            stage: "card",
+            stage-card: { id: "hero", card-type: "clip", clip-kind: "game", clip-path: "hero", clip-can-play: true, is-hero: true,
+                snapshot-poster: @image-url("fixtures/stream-sample-3.png"), snapshot-poster-ready: true,
+                actor-name: "Sara", actor-initials: "SA", actor-avatar: Crew.sara.avatar, actor-has-avatar: true, game-name: "Counter-Strike 2", duration: "0:31", is-new: true },
+            board: "tabs",
+            today-big: { value: "6", unit: "h", tail: "40", label: "HANGOUT" },
+            today-stats: Data.today,
+            today-has-top: true,
+            today-top: { name: "Counter-Strike 2", art: Crew.cs2 },
+            titles: Data.titles-today,
+            title-count: 13,
+            more-label: "+6 MORE",
+            clips: [Hist.g1, Hist.v1, Hist.g2, Hist.v2, Hist.g3],
+            people: true,
+            joined: [Crew.elin],
+            joined-line: "Elin joined",
+            joined-sub: "invited by Max, 20:46",
+            say-hi-card: "j1",
+            voice: "call",
+            channel: "Lounge",
+            voice-line: "3 in the call",
+            voice-people: [Crew.jonas, Crew.max, Crew.sara],
+            sessions: Data.sessions,
+            sessions-count: 9,
+            sessions-more: "+6 MORE",
+            history: root.plus ? Hist.open : Hist.locked,
+            plus: root.plus,
+        };
+    }
+}
+
+/// Free: the carousel ends in the Crew history tile; Crew history is sealed weeks.
+export component PreviewZonesHistoryFree inherits ZonesPanel { plus: false; }
+/// m3llo+: every past week is open, with its numbers and its clips.
+export component PreviewZonesHistoryPlus inherits ZonesPanel { plus: true; }

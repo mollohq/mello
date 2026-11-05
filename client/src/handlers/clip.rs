@@ -406,7 +406,7 @@ fn with_seal<R>(ctx: &AppContext, f: impl FnOnce(&Seal) -> R) -> R {
 
 /// The viewer and the roster of the active crew, for naming the user ids of
 /// the head2head entry.
-fn h2h_roster(ctx: &AppContext) -> (Person, Vec<Person>) {
+pub(super) fn h2h_roster(ctx: &AppContext) -> (Person, Vec<Person>) {
     let viewer = Person::new(
         ctx.app.get_user_id().as_str(),
         ctx.app.get_user_name().as_str(),
@@ -433,11 +433,15 @@ fn h2h_roster(ctx: &AppContext) -> (Person, Vec<Person>) {
 /// `hero_free`: no other entry of `this_week` is a hero. A quiet feed then
 /// leads with the belt that moved last, of any age (frame E), and the pairs
 /// card is the wide card under it.
-fn head2head_cards(
+/// The head2head cards of a feed entry, and the head2head data of the crew
+/// (titles, members, seats) as built before any card is dropped. The zone
+/// feed reads the data; the card list may not hold it (a big crew with few
+/// contested pairs has no head2head card).
+pub(super) fn head2head_cards(
     ctx: &AppContext,
     e: &mello_core::crew_events::FeedEntry,
     entries: &[mello_core::crew_events::FeedEntry],
-) -> Option<(Placement, Vec<FeedCardData>)> {
+) -> Option<(Placement, Vec<FeedCardData>, crate::Head2headData)> {
     let hero_free = hero_free(entries);
     let data = normalized_entry_data(&e.data);
     let (viewer, members) = h2h_roster(ctx);
@@ -495,6 +499,7 @@ fn head2head_cards(
         }),
         ..Default::default()
     }];
+    let data_of_crew = cards[0].head2head.clone();
     // A quiet feed with no hero: the newest belt move leads (frame E).
     if hero_free && model.placement == Placement::Pairs {
         if let Some(hero) = head2head::belt_hero_data(&model, now_ms, &avatar) {
@@ -509,7 +514,7 @@ fn head2head_cards(
                     ..Default::default()
                 },
             );
-            return Some((Placement::Belt, cards));
+            return Some((Placement::Belt, cards, data_of_crew));
         }
     }
     // From five members the cell loses its seats and button. The invite card
@@ -536,7 +541,7 @@ fn head2head_cards(
     {
         cards.remove(0);
     }
-    Some((model.placement, cards))
+    Some((model.placement, cards, data_of_crew))
 }
 
 /// No entry of `this_week` other than head2head is a hero.
@@ -812,6 +817,7 @@ pub(super) fn rebuild_roster_cards(ctx: &AppContext) {
     ctx.app
         .set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());
     refresh_feed_skeletons(ctx);
+    super::zones::refresh(ctx);
 }
 
 /// True when a head2head or invite card draws an octagon for the user. A big
@@ -871,7 +877,7 @@ pub(super) fn refresh_head2head_cards(ctx: &AppContext, user_id: &str) {
     let Some(entry) = entries.iter().find(|e| e.entry_type == "head2head") else {
         return;
     };
-    let Some((_, cards)) = head2head_cards(ctx, entry, &entries) else {
+    let Some((_, cards, _)) = head2head_cards(ctx, entry, &entries) else {
         return;
     };
     let feed = ctx.app.get_feed_cards();
@@ -886,6 +892,7 @@ pub(super) fn refresh_head2head_cards(ctx: &AppContext, user_id: &str) {
     for (card, row) in cards.into_iter().zip(rows.into_iter().flatten()) {
         feed.set_row_data(row, card);
     }
+    super::zones::refresh(ctx);
 }
 
 /// Put the cards that hold a belt or a recap on screen again after a card
@@ -906,7 +913,7 @@ pub(super) fn refresh_sealed_cards(ctx: &AppContext) {
         .collect();
     let mut fresh: Vec<FeedCardData> = Vec::new();
     if let Some(entry) = entries.iter().find(|e| e.entry_type == "head2head") {
-        if let Some((_, cards)) = head2head_cards(ctx, entry, &entries) {
+        if let Some((_, cards, _)) = head2head_cards(ctx, entry, &entries) {
             fresh.extend(cards);
         }
     }
@@ -933,10 +940,11 @@ pub(super) fn refresh_sealed_cards(ctx: &AppContext) {
             feed.set_row_data(row, card);
         }
     }
+    super::zones::refresh(ctx);
 }
 
 /// The octagon of a user: the loaded avatar, else the initials.
-fn live_person(ctx: &AppContext, person: &Person) -> crate::H2hPerson {
+pub(super) fn live_person(ctx: &AppContext, person: &Person) -> crate::H2hPerson {
     let cache = ctx.avatar_cache.borrow();
     let mut avatar = cache.get(&person.id).cloned();
     if avatar.is_none()
@@ -1102,7 +1110,9 @@ pub(super) fn refresh_live_session_cards(ctx: &AppContext) {
     let cards = arranged(ctx, cards);
     ctx.app
         .set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());
+    super::zones::refresh(ctx);
     refresh_feed_skeletons(ctx);
+    super::zones::refresh(ctx);
 }
 
 /// The art slot that the game frame of a card draws. The recap cards draw a
@@ -1242,6 +1252,7 @@ pub(super) fn rearrange_feed_cards(ctx: &AppContext) {
     let live = ctx.app.get_active_stream_cards().row_count();
     let arranged = crate::feed_grid::arrange_model(&ctx.app.get_feed_cards(), live);
     ctx.app.set_feed_cards(arranged);
+    super::zones::refresh(ctx);
 }
 
 /// The cards of the `this_week` section. Wide and versus lead the feed (the
@@ -1277,7 +1288,7 @@ fn build_this_week(
             daily_shown = true;
         }
         if e.entry_type == "head2head" {
-            if let Some((placement, group)) = head2head_cards(ctx, e, entries) {
+            if let Some((placement, group, _)) = head2head_cards(ctx, e, entries) {
                 match placement {
                     Placement::Wide | Placement::Versus | Placement::Belt => lead = group,
                     Placement::Pairs if hero_free(entries) => lead = group,
@@ -2968,6 +2979,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 .set_memory_cards(Rc::new(slint::VecModel::from(memory)).into());
             ctx.app.set_feed_cold_start(is_cold);
             refresh_feed_skeletons(ctx);
+            super::zones::refresh(ctx);
             ctx.app.set_feed_clip_count(clip_count);
             ctx.app.set_feed_has_more(false);
 

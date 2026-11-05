@@ -8,6 +8,7 @@ import { GameClipCard } from "./game_clip_card.slint";
 import { TwoStreamHero } from "../components/stream_hero.slint";
 import { SkeletonTrio, SkeletonCell } from "../components/skeleton_trio.slint";
 import { Head2headCardWide, Head2headCardPairs, VersusHero, BeltHero, InviteCard, TitleChip, H2hHue, ChipTipPreview } from "../components/head2head.slint";
+import { FeedBoard, PeopleZone, StageOwnBelts, SessionsCard, MostInstalledCard, BoardDormantStrip, ZonesData, HistoryWeek, LockedTeaserTile, PlusStrip, BoardShell, Kicker } from "../components/feed_board.slint";
 import { BeltSlot, SealedRecap, SealedUi, SealedFmt, Ease, Clock } from "../components/sealed.slint";
 import { SealedStage } from "./sealed_stage.slint";
 import { SealedFixtures } from "../previews/sealed_fixtures.slint";
@@ -59,9 +60,8 @@ component HeroClipCard inherits Rectangle {
         height: parent.height;
         n: Theme.notch;
         corner: "br";
-        fill: card.is-new ? Theme.clip-amber :
-                  is-playing ? Theme.clip-amber :
-                  card-hover.has-hover ? Theme.graphic-med : Theme.card-border;
+        // A clip never wears a red border. Red is the live stream (and the tag).
+        fill: is-playing || card-hover.has-hover ? Theme.graphic-med : Theme.card-border;
     }
     CutShape {
         width: parent.width;
@@ -293,9 +293,8 @@ component ClipCard inherits Rectangle {
         height: parent.height;
         n: Theme.notch;
         corner: "bl";
-        fill: card.is-new ? Theme.clip-amber :
-                  is-playing ? Theme.clip-amber :
-                  clip-hover.has-hover ? Theme.graphic-med : Theme.card-border;
+        // A clip never wears a red border. Red is the live stream (and the tag).
+        fill: is-playing || clip-hover.has-hover ? Theme.graphic-med : Theme.card-border;
     }
     CutShape {
         width: parent.width;
@@ -3998,6 +3997,512 @@ export component CrewFeed inherits Rectangle {
 
             // The face of the card: the size of its container in the stage,
             // the card's box, not of the stage (`parent` here is the stage).
+            if SealedUi.active-kind == "recap": RecapCard {
+                width: 100%;
+                height: 100%;
+                card: SealedUi.recap-card;
+                count: SealedUi.active-kind == "recap" ? stage.count : 1;
+            }
+        }
+    }
+}
+
+/// A carousel arrow over the clips: a cut tile, a black wash, a chevron.
+component CarouselArrow inherits Rectangle {
+    in property <bool> left: false;
+    callback clicked();
+    width: 36px;
+    height: 36px;
+    accessible-role: button;
+    accessible-label: root.left ? "Newer clips" : "Older clips";
+    CutButtonShape { width: parent.width; height: parent.height; n: 7px; fill: ta.has-hover ? Theme.text-primary : Theme.over-media; }
+    Image {
+        source: root.left ? @image-url("../icons/chevron-left.svg") : @image-url("../icons/chevron-right.svg");
+        colorize: ta.has-hover ? Theme.on-action : Theme.text-primary;
+        width: 16px; height: 16px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+/// Clips as a paged carousel: `per-page` tiles in view, arrows at the ends,
+/// newest first. `history-weeks` > 0 ends it with the Crew history tile.
+component ClipCarousel inherits Rectangle {
+    in property <[FeedCardData]> clips;
+    in property <int> per-page: 2;
+    in property <int> history-weeks: 0;
+    in property <string> playing-path;
+    in property <float> clip-progress;
+    in property <bool> clip-paused;
+    in property <float> clip-anim-tick;
+    in property <string> clip-position-text;
+    in property <string> clip-duration-text;
+    in property <int> clip-duration-ms;
+    callback play-clicked(string);
+    callback seek-clip-ms(int);
+    callback history-clicked();
+
+    property <length> gap: 12px;
+    property <int> tiles: root.clips.length + (root.history-weeks > 0 ? 1 : 0);
+    property <int> pages: Math.max(1, Math.ceil(root.tiles / root.per-page));
+    property <int> page: 0;
+    property <length> tile-w: (self.width - (root.per-page - 1) * root.gap) / root.per-page;
+    property <length> step: root.tile-w + root.gap;
+
+    clip: true;
+
+    Rectangle {
+        x: -root.page * root.per-page * root.step;
+        animate x { duration: 260ms; easing: ease-in-out; }
+        width: root.tiles * root.step;
+        height: parent.height;
+        for c[i] in root.clips: FeedSlot {
+            x: i * root.step;
+            y: 0;
+            width: root.tile-w;
+            height: parent.height;
+            card: c;
+            playing-path: root.playing-path;
+            clip-progress: root.clip-progress;
+            clip-paused: root.clip-paused;
+            clip-anim-tick: root.clip-anim-tick;
+            clip-position-text: root.clip-position-text;
+            clip-duration-text: root.clip-duration-text;
+            clip-duration-ms: root.clip-duration-ms;
+            play-clicked(path) => { root.play-clicked(path); }
+            seek-clip-ms(m) => { root.seek-clip-ms(m); }
+        }
+        // The end of this week: the way into Crew history.
+        if root.history-weeks > 0: Rectangle {
+            x: root.clips.length * root.step;
+            y: 0;
+            width: root.tile-w;
+            height: parent.height;
+            accessible-role: button;
+            accessible-label: "Crew history";
+            BoardShell { width: parent.width; height: parent.height; corner: "tr"; }
+            VerticalLayout {
+                alignment: center;
+                spacing: 8px;
+                Image {
+                    source: @image-url("../icons/chevron-down.svg");
+                    colorize: Theme.text-body;
+                    width: 20px; height: 20px;
+                    x: (parent.width - self.width) / 2;
+                }
+                Kicker { text: "CREW HISTORY"; horizontal-alignment: center; color: Theme.text-primary; }
+                Kicker { text: root.history-weeks + (root.history-weeks == 1 ? " WEEK" : " WEEKS"); horizontal-alignment: center; }
+            }
+            TouchArea { mouse-cursor: pointer; clicked => { root.history-clicked(); } }
+        }
+    }
+
+    if root.page > 0: CarouselArrow {
+        left: true;
+        x: 10px;
+        y: (parent.height - self.height) / 2;
+        clicked => { root.page = Math.max(0, root.page - 1); }
+    }
+    if root.page < root.pages - 1: CarouselArrow {
+        x: parent.width - self.width - 10px;
+        y: (parent.height - self.height) / 2;
+        clicked => { root.page = Math.min(root.pages - 1, root.page + 1); }
+    }
+}
+
+/// One past week of Crew history: the week, then what happened in it. Open
+/// with m3llo+ (the numbers and a clip carousel); sealed without it (the
+/// sealed recap and locked teasers).
+component HistoryRow inherits Rectangle {
+    in property <HistoryWeek> week;
+    in property <length> cw;
+    in property <string> playing-path;
+    in property <float> clip-progress;
+    in property <bool> clip-paused;
+    in property <float> clip-anim-tick;
+    in property <string> clip-position-text;
+    in property <string> clip-duration-text;
+    in property <int> clip-duration-ms;
+    callback play-clicked(string);
+    callback seek-clip-ms(int);
+    callback plus-clicked();
+
+    HorizontalLayout {
+        spacing: 12px;
+        if root.week.locked: SealedRecap {
+            width: root.cw;
+            seal: root.week.seal;
+            week: root.week.label;
+            clicked => { root.plus-clicked(); }
+        }
+        if !root.week.locked: FeedBoard {
+            width: root.cw;
+            mode: "past";
+            past-label: root.week.label.to-uppercase();
+            past-age: root.week.age;
+            big: root.week.big;
+            stats: root.week.stats;
+            has-top-game: root.week.has-top;
+            top-game: root.week.top;
+            show-titles: false;
+        }
+        if root.week.locked: HorizontalLayout {
+            spacing: 12px;
+            for t in root.week.teasers: LockedTeaserTile {
+                horizontal-stretch: 1;
+                item: t;
+                clicked => { root.plus-clicked(); }
+            }
+            if root.week.more > 0: Rectangle {
+                width: 80px;
+                horizontal-stretch: 0;
+                BoardShell { width: parent.width; height: parent.height; corner: "tr"; }
+                Text {
+                    text: "+" + root.week.more;
+                    font-family: Theme.font-display;
+                    font-weight: Theme.weight-display;
+                    font-size: 16px;
+                    color: Theme.text-body;
+                }
+            }
+        }
+        if !root.week.locked: ClipCarousel {
+            clips: root.week.clips;
+            per-page: 2;
+            playing-path: root.playing-path;
+            clip-progress: root.clip-progress;
+            clip-paused: root.clip-paused;
+            clip-anim-tick: root.clip-anim-tick;
+            clip-position-text: root.clip-position-text;
+            clip-duration-text: root.clip-duration-text;
+            clip-duration-ms: root.clip-duration-ms;
+            play-clicked(path) => { root.play-clicked(path); }
+            seek-clip-ms(m) => { root.seek-clip-ms(m); }
+        }
+    }
+}
+
+component ZonePeople inherits PeopleZone {
+    in property <ZonesData> zones;
+    members: zones.members;
+    open-seats: zones.open-seats;
+    joined: zones.joined;
+    joined-line: zones.joined-line;
+    joined-sub: zones.joined-sub;
+    say-hi-card: zones.say-hi-card;
+    said-hi: zones.said-hi;
+    voice: zones.voice;
+    channel: zones.channel;
+    voice-line: zones.voice-line;
+    voice-people: zones.voice-people;
+    voice-more: zones.voice-more;
+}
+
+/// The crew feed in five zones (prototype, MELLO_FEED_ZONES=1): Stage, Board,
+/// Clips, People, Games. A zone with nothing to show collapses and the zones
+/// under it move up. The cards are the real feed cards (FeedSlot), so play,
+/// watch, the sealed reveal and Say hi work as in CrewFeed.
+export component CrewFeedZones inherits Rectangle {
+    in property <ZonesData> zones;
+    in property <[StreamCardData]> stream-cards: [];
+    in property <int> clip-count: 0;
+    in property <bool> is-hosting: false;
+    in property <bool> is-watching: false;
+    in property <string> active-streamer-id: "";
+    in property <image> stream-frame;
+    in property <float> stream-ui-render-fps: 0.0;
+    in property <bool> stream-paused: false;
+    in property <string> stream-paused-reason: "";
+    in property <string> clip-playing-path: "";
+    in property <float> clip-progress: 0.0;
+    in property <bool> clip-paused: false;
+    in property <float> clip-anim-tick: 0.0;
+    in property <string> clip-position-text: "";
+    in property <string> clip-duration-text: "";
+    in property <int> clip-duration-ms: 0;
+
+    callback card-clicked(string);
+    callback invite-clicked();
+    callback start-voice-clicked(string);
+    callback seek-clip-ms(int);
+    callback watch-stream-clicked(string, string, int, int);
+    callback stop-stream-clicked();
+    callback stop-watching-clicked();
+    callback session-seen(string);
+    callback session-preview-request-frame(/* session_id */ string, /* index */ int);
+    /// A locked week or the m3llo+ strip.
+    callback plus-clicked();
+
+    property <length> view-top: self.absolute-position.y;
+    property <length> view-bottom: self.absolute-position.y + self.height;
+    init => {
+        FeedView.top = self.view-top;
+        FeedView.bottom = self.view-bottom;
+    }
+    changed view-top => { FeedView.top = self.view-top; }
+    changed view-bottom => { FeedView.bottom = self.view-bottom; }
+
+    // The grid: three columns, rows of Theme.feed-row, 12 px gaps.
+    property <length> inner-w: self.width - 40px;
+    property <length> cw: (self.inner-w - 24px) / 3;
+    property <length> two: self.cw * 2 + 12px;
+    property <length> rh: Theme.feed-row;
+
+    property <bool> has-stage: zones.stage != "";
+    property <length> stage-h: !has-stage ? 0px
+        : zones.stage == "card" && zones.stage-short ? rh : rh * 2 + 12px;
+    property <bool> has-board: zones.board != "";
+    property <length> board-h: zones.board == "sealed" || zones.board == "past" || zones.board == "solo"
+        ? rh * 2 + 12px : rh * 3 + 24px;
+    property <bool> has-clips: zones.clips.length > 0;
+    // The clip row stands beside the board while the left column is shorter.
+    property <bool> clips-left: has-board && has-clips && stage-h + 12px + rh <= board-h;
+    property <length> left-h: stage-h + (clips-left ? (has-stage ? 12px : 0px) + rh : 0px);
+    property <length> people-h: 120px;
+    property <bool> people-left: zones.people && has-board
+        && left-h + (left-h > 0px ? 12px : 0px) + people-h <= board-h;
+    // Tab of the board: Week when today has nothing.
+    property <int> tab-pick: -1;
+    property <int> tab: tab-pick >= 0 ? tab-pick : (zones.today-empty ? 1 : 0);
+    property <int> tile-gap: 12;
+
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        Rectangle {
+            height: 48px;
+            HorizontalLayout {
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 10px;
+                alignment: start;
+                Text {
+                    font-family: Theme.font-display;
+                    text: "Crew feed";
+                    font-size: 15px;
+                    font-weight: Theme.weight-display;
+                    color: Theme.text-primary;
+                    vertical-alignment: center;
+                }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.card-border; }
+
+        feed-flick := Flickable {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                padding: 16px;
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 12px;
+                alignment: start;
+
+                if zones.dormant-line != "": BoardDormantStrip {
+                    height: 60px;
+                    line: zones.dormant-line;
+                    age: zones.dormant-age;
+                }
+
+                // Top block: the left column, and the board beside it.
+                if has-stage || has-board || clips-left || people-left: HorizontalLayout {
+                    spacing: 12px;
+                    alignment: start;
+
+                    VerticalLayout {
+                        width: has-board ? root.two : root.inner-w;
+                        spacing: 12px;
+                        alignment: start;
+
+                        if zones.stage == "live": Rectangle {
+                            height: root.stage-h;
+                            ActiveStreamsPanel {
+                                width: parent.width;
+                                height: parent.height;
+                                cards: root.stream-cards;
+                                is-hosting: root.is-hosting;
+                                is-watching: root.is-watching;
+                                active-streamer-id: root.active-streamer-id;
+                                stream-frame: root.stream-frame;
+                                stream-ui-render-fps: root.stream-ui-render-fps;
+                                stream-paused: root.stream-paused;
+                                stream-paused-reason: root.stream-paused-reason;
+                                viewport-abs-y: feed-flick.absolute-position.y / 1px;
+                                viewport-height: feed-flick.height / 1px;
+                                watch-stream-clicked(host-id, session-id, w, h) => { root.watch-stream-clicked(host-id, session-id, w, h); }
+                                stop-stream-clicked => { root.stop-stream-clicked(); }
+                                stop-watching-clicked => { root.stop-watching-clicked(); }
+                            }
+                        }
+                        if zones.stage == "card": FeedSlot {
+                            height: root.stage-h;
+                            card: zones.stage-card;
+                            playing-path: root.clip-playing-path;
+                            clip-progress: root.clip-progress;
+                            clip-paused: root.clip-paused;
+                            clip-anim-tick: root.clip-anim-tick;
+                            clip-position-text: root.clip-position-text;
+                            clip-duration-text: root.clip-duration-text;
+                            clip-duration-ms: root.clip-duration-ms;
+                            play-clicked(path) => { root.card-clicked(path); }
+                            seek-clip-ms(m) => { root.seek-clip-ms(m); }
+                            session-seen(id) => { root.session-seen(id); }
+                            session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                            invite-clicked => { root.invite-clicked(); }
+                        }
+                        if zones.stage == "own": StageOwnBelts {
+                            height: root.stage-h;
+                            you: zones.you;
+                            belts: zones.own-belts;
+                        }
+
+                        if root.clips-left: ClipCarousel {
+                            height: root.rh;
+                            clips: zones.clips;
+                            per-page: 2;
+                            history-weeks: zones.history.length;
+                            history-clicked => { root.to-history(); }
+                            playing-path: root.clip-playing-path;
+                            clip-progress: root.clip-progress;
+                            clip-paused: root.clip-paused;
+                            clip-anim-tick: root.clip-anim-tick;
+                            clip-position-text: root.clip-position-text;
+                            clip-duration-text: root.clip-duration-text;
+                            clip-duration-ms: root.clip-duration-ms;
+                            play-clicked(path) => { root.card-clicked(path); }
+                            seek-clip-ms(m) => { root.seek-clip-ms(m); }
+                        }
+
+                        if root.people-left: ZonePeople {
+                            height: root.people-h;
+                            zones: root.zones;
+                            invite => { root.invite-clicked(); }
+                            voice-clicked => { root.start-voice-clicked(zones.channel-id); }
+                        }
+                    }
+
+                    if zones.board == "sealed": RecapSlot {
+                        width: root.cw;
+                        height: root.board-h;
+                        card: zones.recap-card;
+                    }
+                    if has-board && zones.board != "sealed": FeedBoard {
+                        width: root.cw;
+                        height: root.board-h;
+                        mode: zones.board == "solo" ? "past" : zones.board;
+                        active-tab: root.tab;
+                        today-empty: zones.today-empty;
+                        big: root.tab == 0 && zones.board == "tabs" ? zones.today-big : zones.week-big;
+                        stats: root.tab == 0 && zones.board == "tabs" ? zones.today-stats : zones.week-stats;
+                        has-top-game: root.tab == 0 && zones.board == "tabs" ? zones.today-has-top : zones.week-has-top;
+                        top-game: root.tab == 0 && zones.board == "tabs" ? zones.today-top : zones.week-top;
+                        week-extra: (root.tab == 1 || zones.board == "past") && zones.most-active-value != "";
+                        most-active: zones.most-active;
+                        most-active-value: zones.most-active-value;
+                        most-clipped: zones.most-clipped;
+                        most-clipped-value: zones.most-clipped-value;
+                        games-played: zones.games-played;
+                        games-more: zones.games-more;
+                        past-label: zones.board == "solo" ? "YOU" : zones.past-label;
+                        past-age: zones.past-age;
+                        quiet-line: zones.quiet-line;
+                        quiet-sub: zones.quiet-sub;
+                        titles: zones.titles;
+                        title-count: zones.title-count;
+                        more-label: zones.more-label;
+                        show-titles: zones.board != "solo" && zones.titles.length > 0;
+                        show-numbers: zones.board != "solo";
+                        game-rows-label: "YOUR GAMES";
+                        game-rows: zones.board == "solo" ? zones.solo-games : [];
+                        tab-clicked(i) => { root.tab-pick = i; }
+                    }
+                }
+
+                if has-clips && !root.clips-left: ClipCarousel {
+                    height: root.rh;
+                    clips: zones.clips;
+                    per-page: 3;
+                    history-weeks: zones.history.length;
+                    history-clicked => { root.to-history(); }
+                    playing-path: root.clip-playing-path;
+                    clip-progress: root.clip-progress;
+                    clip-paused: root.clip-paused;
+                    clip-anim-tick: root.clip-anim-tick;
+                    clip-position-text: root.clip-position-text;
+                    clip-duration-text: root.clip-duration-text;
+                    clip-duration-ms: root.clip-duration-ms;
+                    play-clicked(path) => { root.card-clicked(path); }
+                    seek-clip-ms(m) => { root.seek-clip-ms(m); }
+                }
+
+                if zones.people && !root.people-left: ZonePeople {
+                    height: root.people-h;
+                    zones: root.zones;
+                    invite => { root.invite-clicked(); }
+                    voice-clicked => { root.start-voice-clicked(zones.channel-id); }
+                }
+
+                if zones.sessions.length > 0: SessionsCard {
+                    height: 76px + 48px * zones.sessions.length;
+                    count: zones.sessions-count;
+                    sessions: zones.sessions;
+                    more-label: zones.sessions-more;
+                }
+                if zones.sessions.length == 0 && zones.installed.length > 0: MostInstalledCard {
+                    height: 52px + 44px * zones.installed.length;
+                    games: zones.installed;
+                }
+
+                // Crew history: every week before the last 7 days (m3llo+).
+                hist := VerticalLayout {
+                    spacing: 12px;
+                    if zones.history.length > 0 && !zones.plus: PlusStrip {
+                        height: 88px;
+                        weeks: zones.history.length;
+                        clicked => { root.plus-clicked(); }
+                    }
+                    for w in zones.history: HistoryRow {
+                        height: root.rh;
+                        week: w;
+                        cw: root.cw;
+                        playing-path: root.clip-playing-path;
+                        clip-progress: root.clip-progress;
+                        clip-paused: root.clip-paused;
+                        clip-anim-tick: root.clip-anim-tick;
+                        clip-position-text: root.clip-position-text;
+                        clip-duration-text: root.clip-duration-text;
+                        clip-duration-ms: root.clip-duration-ms;
+                        play-clicked(path) => { root.card-clicked(path); }
+                        seek-clip-ms(m) => { root.seek-clip-ms(m); }
+                        plus-clicked => { root.plus-clicked(); }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The Crew history tile at the end of the clips: scroll to the history.
+    function to-history() {
+        feed-flick.content-y = Math.max(-(feed-flick.content-height - feed-flick.height), -(hist.y + 16px));
+    }
+
+    // The sealed reveal: the card in the centre of the feed (SEALED-REVEAL.md).
+    // Made when a card leaves its slot, gone when it is back. With no card the
+    // view must not exist: its clock would stand at rest with an empty belt,
+    // and its scrim would take every click on the feed.
+    if SealedUi.active-kind != "": Rectangle {
+        x: 0; y: 0;
+        width: root.width;
+        height: root.height;
+        clip: true;
+        stage := SealedStage {
+            width: parent.width;
+            height: parent.height;
+            page-x: root.absolute-position.x;
+            page-y: root.absolute-position.y;
             if SealedUi.active-kind == "recap": RecapCard {
                 width: 100%;
                 height: 100%;

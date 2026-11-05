@@ -11257,6 +11257,7 @@ fn the_format_label_follows_the_rung_and_the_decoded_size() {
 mod art_worker;
 mod sealed;
 mod testers;
+mod zones;
 
 // ---- the recap is never a one-cell card ----
 

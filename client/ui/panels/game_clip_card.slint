@@ -8,7 +8,7 @@ import { FeedView } from "../types.slint";
 //  The game clip card (CLIPS.md 15.6). A game clip is footage,
 //  like the stream preview: the poster edge to edge, one corner cut, black
 //  washes under the text. The CLIP tag top left wears red while the clip is
-//  unread. The play ring is the action; there is no filled white button.
+//  unread; the border never does (red borders are for live streams). The play ring is the action; there is no filled white button.
 //  The clipper and the game sit bottom left, the length bottom right.
 // ============================================================
 
@@ -89,8 +89,8 @@ export component GameClipCard inherits Rectangle {
         height: parent.height;
         n: Theme.notch;
         corner: "tr";
-        fill: root.is-new ? Theme.clip-amber
-            : card-touch.has-hover && root.can-play ? Theme.graphic-med : Theme.card-border;
+        // A clip never wears a red border; the CLIP tag carries unread.
+        fill: card-touch.has-hover && root.can-play ? Theme.graphic-med : Theme.card-border;
     }
 
     footage := Rectangle {
@@ -235,8 +235,7 @@ export component GameClipCard inherits Rectangle {
         height: parent.height;
         viewbox-width: self.width / 1px;
         viewbox-height: self.height / 1px;
-        stroke: root.is-new ? Theme.clip-amber
-            : card-touch.has-hover && root.can-play ? Theme.graphic-med : Theme.card-border;
+        stroke: card-touch.has-hover && root.can-play ? Theme.graphic-med : Theme.card-border;
         stroke-width: 1px;
         commands: "M \{(self.width - Theme.notch) / 1px} 0 L \{self.width / 1px} \{Theme.notch / 1px}";
     }
