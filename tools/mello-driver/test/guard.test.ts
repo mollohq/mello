@@ -72,7 +72,7 @@ test("an SFU region on a public host refuses the run", async () => {
     await assert.rejects(checkSfuRegions(nakama.url, resolve), (e: Error) => {
       assert.ok(e instanceof ProductionGuardError);
       assert.match(e.message, /the SFU region "us-east" on sfu-us\.m3llo\.test \(203\.0\.113\.10\)/);
-      assert.match(e.message, /SFU_ENDPOINT_EU and SFU_ENDPOINT_US/);
+      assert.match(e.message, /SFU_REGIONS/);
       return true;
     });
   } finally {

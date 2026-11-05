@@ -81,7 +81,7 @@ else
     PUSH_WORKER_URL="http://host.docker.internal:$MELLO_E2E_PUSH_PORT"
     PUSH_WORKER_TOKEN="e2e-push-token"
     export MELLO_E2E_PUSH_PORT PUSH_WORKER_URL PUSH_WORKER_TOKEN
-    export SFU_ENDPOINT_EU="ws://127.0.0.1:8443/ws"
+    export SFU_REGIONS="eu-west=ws://127.0.0.1:8443/ws"
     # Distinct container names and ports, so it lives next to the main stack.
     cat >"$TMP/override.yml" <<YML
 services:

@@ -34,7 +34,7 @@ cat <<MSG
 Put these lines in backend/.env (replace the empty ones):
 
 SFU_JWT_PRIVATE_KEY="${key_line}"
-SFU_ENDPOINT_EU=ws://localhost:8443/ws
+SFU_REGIONS=eu-west=ws://localhost:8443/ws
 
 Then start the backend, and the local SFU from the mello-sfu compose:
 

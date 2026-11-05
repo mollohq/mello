@@ -519,8 +519,8 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
         return "", errSFUUnavailable // "SFU_UNAVAILABLE", code 14
     }
     {
-        region := selectSFURegion(userRegion)  // "eu-west" or "us-east"
-        endpoint := sfuEndpoints[region]       // "wss://sfu-eu.m3llo.app/ws" etc.
+        region := selectSFURegion(req.PreferredRegion) // a region of SFU_REGIONS
+        endpoint := sfuEndpointForRegion(region)
         sessionID := generateSessionID()
         token := signSFUToken(SFUTokenClaims{
             UserID:    userID,
@@ -672,30 +672,29 @@ MELLO_SFU_ENDPOINTS=sfu-eu.m3llo.app,sfu-us.m3llo.app
 
 ### 7.4 Region Selection
 
+The regions come from configuration (`SFU_REGIONS`, see `specs/features/SFU-INTEGRATION.md` section 2.2). Nothing is built in: the official network and a self-hoster both list their own SFUs.
+
 ```go
 // nakama/data/modules/sfu_routing.go
 
-var sfuEndpoints = map[string]string{
-    "eu-west": "wss://sfu-eu.m3llo.app/ws",  // GCP europe-west3 (Frankfurt)
-    "us-east": "wss://sfu-us.m3llo.app/ws",  // GCP us-east4 (Virginia)
-}
+// SFU_REGIONS="eu-west=wss://sfu-eu.example.com:8443/ws,us-east=wss://sfu-us.example.com:8443/ws"
+var sfuEndpoints map[string]string // region -> endpoint, from SFU_REGIONS
 
-// The client's choice when it names a configured endpoint, else
-// SFU_DEFAULT_REGION when that names one, else eu-west.
+// The client's choice when it names a configured region, else
+// SFU_DEFAULT_REGION when that names one, else the first region.
 func selectSFURegion(preferred string) string
 ```
 
-Current behaviour (interim, plans/voice-quality.md stage 1.6):
-
 | Input | Rule |
 |---|---|
-| `preferred_region` in `voice_join` and `start_stream` | Optional. Used when it names a key of `sfuEndpoints`. An empty or unknown value falls back; it never fails the RPC. |
-| `SFU_DEFAULT_REGION` (env) | The fallback when it names a key of `sfuEndpoints`. |
-| `eu-west` | The last fallback. |
+| `preferred_region` in `voice_join` and `start_stream` | Optional. Used when it names a configured region. An empty or unknown value falls back; it never fails the RPC. |
+| `SFU_DEFAULT_REGION` (env) | The fallback when it names a configured region. |
+| The first region of `SFU_REGIONS` | The last fallback. |
+| No region configured | `voice_join` and `start_stream` return `SFU_UNAVAILABLE`. |
 
 The client measures the round trip to each region's `/health` (the `get_sfu_regions` RPC lists them) at login and every 10 minutes, and sends the fastest as `preferred_region` (spec 10 section 7.6, spec 13 section 4.2). The IP geolocation fallback is not built.
 
-For stream sessions, the **host's region** determines the SFU. Viewers connect to the same SFU as the host (`watch_stream` reads the stored session region) — cross-region relay between SFU instances is a post-v1 feature.
+For stream sessions, the **host's region** determines the SFU. Viewers connect to the same SFU as the host (`watch_stream` reads the stored session region). Cross-region relay between SFU instances is a post-v1 feature.
 
 For voice sessions, the **first member who gets an SFU token** picks the region for the room (`VoiceRoom.SFURegion`). Every later member gets the room's region, whatever it prefers, because all members of a voice session must reach the same SFU instance. The region goes away with the room when the last member leaves.
 

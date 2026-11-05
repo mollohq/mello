@@ -1,9 +1,8 @@
 // Production guards (plans/E2E-QA.md §16.8). A journey must never reach the
-// production backend, SFU or lounge. The local stack falls back to production
-// when its configuration is missing: `SFU_ENDPOINT_EU` defaults to
-// wss://sfu-eu.m3llo.app/ws in backend/docker-compose.yml, Nakama has
-// built-in production endpoints for each SFU region, and the lounge's
-// NAKAMA_BASE_URL defaults to production in mello-site's wrangler.toml.
+// production backend, SFU or lounge. A local stack can still be pointed at
+// production by its configuration: `SFU_REGIONS` (or the older
+// `SFU_ENDPOINT_EU`) in backend/.env, and the lounge's NAKAMA_BASE_URL, which
+// defaults to production in mello-site's wrangler.toml.
 //
 // The guards do not read any configuration file. They ask the running stack
 // what it hands out, and check that each host resolves only to loopback or
@@ -133,7 +132,7 @@ export async function checkSfuRegions(base = nakamaBase(), resolve: Lookup = dns
       throw new ProductionGuardError(
         `refusing to run: Nakama at ${base} hands out the SFU region "${r.region}" on ${host} (${c.addresses.join(", ")}). ` +
           "The app measures every region and can join it. Point every region of the local stack at the local SFU " +
-          "(SFU_ENDPOINT_EU and SFU_ENDPOINT_US for mello-nakama).",
+          "(SFU_REGIONS for mello-nakama).",
       );
     }
     if (c.kind === "unresolved") {
