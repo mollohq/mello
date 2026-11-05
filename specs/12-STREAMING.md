@@ -225,7 +225,7 @@ removed, because a game thread can be inside one; the hook stops capturing
 
    The lists come from the hook catalogue (`games.csv`): `hook` → allow,
    `no_hook` → deny, `hook_review` → neither. Counter-Strike 2 is always
-   denied. The admin tool (`mello-admin`, Hook policy page) edits the stored
+   denied. An admin tool edits the stored
    policy through `admin_capture_policy_get` and `admin_capture_policy_set`.
    Those RPCs accept the `http_key` only, refuse a client session, and write
    only if the storage version still matches the admin's read.

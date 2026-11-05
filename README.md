@@ -82,8 +82,8 @@ The rest of this README is for people who want to build m3llo from source, contr
 ## Guiding principles
 
 - **Performance is the feature.** Targets: `<100MB install` · `<80MB RAM in active voice` · `1080p60 stream` · `<60ms WAN latency`
-- **Self-hostable.** The client, backend and SFU are open source. Run your own instance with no dependency on our infrastructure.
-- **Your own SFU.** Voice and streams run through [mello-sfu](https://github.com/mollohq/mello-sfu). Run ours in the EU or host it yourself.
+- **Self-hostable.** The client and backend are open source, and the SFU is source available. Run your own instance with no dependency on our infrastructure.
+- **Your own SFU.** Voice and streams run through [mello-sfu](https://github.com/mollohq/mello-sfu). We run it in the EU for m3llo.app. Self-hosters run their own.
 - **UX matters as much as code.** Follow the design system in [`designs/design-system.html`](designs/design-system.html).
 
 ## Build from source
@@ -179,7 +179,7 @@ Run the gate before you push.
 
 ## Self-hosting
 
-The client, backend and SFU are open source. For those of you who never really got over losing Ventrilo. For the tinkerers who need another project for that dusty Raspberry Pi in the drawer. We're one of you ourselves.
+The client and backend are open source, and the SFU is source available. For those of you who never really got over losing Ventrilo. For the tinkerers who need another project for that dusty Raspberry Pi in the drawer. We're one of you ourselves.
 
 Full setup instructions in [/docs/self-hosting.md](./docs/self-hosting.md).
 
@@ -199,7 +199,7 @@ Same client, same features. The difference is who runs the backend and the SFU.
 
 ## License
 
-Apache 2.0. See [LICENSE](LICENSE).
+Apache 2.0. See [LICENSE](LICENSE). The SFU in [mello-sfu](https://github.com/mollohq/mello-sfu) uses FSL-1.1-ALv2: each release becomes Apache 2.0 two years after it ships.
 
 ---
 

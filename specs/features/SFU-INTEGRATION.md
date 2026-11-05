@@ -2,7 +2,7 @@
 
 > **Component:** mello-core (Rust) · Backend/Nakama (Go)  
 > **Status:** Implemented (RTP video + control-only DC on stream sessions)
-> **Depends on:** [01-SFU.md](../../mello-sfu/01-SFU.md) (canonical SFU contract), [12-STREAMING.md](./12-STREAMING.md), [13-VOICE-CHANNELS.md](./13-VOICE-CHANNELS.md)
+> **Depends on:** [mello-sfu 01-SFU.md](https://github.com/mollohq/mello-sfu/blob/main/01-SFU.md) (canonical SFU contract), [12-STREAMING.md](../12-STREAMING.md), [13-VOICE-CHANNELS.md](../13-VOICE-CHANNELS.md), [EXTERNAL-SFU.md](../EXTERNAL-SFU.md)
 
 ---
 

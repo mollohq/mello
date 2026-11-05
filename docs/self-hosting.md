@@ -1,6 +1,6 @@
 # Self-hosting
 
-The client, the backend and the SFU are open source. If you run them yourself, your data stays on your hardware.
+The client and the backend are open source, and the SFU is source available. If you run them yourself, your data stays on your hardware.
 
 ## Backend
 
