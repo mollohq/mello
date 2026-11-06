@@ -2,7 +2,7 @@
 
 > **Component:** Backend integration (Go, Nakama) · mello-core SFU client (Rust)
 > **Version:** 0.3
-> **Status:** Current. The SFU itself is specified in the public mello-sfu repository ([01-SFU.md](https://github.com/mollohq/mello-sfu/blob/main/01-SFU.md)).
+> **Status:** Current. The SFU itself is specified in the public m3llo-sfu repository ([01-SFU.md](https://github.com/mollohq/m3llo-sfu/blob/main/01-SFU.md)).
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)
 > **Related:** [12-STREAMING.md](./12-STREAMING.md), [13-VOICE-CHANNELS.md](./13-VOICE-CHANNELS.md), [04-BACKEND.md](./04-BACKEND.md), [features/SFU-INTEGRATION.md](./features/SFU-INTEGRATION.md)
 
@@ -14,10 +14,10 @@ The SFU (Selective Forwarding Unit) is the media relay of m3llo. It is the only 
 
 | Part | Where it is specified |
 |---|---|
-| The SFU: signaling, media plane, security, admin API, error codes | mello-sfu ([01-SFU.md](https://github.com/mollohq/mello-sfu/blob/main/01-SFU.md)) |
+| The SFU: signaling, media plane, security, admin API, error codes | m3llo-sfu ([01-SFU.md](https://github.com/mollohq/m3llo-sfu/blob/main/01-SFU.md)) |
 | Token signing, the RPCs, region selection | This document, sections 3 and 4 |
 | The client side of the SFU connection | This document, section 5, and [12-STREAMING.md](./12-STREAMING.md) |
-| Running an SFU | mello-sfu ([SELF-HOSTING.md](https://github.com/mollohq/mello-sfu/blob/main/SELF-HOSTING.md)) and [docs/self-hosting.md](../docs/self-hosting.md) |
+| Running an SFU | m3llo-sfu ([SELF-HOSTING.md](https://github.com/mollohq/m3llo-sfu/blob/main/SELF-HOSTING.md)) and [docs/self-hosting.md](../docs/self-hosting.md) |
 
 | Rule | Effect |
 |---|---|
@@ -30,19 +30,19 @@ The SFU (Selective Forwarding Unit) is the media relay of m3llo. It is the only 
 
 ## 2. The SFU Contract
 
-mello-sfu is the source of truth for everything the SFU does:
+m3llo-sfu is the source of truth for everything the SFU does:
 
-| Topic | mello-sfu document |
+| Topic | m3llo-sfu document |
 |---|---|
-| Session types and lifecycle | [01-SFU.md](https://github.com/mollohq/mello-sfu/blob/main/01-SFU.md) section 4 |
-| WebSocket signaling messages | [01-SFU.md](https://github.com/mollohq/mello-sfu/blob/main/01-SFU.md) section 5 |
-| Media plane: H.264 RTP relay, voice receive slots, REMB and PLI | [01-SFU.md](https://github.com/mollohq/mello-sfu/blob/main/01-SFU.md) section 6 |
-| Security model | [01-SFU.md](https://github.com/mollohq/mello-sfu/blob/main/01-SFU.md) section 7 |
-| Error codes | [01-SFU.md](https://github.com/mollohq/mello-sfu/blob/main/01-SFU.md) section 12 |
-| Admin API (JSON, HTTP Basic Auth) | [ADMIN-API.md](https://github.com/mollohq/mello-sfu/blob/main/ADMIN-API.md) |
-| Stream snapshots | [STREAM-SNAPSHOTS-SFU.md](https://github.com/mollohq/mello-sfu/blob/main/STREAM-SNAPSHOTS-SFU.md) |
+| Session types and lifecycle | [01-SFU.md](https://github.com/mollohq/m3llo-sfu/blob/main/01-SFU.md) section 4 |
+| WebSocket signaling messages | [01-SFU.md](https://github.com/mollohq/m3llo-sfu/blob/main/01-SFU.md) section 5 |
+| Media plane: H.264 RTP relay, voice receive slots, REMB and PLI | [01-SFU.md](https://github.com/mollohq/m3llo-sfu/blob/main/01-SFU.md) section 6 |
+| Security model | [01-SFU.md](https://github.com/mollohq/m3llo-sfu/blob/main/01-SFU.md) section 7 |
+| Error codes | [01-SFU.md](https://github.com/mollohq/m3llo-sfu/blob/main/01-SFU.md) section 12 |
+| Admin API (JSON, HTTP Basic Auth) | [ADMIN-API.md](https://github.com/mollohq/m3llo-sfu/blob/main/ADMIN-API.md) |
+| Stream snapshots | [STREAM-SNAPSHOTS-SFU.md](https://github.com/mollohq/m3llo-sfu/blob/main/STREAM-SNAPSHOTS-SFU.md) |
 
-A change to the signaling or the media plane starts in mello-sfu. The client follows it.
+A change to the signaling or the media plane starts in m3llo-sfu. The client follows it.
 
 ---
 
@@ -261,7 +261,7 @@ For voice sessions, the **first member who gets an SFU token** picks the region 
 
 The client contract for streams is [12-STREAMING.md](./12-STREAMING.md) section 6. For voice it is [13-VOICE-CHANNELS.md](./13-VOICE-CHANNELS.md).
 
-The client declares `a=ssrc` on its voice audio m-line. Without it the SFU cannot bind the incoming mic to the m-line ([01-SFU.md](https://github.com/mollohq/mello-sfu/blob/main/01-SFU.md) section 6).
+The client declares `a=ssrc` on its voice audio m-line. Without it the SFU cannot bind the incoming mic to the m-line ([01-SFU.md](https://github.com/mollohq/m3llo-sfu/blob/main/01-SFU.md) section 6).
 
 Voice reconnects after an SFU disconnect: the first attempt after 500 ms, then 1 s, then every 2 s. The client stops 30 s after the drop and leaves the call. The constants are in `mello-core/src/client/voice.rs` ([10-AUDIO_PIPELINE.md](./10-AUDIO_PIPELINE.md) section 7.6).
 
@@ -277,4 +277,4 @@ Voice reconnects after an SFU disconnect: the first attempt after 500 ms, then 1
 | `SFU_HEALTH_PORT` | The port of the health URLs in `get_sfu_regions`. Default 8080. |
 | `SFU_ENDPOINT_EU`, `SFU_ENDPOINT_US` | Older variables for `eu-west` and `us-east`. Used only when `SFU_REGIONS` is not set. |
 
-[features/SFU-INTEGRATION.md](./features/SFU-INTEGRATION.md) section 2.2 has the full rules. The SFU side of the configuration is in [SELF-HOSTING.md](https://github.com/mollohq/mello-sfu/blob/main/SELF-HOSTING.md).
+[features/SFU-INTEGRATION.md](./features/SFU-INTEGRATION.md) section 2.2 has the full rules. The SFU side of the configuration is in [SELF-HOSTING.md](https://github.com/mollohq/m3llo-sfu/blob/main/SELF-HOSTING.md).
