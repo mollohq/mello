@@ -2,7 +2,7 @@
 
 > **Component:** Invite system (Backend · Cloudflare · Client)
 > **Status:** Implemented
-> **Related:** [12-NATIVE-PLATFORM.md](./12-NATIVE-PLATFORM.md) §9, [04-BACKEND.md](./04-BACKEND.md) §8, [00-ARCHITECTURE.md](./00-ARCHITECTURE.md), [13-VOICE-CHANNELS.md](../13-VOICE-CHANNELS.md), [SFU-INTEGRATION.md](./SFU-INTEGRATION.md), [mello-sfu 01-SFU.md](https://github.com/mollohq/mello-sfu/blob/main/01-SFU.md) §5
+> **Related:** [12-NATIVE-PLATFORM.md](./12-NATIVE-PLATFORM.md) §9, [04-BACKEND.md](./04-BACKEND.md) §8, [00-ARCHITECTURE.md](./00-ARCHITECTURE.md), [13-VOICE-CHANNELS.md](../13-VOICE-CHANNELS.md), [SFU-INTEGRATION.md](./SFU-INTEGRATION.md), [mello-sfu 01-SFU.md](https://github.com/mollohq/m3llo-sfu/blob/main/01-SFU.md) §5
 
 ---
 

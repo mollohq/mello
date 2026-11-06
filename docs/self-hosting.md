@@ -14,7 +14,7 @@ The Nakama console is at `http://localhost:7351`. The login is in `backend/nakam
 
 ## SFU
 
-Voice and streams run through the SFU. Run [mello-sfu](https://github.com/mollohq/mello-sfu) (its `SELF-HOSTING.md` covers the SFU side), then point Nakama at it. `backend/docker-compose.yml` passes these variables to Nakama:
+Voice and streams run through the SFU. Run [m3llo-sfu](https://github.com/mollohq/m3llo-sfu) (its `SELF-HOSTING.md` covers the SFU side), then point Nakama at it. `backend/docker-compose.yml` passes these variables to Nakama:
 
 - `SFU_REGIONS`: your SFUs as `region=endpoint`, comma-separated. One SFU: `SFU_REGIONS=eu-west=wss://sfu.example.com:8443/ws`. Each region name must match the `SFU_REGION` of that SFU. With several regions, the client measures each one and joins the nearest.
 - `SFU_JWT_PRIVATE_KEY`: the RS256 private key Nakama uses to sign short-lived SFU tokens. The SFU gets the public key.
