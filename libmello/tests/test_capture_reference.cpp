@@ -298,7 +298,9 @@ std::vector<ShownFrame> show(const std::vector<std::vector<uint8_t>>& packets,
     return shown;
 }
 
-void expect_size_change_is_shown(bool soft_decoder) {
+// `want_decoder`: the decoder the hardware run must use (set by
+// MELLO_WINDOWS_DECODER), or null for the machine's first decoder.
+void expect_size_change_is_shown(bool soft_decoder, const char* want_decoder = nullptr) {
     if (std::getenv("CI")) GTEST_SKIP() << "hardware-dependent test skipped under CI";
     if (!OpenH264Encoder::is_available()) GTEST_SKIP() << "OpenH264 DLL with encoder not found";
     set_env("MELLO_SOFT_ENCODER", "1");
@@ -316,7 +318,9 @@ void expect_size_change_is_shown(bool soft_decoder) {
     std::string decoder;
     const std::vector<ShownFrame> shown = show(packets, keys, 640, 360, decoder);
     set_env("MELLO_SOFT_DECODER", nullptr);
-    if (!soft_decoder && decoder.find("OpenH264") != std::string::npos) {
+    if (want_decoder) {
+        ASSERT_EQ(decoder, want_decoder);
+    } else if (!soft_decoder && decoder.find("OpenH264") != std::string::npos) {
         GTEST_SKIP() << "no hardware decoder";
     }
 
@@ -331,6 +335,22 @@ void expect_size_change_is_shown(bool soft_decoder) {
     EXPECT_EQ(wrong, 0u) << decoder << ": no frame is shown at the old size or with a broken picture";
 }
 
+// The Media Foundation decoder first (MELLO_WINDOWS_DECODER=mf), in GPU or
+// CPU mode, for one test.
+class MediaFoundationFirst {
+public:
+    explicit MediaFoundationFirst(bool cpu) {
+        set_env("MELLO_WINDOWS_DECODER", "mf");
+        set_env("MELLO_MF_DECODER_CPU", cpu ? "1" : nullptr);
+    }
+    ~MediaFoundationFirst() {
+        set_env("MELLO_WINDOWS_DECODER", nullptr);
+        set_env("MELLO_MF_DECODER_CPU", nullptr);
+    }
+};
+
+void expect_each_picture_with_its_access_unit(const char* want_decoder);
+
 }  // namespace
 
 // Stage 3 item 3: a decoded size change (an SPS at a new size, as after a
@@ -343,12 +363,40 @@ TEST(ViewerSizeChange, TheSoftwareDecoderShowsTheNewSize) {
 TEST(ViewerSizeChange, TheHardwareDecoderShowsTheNewSize) {
     expect_size_change_is_shown(false);
 }
+
+TEST(ViewerSizeChange, TheMediaFoundationDecoderShowsTheNewSize) {
+    MediaFoundationFirst mf(false);
+    expect_size_change_is_shown(false, "MediaFoundation");
+}
+
+TEST(ViewerSizeChange, TheMediaFoundationCpuDecoderShowsTheNewSize) {
+    MediaFoundationFirst mf(true);
+    expect_size_change_is_shown(false, "MediaFoundation");
+}
+
 // Stage 3: the hardware decoder shows the picture of an access unit when it
 // gets that access unit, as the software decoder does. Without the
 // end-of-picture flag the NVDEC parser shows each picture only when the next
 // access unit comes: one frame late, and at a size change the last picture
 // of the old size indexed a surface of the new decoder.
 TEST(ViewerSizeChange, TheHardwareDecoderShowsEachPictureWithItsAccessUnit) {
+    expect_each_picture_with_its_access_unit(nullptr);
+}
+
+// Media Foundation without low latency holds pictures back for reordering.
+TEST(ViewerSizeChange, TheMediaFoundationDecoderShowsEachPictureWithItsAccessUnit) {
+    MediaFoundationFirst mf(false);
+    expect_each_picture_with_its_access_unit("MediaFoundation");
+}
+
+TEST(ViewerSizeChange, TheMediaFoundationCpuDecoderShowsEachPictureWithItsAccessUnit) {
+    MediaFoundationFirst mf(true);
+    expect_each_picture_with_its_access_unit("MediaFoundation");
+}
+
+namespace {
+
+void expect_each_picture_with_its_access_unit(const char* want_decoder) {
     if (std::getenv("CI")) GTEST_SKIP() << "hardware-dependent test skipped under CI";
     if (!OpenH264Encoder::is_available()) GTEST_SKIP() << "OpenH264 DLL with encoder not found";
     set_env("MELLO_SOFT_ENCODER", "1");
@@ -392,7 +440,11 @@ TEST(ViewerSizeChange, TheHardwareDecoderShowsEachPictureWithItsAccessUnit) {
     std::string soft_name, hw_name;
     const std::vector<int> soft = levels(true, soft_name);
     const std::vector<int> hw = levels(false, hw_name);
-    if (hw_name.find("OpenH264") != std::string::npos) GTEST_SKIP() << "no hardware decoder";
+    if (want_decoder) {
+        ASSERT_EQ(hw_name, want_decoder);
+    } else if (hw_name.find("OpenH264") != std::string::npos) {
+        GTEST_SKIP() << "no hardware decoder";
+    }
     ASSERT_EQ(soft.size(), hw.size());
     size_t same = 0;
     for (size_t i = 0; i < soft.size(); ++i) {
@@ -400,6 +452,8 @@ TEST(ViewerSizeChange, TheHardwareDecoderShowsEachPictureWithItsAccessUnit) {
     }
     EXPECT_GE(same, soft.size() - 2) << hw_name << " shows the picture of the access unit it just got";
 }
+
+}  // namespace
 
 // Streaming-quality stage 4, geometry rungs: set_encode_height changes the
 // encode size mid-stream. The preprocessor is made again at the new size,

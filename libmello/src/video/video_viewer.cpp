@@ -37,7 +37,7 @@ static constexpr int64_t kPresentLeadUs = 2'000;
 // the decode jobs queue up to this many access units. Dropping a delta frame
 // breaks every frame after it, so the bound is only a memory guard.
 static constexpr size_t kMaxDecodeJobs = 1024;
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
 // A decoder gives way to the next one after two key frames it could not
 // decode, ten errors in a row, or a second of access units with no picture,
 // each counted from its first key frame.
@@ -84,7 +84,7 @@ bool ViewerPipeline::start(const GraphicsDevice& device, const ViewerConfig& con
         std::lock_guard<std::mutex> lock(decoder_name_mutex_);
         decoder_name_ = decoder_->name();
     }
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
     decoder_config_ = dec_config;
     tried_decoders_.clear();
     health_ = DecoderHealth{};
@@ -403,7 +403,7 @@ bool ViewerPipeline::decode_into_ring(const std::vector<uint8_t>& bytes, bool ke
     const double mean = decode_ms_mean_.load(std::memory_order_relaxed);
     decode_ms_mean_.store(mean == 0.0 ? ms : mean * 0.95 + ms * 0.05, std::memory_order_relaxed);
 
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
     note_decode_result(result, keyframe);
 #endif
 
@@ -412,7 +412,7 @@ bool ViewerPipeline::decode_into_ring(const std::vector<uint8_t>& bytes, bool ke
     if (result != DecodeFeedResult::FrameReady) {
         slot.state = RingSlot::State::Free;
         const bool accepted = result == DecodeFeedResult::Accepted;
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
         lock.unlock();
         ring_cv_.notify_all();
         if (!no_other_decoder_ && (health_.failed_keyframes >= kSwitchAfterFailedKeyframes ||
@@ -470,7 +470,7 @@ bool ViewerPipeline::decode_into_ring(const std::vector<uint8_t>& bytes, bool ke
     return true;
 }
 
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
 void ViewerPipeline::note_decode_result(DecodeFeedResult result, bool keyframe) {
     if (keyframe) health_.seen_keyframe = true;
     if (result == DecodeFeedResult::FrameReady) {

@@ -1570,6 +1570,7 @@ int mello_get_decoders(MelloContext* ctx, MelloDecoderBackend* out, int max_coun
             else if (strcmp(name, "AMF-Decode") == 0) out[count++] = MELLO_DECODER_AMF;
             else if (strcmp(name, "D3D11VA") == 0)    out[count++] = MELLO_DECODER_D3D11VA;
             else if (strcmp(name, "OpenH264") == 0)   out[count++] = MELLO_DECODER_OPENH264;
+            else if (strcmp(name, "MediaFoundation") == 0) out[count++] = MELLO_DECODER_MEDIA_FOUNDATION;
             else if (strcmp(name, "dav1d") == 0)      out[count++] = MELLO_DECODER_DAV1D;
         }
         return count;

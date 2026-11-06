@@ -94,20 +94,22 @@ GraphicsDevice create_d3d11_device() {
 
     ComPtr<ID3D11Device> device;
     D3D_FEATURE_LEVEL achieved_level{};
-    UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
-
-    HRESULT hr = D3D11CreateDevice(
-        best_adapter.Get(),
-        D3D_DRIVER_TYPE_UNKNOWN,
-        nullptr,
-        flags,
-        feature_levels,
-        _countof(feature_levels),
-        D3D11_SDK_VERSION,
-        &device,
-        &achieved_level,
-        nullptr
-    );
+    // VIDEO_SUPPORT: the Media Foundation H.264 decoder decodes on the GPU
+    // (DXVA) only on a device made with it (decoder_mf.cpp). A driver without
+    // video support refuses the flag; the device is then made without it, and
+    // that decoder runs on the CPU.
+    auto create = [&](UINT flags) {
+        return D3D11CreateDevice(best_adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, flags,
+                                 feature_levels, _countof(feature_levels), D3D11_SDK_VERSION,
+                                 &device, &achieved_level, nullptr);
+    };
+    HRESULT hr = create(D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT);
+    if (FAILED(hr)) {
+        MELLO_LOG_WARN(TAG, "D3D11CreateDevice with video support failed: hr=0x%08X; trying without it",
+                       hr);
+        device.Reset();
+        hr = create(D3D11_CREATE_DEVICE_BGRA_SUPPORT);
+    }
 
     if (FAILED(hr)) {
         MELLO_LOG_ERROR(TAG, "D3D11CreateDevice failed: hr=0x%08X", hr);
@@ -136,11 +138,12 @@ GraphicsDevice create_d3d11_device() {
     result.adapter_luid = luid_to_u64(best_desc.AdapterLuid);
 
     MELLO_LOG_INFO(TAG,
-        "D3D11 device created: adapter=\"%s\" luid=0x%016llX vram=%lluMB feature_level=0x%04X",
+        "D3D11 device created: adapter=\"%s\" luid=0x%016llX vram=%lluMB feature_level=0x%04X video=%s",
         result.adapter_name,
         static_cast<unsigned long long>(result.adapter_luid),
         best_desc.DedicatedVideoMemory / (1024 * 1024),
-        achieved_level);
+        achieved_level,
+        (device->GetCreationFlags() & D3D11_CREATE_DEVICE_VIDEO_SUPPORT) ? "yes" : "no");
 
     device->AddRef();
     result.handle = device.Get();

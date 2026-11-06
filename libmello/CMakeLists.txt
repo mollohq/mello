@@ -363,6 +363,7 @@ if(WIN32)
         src/video/capture_reference.cpp
         src/video/decoder_nvdec.cpp
         src/video/decoder_amf.cpp
+        src/video/decoder_mf.cpp
         src/video/decoder_openh264.cpp
         src/video/openh264_dynload.cpp
     )

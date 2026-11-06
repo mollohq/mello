@@ -265,6 +265,9 @@ fn names(ctx: &Ctx, encoders: bool) -> Vec<String> {
                         mello_sys::MelloDecoderBackend_MELLO_DECODER_AMF => "AMF",
                         mello_sys::MelloDecoderBackend_MELLO_DECODER_D3D11VA => "D3D11VA",
                         mello_sys::MelloDecoderBackend_MELLO_DECODER_OPENH264 => "OpenH264",
+                        mello_sys::MelloDecoderBackend_MELLO_DECODER_MEDIA_FOUNDATION => {
+                            "MediaFoundation"
+                        }
                         _ => "other",
                     }
                     .to_owned(),

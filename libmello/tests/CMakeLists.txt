@@ -67,6 +67,8 @@ target_compile_definitions(mello_tests PRIVATE
     MELLO_VOICE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/voice"
     # A short H.264 stream for the game clip mux tests (test_replay_mux.cpp).
     MELLO_REPLAY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/replay"
+    # H.264 streams for the Media Foundation decoder tests (test_windows_decoders.cpp).
+    MELLO_VIDEO_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/video"
 )
 
 # The NVENC, AMF and oneVPL headers, for the cost-tier tables of the encoders
@@ -161,6 +163,7 @@ set(MELLO_SERIAL_SUITES
     ViewerPipelineTest ViewerConverter
     ReferenceBitrate ReferenceClip ReferenceGeometry ReferenceLoopback
     SoftCodecSwitch ViewerSizeChange
+    *MfDecoderTest WindowsDecoderFactory WindowsViewerDecoderSwitch WindowsVideoDevice MfFixtures
     # GPU and hardware codecs (Linux)
     LinuxGpu LinuxVideoGpu LinuxVaDriver VaDmaBufFormats ViewerDecoderSwitch
     LinuxHardwareDecoder LinuxHardwareEncoder
@@ -196,7 +199,8 @@ if(APPLE AND NOT IOS)
     target_sources(mello_tests PRIVATE test_capture_manager.cpp test_encoder_videotoolbox.cpp)
 endif()
 if(WIN32 AND NOT IOS)
-    target_sources(mello_tests PRIVATE test_capture_reference.cpp test_capture_manager.cpp)
+    target_sources(mello_tests PRIVATE test_capture_reference.cpp test_capture_manager.cpp
+                                       test_windows_decoders.cpp)
     set(_oh264_dll "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/openh264/openh264-2.6.0-win64.dll")
     if(EXISTS "${_oh264_dll}")
         add_custom_command(TARGET mello_tests POST_BUILD
