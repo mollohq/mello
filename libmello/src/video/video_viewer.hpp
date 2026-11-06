@@ -154,8 +154,8 @@ private:
     int acquire_slot_for_decode();
     void release_slot_locked(RingSlot& slot);
     void present_slot(RingSlot& slot);
-#if defined(__linux__)
-    // Linux: a decoder that stops working mid-stream gives way to the next
+#if defined(__linux__) || defined(_WIN32)
+    // Linux and Windows: a decoder that stops working mid-stream gives way to the next
     // one in the order (decoder_factory.hpp). Decode thread.
     void note_decode_result(DecodeFeedResult result, bool keyframe);
     void switch_decoder();
@@ -166,7 +166,7 @@ private:
     std::unique_ptr<Decoder> decoder_;
     mutable std::mutex decoder_name_mutex_;
     std::string decoder_name_;  // stats read it from any thread
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
     // The decoder health of the decode thread. Counted only after the
     // decoder got its first key frame: deltas before it fail on any decoder.
     struct DecoderHealth {

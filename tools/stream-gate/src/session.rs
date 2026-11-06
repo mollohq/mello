@@ -513,6 +513,10 @@ pub struct ViewerRecord {
     pub callback_max_ms: f64,
     /// The viewer's receive timeline at the end (stage 3).
     pub timeline: Option<TimelineRecord>,
+    /// The decoder the viewer ran at the end (`decoder_name` of its stats).
+    /// A decoder that fails mid-stream gives way to the next one, so this is
+    /// the last one. Empty when the viewer did not start.
+    pub decoder: String,
     /// Stage 7: the game audio the viewer's output played, pulled 10 ms at
     /// a time as the device thread does, and its stats at the end.
     pub audio: Option<crate::audio::Capture>,
@@ -547,6 +551,17 @@ pub struct AudioRecord {
     pub fec_used: u64,
     pub sync_extensions: u64,
     pub sync_changes: u64,
+}
+
+/// A NUL-terminated name in a fixed C array of the stats: the bytes before
+/// the first NUL.
+pub fn cstr(b: &[std::os::raw::c_char]) -> String {
+    let bytes: Vec<u8> = b
+        .iter()
+        .take_while(|c| **c != 0)
+        .map(|c| *c as u8)
+        .collect();
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 /// The viewer pipeline's stage 3 counters at the end of a run.
@@ -646,6 +661,7 @@ fn run_viewer(rt: &tokio::runtime::Runtime, ctx_arc: Arc<Ctx>, spec: ViewerSpec)
         present_max_ms: 0.0,
         callback_max_ms: 0.0,
         timeline: None,
+        decoder: String::new(),
         audio: None,
         audio_stats: None,
         sync_samples: Vec::new(),
@@ -803,6 +819,7 @@ fn run_viewer(rt: &tokio::runtime::Runtime, ctx_arc: Arc<Ctx>, spec: ViewerSpec)
         let mut vstats: mello_sys::MelloStreamStats = unsafe { std::mem::zeroed() };
         unsafe { mello_sys::mello_stream_viewer_get_stats(viewer, &mut vstats) };
         rec.aus_fed = vstats.frames_released;
+        rec.decoder = cstr(&vstats.decoder_name);
         rec.feed_failures = vstats.decode_errors;
         rec.timeline = Some(TimelineRecord {
             target_delay_ms: vstats.target_delay_ms,

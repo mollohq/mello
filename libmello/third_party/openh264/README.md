@@ -20,6 +20,13 @@ libmello/third_party/openh264/openh264-2.6.0-win64.dll
 
 The build system will automatically copy it next to the output binary.
 
+**Windows release builds ship no OpenH264.** An installer that carries the
+DLL breaks Cisco's binary licence (section Licensing). The DLL here is for
+development only: the stream gate's CPU lane (`MELLO_SOFT_ENCODER=1`,
+`MELLO_SOFT_DECODER=1`) and the tests that need the OpenH264 encoder. A
+Windows viewer without NVDEC or AMF decodes with the Microsoft H.264 decoder
+through Media Foundation (`decoder_mf.cpp`, 12-STREAMING.md section 7.4).
+
 The runtime loader tries these names in order:
 - `openh264-2.6.0-win64.dll`
 - `openh264-2.5.0-win64.dll`

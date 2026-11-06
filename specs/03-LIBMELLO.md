@@ -59,7 +59,7 @@ libmello/
 │   │   ├── encoder_nvenc.hpp/cpp   # NVIDIA NVENC
 │   │   ├── encoder_amf.hpp/cpp     # AMD AMF
 │   │   ├── encoder_qsv.hpp/cpp     # Intel Quick Sync
-│   │   ├── decoder.hpp/cpp         # Hardware decoder
+│   │   ├── decoder.hpp             # Decoder interface (factory, NVDEC, AMF, Media Foundation, OpenH264)
 │   │   └── color_convert.hpp       # GPU color conversion (BGRA↔NV12)
 │   │
 │   ├── transport/
@@ -324,7 +324,7 @@ Without this, the WASAPI playback thread falls through to `ring_.read()` (always
 Streaming-quality stage 3 replaced the pull path below with libmello's own
 threads: the receive timeline (WebRTC `FrameBuffer` and `VCMTiming`), a decode
 thread that decodes into a 3-slot ring of per-slot textures (NVDEC through
-CUDA-D3D11 interop, AMF and OpenH264 into NV12 textures), and a present thread
+CUDA-D3D11 interop, AMF, Media Foundation and OpenH264 into NV12 textures), and a present thread
 that converts the due frame into a keyed-mutex shared RGBA texture at its render
 time. See 12-STREAMING.md §7 and 14-VIDEO-PIPELINE.md §7 and §8.
 
@@ -499,7 +499,7 @@ libmello is **synchronous C++ by design** — no async runtimes. Threads are cre
 | Opus encode | <2ms per 20ms frame |
 | Video capture (DXGI) | <2ms |
 | Video encode (NVENC) | <5ms |
-| Video decode (DXVA2) | <5ms |
+| Video decode (NVDEC, AMF, Media Foundation) | <5ms |
 | Peer round-trip to a local SFU | <5ms |
 | Library size | <5MB |
 

@@ -820,17 +820,34 @@ caller:
 |---|---|---|
 | NVDEC | R8 with the NV12 layout (luma rows, then chroma rows) | CUDA-D3D11 interop: each slot texture is registered with CUDA once; the decoded surface goes into it with `cuMemcpy2D` on the GPU. No host copy, no upload. The copy runs after `cuvidParseVideoData` returns, not in a parser callback. |
 | AMF | NV12 | The AMF surface (a texture array slice) is copied into the slot texture on the GPU, so the surface goes back to AMF's pool at once. |
+| Media Foundation | NV12 | The Microsoft H.264 decoder (`CLSID_CMSH264DecoderMFT`). GPU mode (DXVA, our DXGI device manager): the output texture (a texture array slice) is copied into the slot texture on the GPU, as AMF. CPU mode: the NV12 picture in system memory goes into the slot texture with `UpdateSubresource`. |
 | OpenH264 | NV12 | I420 to NV12 on the CPU, then `UpdateSubresource` into the slot texture. |
 | VideoToolbox (macOS) | CVPixelBuffer | The ring retains the decoder's pixel buffer. |
 | NVDEC (Linux) | NV12 in CPU memory | NVIDIA's parser, as on Windows. The surface goes from CUDA memory to the slot's host buffer with `cuMemcpy2D`. |
 | VA-API (Linux) | NV12 in CPU memory | GStreamer: `appsrc`, `h264parse`, the VA H.264 decoder of the primary GPU with `compliance=flexible`, `appsink` in system memory. The picture is copied into the slot. |
 | OpenH264 (Linux) | I420 in CPU memory | The picture is copied out of the decoder's buffer into the slot. |
 
-There is no D3D11VA decoder. It was a stub (the raw access unit as one
-bitstream buffer, no DXVA picture parameters) that decoded nothing and was
-chosen on Intel before OpenH264; it was removed in stage 3, so an Intel viewer
-decodes with OpenH264. A full D3D11VA implementation needs an Intel box to test
-on. The order is NVDEC, AMF, OpenH264; `MELLO_SOFT_DECODER=1` forces OpenH264.
+The Windows order is NVDEC, AMF, Media Foundation, OpenH264
+(`windows_decoder_order`, `decoder_factory.cpp`). The first decoder that
+initializes wins. An Intel viewer, and any GPU without NVDEC or AMF, decodes
+with Media Foundation:
+
+| Item | Rule |
+|---|---|
+| Decoder | The Microsoft H.264 decoder, part of Windows 10 and 11. The Windows licence covers its H.264 patents. libmello parses nothing: the decoder takes the Annex B access unit as it comes |
+| GPU mode | The viewer's D3D11 device is made with `D3D11_CREATE_DEVICE_VIDEO_SUPPORT`. A driver that refuses the flag gets a device without it, and the decoder runs in CPU mode |
+| CPU mode | No video support on the device, the decoder refuses the device manager, or `MELLO_MF_DECODER_CPU=1`. For a GPU without DXVA H.264 (the Basic Display Adapter, some VMs) |
+| Low latency | `MF_LOW_LATENCY` and `CODECAPI_AVLowLatencyMode`: the picture of an access unit comes with that access unit. In CPU mode the decoder then needs an output buffer of coded width x height x 3 bytes, more than its `cbSize` |
+| Size | The visible size comes from `MF_MT_MINIMUM_DISPLAY_APERTURE`: a 1080p stream shows 1080 rows of the 1088 coded rows |
+| COM | The decoder's COM objects live in the MTA (`CoIncrementMTAUsage`). The decode thread runs in the implicit MTA. A call on an STA thread does its COM work on a short helper thread |
+| Gap | Windows N and KN editions without the Media Feature Pack have no Media Foundation H.264 decoder. With no NVDEC and no AMF, such a viewer has no decoder; the log says "install the Media Feature Pack" |
+
+OpenH264 decodes on Windows only in the test lane (`MELLO_SOFT_DECODER=1`
+makes it the only decoder) and where a developer put the DLL in
+`libmello/third_party/openh264/`. Release builds ship no OpenH264 on
+Windows. `MELLO_WINDOWS_DECODER` (`nvdec`, `amf`, `mf`, `openh264`) puts one
+decoder first. There is no D3D11VA decoder: the stage 3 stub decoded nothing
+and was removed, and `MELLO_DECODER_D3D11VA` is never reported.
 
 Linux has no GPU device yet (`GraphicsBackend::Cpu`). Every Linux decoder
 writes its picture to CPU memory; the present thread converts it to RGBA
@@ -873,8 +890,8 @@ the NVIDIA GPU stays asleep while someone watches. The first decoder that
 initializes wins. `MELLO_LINUX_DECODER` (`nvdec`, `va`, `openh264`) puts
 one first; `MELLO_SOFT_DECODER=1` leaves OpenH264 only.
 
-A decoder that stops working mid-stream gives way to the next one in the
-order: two key frames it could not decode, ten errors in a row, or 60 access
+On Linux and Windows, a decoder that stops working mid-stream gives way to the
+next one in the order: two key frames it could not decode, ten errors in a row, or 60 access
 units without a picture, each counted from its first key frame. The viewer
 waits for the slot on screen, drops the ready slots, and swaps the decoder;
 the new decoder's first delta fails, and the timeline asks for a key frame.
@@ -1611,7 +1628,8 @@ DComp presenter diagnostics:
 | Adapter/device mismatch diagnostics are log-based only | Better in-UI error reasons still needed | Small |
 | End-to-end certification matrix pending | Performance targets not yet certified across LAN/loss/multi-viewer gates | Medium |
 | macOS viewer has no DComp equivalent | macOS needs its own compositor path (Core Animation layer); the present thread hands RGBA to the Slint timer | Medium |
-| No D3D11VA decoder (removed in stage 3) | Intel viewers decode with OpenH264 on the CPU | Large (needs an Intel box) |
+| Media Foundation decode not run on an Intel GPU | Intel viewers decode with the Microsoft H.264 decoder; tested on an NVIDIA GPU (GPU and CPU mode), not yet on an Intel iGPU | Small (a run on an Intel laptop) |
+| No decoder on Windows N without the Media Feature Pack | A viewer with no NVDEC, no AMF and no Media Feature Pack gets no picture; only the log says why | Small (a UI message, Bob's decision) |
 | AMF decode slot copy untested on AMD | The array-slice copy follows the AMF samples; not run on an AMD GPU | Small |
 | macOS VideoToolbox session churn | Decode FPS drops on SPS/PPS change | Small |
 | No client ICE restart (libjuice 1.7, libdatachannel 0.24) | A network change costs a rejoin (a new connection and an IDR) instead of a restart on the same connection (§11.1) | Medium (a libjuice upgrade or patch) |

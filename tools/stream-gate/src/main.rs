@@ -63,7 +63,7 @@ use std::time::{Duration, Instant};
 use stream_gate::metrics::{self, Present, SourceClock};
 use stream_gate::profile::{self, GateFile, Lane, Profile};
 use stream_gate::report::{self, Metrics};
-use stream_gate::session::{self, clock_us, Ctx, Host, ViewerRecord, ViewerSpec};
+use stream_gate::session::{self, clock_us, cstr, Ctx, Host, ViewerRecord, ViewerSpec};
 use stream_gate::shim::{Plan, Shim};
 use stream_gate::{audio, clip, playback, replay, score, sfu};
 
@@ -265,6 +265,9 @@ fn names(ctx: &Ctx, encoders: bool) -> Vec<String> {
                         mello_sys::MelloDecoderBackend_MELLO_DECODER_AMF => "AMF",
                         mello_sys::MelloDecoderBackend_MELLO_DECODER_D3D11VA => "D3D11VA",
                         mello_sys::MelloDecoderBackend_MELLO_DECODER_OPENH264 => "OpenH264",
+                        mello_sys::MelloDecoderBackend_MELLO_DECODER_MEDIA_FOUNDATION => {
+                            "MediaFoundation"
+                        }
                         _ => "other",
                     }
                     .to_owned(),
@@ -275,13 +278,29 @@ fn names(ctx: &Ctx, encoders: bool) -> Vec<String> {
     out
 }
 
-fn cstr(b: &[std::os::raw::c_char]) -> String {
-    let bytes: Vec<u8> = b
-        .iter()
-        .take_while(|c| **c != 0)
-        .map(|c| *c as u8)
-        .collect();
-    String::from_utf8_lossy(&bytes).into_owned()
+/// The decoders the viewers of every profile ran at the end, each name once,
+/// in profile order: "NVDEC", or "MediaFoundation, OpenH264" when a decoder
+/// gave way mid-stream. Not the first of `mello_get_decoders`: with
+/// MELLO_WINDOWS_DECODER the list still starts with NVDEC.
+fn decoders_that_ran(infos: &BTreeMap<String, Value>) -> String {
+    let mut names: Vec<&str> = Vec::new();
+    for info in infos.values() {
+        let Some(viewers) = info["viewers"].as_array() else {
+            continue;
+        };
+        for v in viewers {
+            if let Some(name) = v["decoder"].as_str().filter(|n| !n.is_empty()) {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+    }
+    if names.is_empty() {
+        "unknown".to_owned()
+    } else {
+        names.join(", ")
+    }
 }
 
 /// The legs of a profile for a lane: a cap is a fraction of the preset.
@@ -862,6 +881,7 @@ fn run_profile(
         .map(|v| {
             json!({
                 "role": v.role,
+                "decoder": v.decoder,
                 "presents": v.presents.len(),
                 "feed_failures": v.feed_failures,
                 "backlog_drops": v.backlog_drops,
@@ -910,6 +930,7 @@ fn run_profile(
     let info = json!({
         "session": session_id,
         "measured_viewer": measured.role,
+        "decoder": measured.decoder,
         "host": {
             "encoder": cstr(&host_end.stats.encoder_name),
             "gpu": cstr(&host_end.stats.gpu_name),
@@ -1515,6 +1536,7 @@ fn real_main() -> Result<bool, String> {
         .and_then(|i| i["host"]["gpu"].as_str())
         .unwrap_or("")
         .to_owned();
+    let decoder = decoders_that_ran(&infos);
     let mut profiles_json = serde_json::Map::new();
     for name in &order {
         let p = gf.profiles.iter().find(|p| &p.name == name);
@@ -1556,7 +1578,7 @@ fn real_main() -> Result<bool, String> {
         "encoder": host_encoder,
         "encoders_available": encoders,
         "decoders_available": decoders,
-        "decoder": if lane.soft { "OpenH264 (MELLO_SOFT_DECODER=1)".to_owned() } else { decoders.first().cloned().unwrap_or_default() },
+        "decoder": decoder,
         "inputs_fingerprint": gf.inputs_fingerprint,
         "clip": {
             "file": clip_path.file_name().map(|f| f.to_string_lossy().into_owned()),
@@ -1613,7 +1635,7 @@ fn real_main() -> Result<bool, String> {
         ),
     }
     println!(
-        "Encoder: {host_encoder}. GPU: {gpu}. VMAF: {}.",
+        "Encoder: {host_encoder}. Decoder: {decoder}. GPU: {gpu}. VMAF: {}.",
         vmaf.scorer
     );
     println!();
@@ -2804,7 +2826,7 @@ fn replay_main() -> Result<bool, String> {
         "encoders_available": encoders,
         "decoders_available": decoders,
         "encoder": if lane.soft { "OpenH264 (MELLO_SOFT_ENCODER=1)".to_owned() } else { format!("the first of {} that starts (the replay API does not name it)", encoders.join(", ")) },
-        "decoder": if lane.soft { "OpenH264 (MELLO_SOFT_DECODER=1)".to_owned() } else { decoders.first().cloned().unwrap_or_default() },
+        "decoder": if lane.soft { "OpenH264 (MELLO_SOFT_DECODER=1)".to_owned() } else { format!("the first of {} that starts, after one that MELLO_WINDOWS_DECODER or MELLO_LINUX_DECODER puts first (the replay API does not name it)", decoders.join(", ")) },
         "quality": {
             "name": lane.quality.as_str(),
             "height": height, "fps": fps, "bitrate_kbps": bitrate_kbps,
@@ -3094,5 +3116,49 @@ fn main() -> ExitCode {
             eprintln!("stream-gate: error: {e}");
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn info_with(decoders: &[&str]) -> Value {
+        let viewers: Vec<Value> = decoders
+            .iter()
+            .map(|d| json!({ "role": "viewer", "decoder": d }))
+            .collect();
+        json!({ "viewers": viewers })
+    }
+
+    // A Media Foundation run on an NVIDIA PC (MELLO_WINDOWS_DECODER=mf):
+    // the decoder list starts with NVDEC, the viewers ran Media Foundation.
+    // The result named NVDEC before.
+    #[test]
+    fn the_result_names_the_decoder_the_viewers_ran() {
+        let mut infos = BTreeMap::new();
+        infos.insert("clean".to_owned(), info_with(&["MediaFoundation"]));
+        infos.insert(
+            "congested".to_owned(),
+            info_with(&["MediaFoundation", "MediaFoundation"]),
+        );
+        assert_eq!(decoders_that_ran(&infos), "MediaFoundation");
+    }
+
+    // A decoder that gave way mid-stream: both names, each once.
+    #[test]
+    fn a_switch_names_each_decoder_once() {
+        let mut infos = BTreeMap::new();
+        infos.insert("a".to_owned(), info_with(&["MediaFoundation"]));
+        infos.insert("b".to_owned(), info_with(&["OpenH264", ""]));
+        infos.insert("c".to_owned(), info_with(&["MediaFoundation"]));
+        assert_eq!(decoders_that_ran(&infos), "MediaFoundation, OpenH264");
+    }
+
+    #[test]
+    fn no_viewer_name_is_unknown() {
+        let mut infos = BTreeMap::new();
+        infos.insert("clean".to_owned(), info_with(&[""]));
+        assert_eq!(decoders_that_ran(&infos), "unknown");
     }
 }
