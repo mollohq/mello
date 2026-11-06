@@ -129,7 +129,7 @@ GPU acceleration fits the clip *render* step for share export:
 
 ```
 Disk buffer (H.264 packets)
-  → NVDEC / AMF / D3D11VA (GPU decode)
+  → NVDEC / AMF / Media Foundation (GPU decode)
   → GPU compositing (branded frame, overlays, 9:16 reframe)
   → NVENC / AMF / QSV (GPU encode)
   → Final MP4 on disk
