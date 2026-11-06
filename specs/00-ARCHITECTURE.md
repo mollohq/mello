@@ -296,7 +296,7 @@ The SFU is the only voice and stream transport. `voice_join`, `start_stream` and
 | Gain control | WebRTC AGC2 | BSD |
 | Video Capture | DXGI Desktop Duplication | Windows |
 | Video Encode | NVENC / AMF / QSV | Vendor SDK |
-| Video Decode | DXVA2 / NVDEC | Vendor SDK |
+| Video Decode | NVDEC / AMF / Media Foundation (Windows), VideoToolbox (macOS) | Vendor SDK, Windows |
 | Backend | Nakama | Apache 2.0 |
 
 ---

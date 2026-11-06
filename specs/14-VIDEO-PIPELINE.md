@@ -27,7 +27,7 @@ This spec covers the complete libmello video pipeline: screen capture, GPU-side 
 ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌────────────────┐   ┌──────────────┐
 │ H.264 RTP AU │──▶│   Receive    │──▶│  HW Decode   │──▶│ Present thread │──▶│    DComp     │
 │ any order,   │   │   timeline   │   │ NVDEC/AMF/   │   │ render time,   │   │  swap chain  │
-│ NACK repair  │   │ FrameBuffer, │   │ OpenH264,    │   │ keyed-mutex    │   │ (waitable)   │
+│ NACK repair  │   │ FrameBuffer, │   │ Media Fdn,   │   │ keyed-mutex    │   │ (waitable)   │
 │              │   │ VCMTiming    │   │ 3 slots      │   │ shared RGBA    │   │              │
 └──────────────┘   └──────────────┘   └──────────────┘   └────────────────┘   └──────────────┘
 ```
@@ -886,16 +886,21 @@ multithread-protected (§2.2).
 
 ### 7.2 DecoderFactory
 
-Order: NVDEC, AMF, OpenH264 (H.264 only; AV1 is never negotiated).
-`MELLO_SOFT_DECODER=1` makes OpenH264 the only candidate (the CPU lane of the
-streaming quality gate).
+Order: NVDEC, AMF, Media Foundation, OpenH264 (H.264 only; AV1 is never
+negotiated). `windows_decoder_order()` gives the order and
+`create_next_decoder()` takes the first decoder that initializes, also for
+the mid-stream switch (12-STREAMING.md section 7.4). `MELLO_SOFT_DECODER=1`
+makes OpenH264 the only candidate (the CPU lane of the streaming quality
+gate). `MELLO_WINDOWS_DECODER` (`nvdec`, `amf`, `mf`, `openh264`) puts one
+decoder first. Release builds ship no OpenH264 DLL, so OpenH264 decodes only
+in the test lane and where a developer put the DLL in place.
 
 There is no D3D11VA decoder. The earlier one was a stub: it sent the raw access
 unit as one bitstream buffer with no DXVA picture parameters and no slice
-control, decoded nothing, and was chosen on Intel before OpenH264. Stage 3
-removed it (plan decision: delete unless an Intel box is on hand for a full
-implementation). An Intel viewer decodes with OpenH264. `MELLO_DECODER_D3D11VA`
-stays in `mello.h` for ABI stability and is never reported.
+control, and decoded nothing. Stage 3 removed it. The Media Foundation decoder
+(section 7.5) does the DXVA work for a GPU without NVDEC or AMF.
+`MELLO_DECODER_D3D11VA` stays in `mello.h` for ABI stability and is never
+reported.
 
 ### 7.3 NVDEC Decoder
 
@@ -934,13 +939,32 @@ copies the slice (`AMFTextureArrayIndexGUID` private data on the texture) into
 the slot's NV12 texture with `CopySubresourceRegion`, so the surface goes back
 to the pool at once. Not verified on an AMD GPU in stage 3 (Bob's check).
 
-### 7.5 OpenH264 Decoder
+### 7.5 Media Foundation Decoder
+
+`decoder_mf.cpp` (`MfDecoder`, name `"MediaFoundation"`): the Microsoft H.264
+decoder, `CLSID_CMSH264DecoderMFT` in `msmpeg2vdec.dll`, a synchronous
+Media Foundation transform.
+
+| Step | What happens |
+|---|---|
+| Probe | `is_available()` runs once: `MFStartup` and `CoCreateInstance`. `REGDB_E_CLASSNOTREG` (an N edition without the Media Feature Pack) is logged once |
+| GPU mode | The device has `D3D11_CREATE_DEVICE_VIDEO_SUPPORT` (§2.1) and the transform reports `MF_SA_D3D11_AWARE`: `MFCreateDXGIDeviceManager`, `ResetDevice` with the viewer's device, `MFT_MESSAGE_SET_D3D_MANAGER`. The transform gives its own output samples |
+| CPU mode | Else, or with `MELLO_MF_DECODER_CPU=1`. The decoder gives the output sample. In low-latency mode the transform needs an output buffer of coded width x height x 3 bytes; its `cbSize` gives x 2, and a smaller buffer gives `E_FAIL` from `ProcessOutput` |
+| Types | Input `MFVideoFormat_H264`, progressive. Output: the NV12 type from `GetOutputAvailableType` |
+| Low latency | `MF_LOW_LATENCY` and `CODECAPI_AVLowLatencyMode`. Without them the transform holds pictures back for reordering |
+| Decode | One access unit per `ProcessInput` (increasing sample times, `MFSampleExtension_CleanPoint` on a key frame), then `ProcessOutput` until `MF_E_TRANSFORM_NEED_MORE_INPUT` |
+| Size | `MF_E_TRANSFORM_STREAM_CHANGE` (the first SPS, or a new size): the output type is set again. The visible area comes from `MF_MT_MINIMUM_DISPLAY_APERTURE` (1080 of 1088 rows). A slot takes a new texture at the new size at its next copy |
+| GPU copy | `IMFDXGIBuffer` gives the texture and its subresource index. `CopySubresourceRegion` copies the visible area into the slot's NV12 texture, and the sample is released at once, so the transform's pool does not run dry |
+| CPU copy | The NV12 picture (chroma after the coded height of luma rows) is packed to the visible area and uploaded with `UpdateSubresource` |
+| COM | Every COM object lives in the MTA. `initialize` holds a `CoIncrementMTAUsage` cookie until `shutdown`, so the decode thread runs in the implicit MTA. `initialize` and `shutdown` do their COM work on a short helper thread when they run on an STA thread |
+
+### 7.6 OpenH264 Decoder
 
 The Cisco DLL decodes on the CPU (`DecodeFrameNoDelay`). The I420 picture is
 interleaved to NV12 and uploaded into the slot's NV12 texture with
 `UpdateSubresource`. The picture size comes from the decoder's buffer info.
 
-### 7.6 VideoToolbox Decoder (macOS)
+### 7.7 VideoToolbox Decoder (macOS)
 
 Unchanged by stage 3 except the slot argument, which it ignores: the ring
 retains each `CVPixelBuffer` the decoder hands out. One access unit is one
@@ -1083,9 +1107,11 @@ typedef enum MelloEncoderBackend {
 typedef enum MelloDecoderBackend {
     MELLO_DECODER_NVDEC   = 0,
     MELLO_DECODER_AMF     = 1,
-    MELLO_DECODER_D3D11VA = 2,
+    MELLO_DECODER_D3D11VA = 2,  // retired: kept for ABI stability, never reported
     MELLO_DECODER_OPENH264 = 3, // OpenH264 software fallback (H.264)
-    MELLO_DECODER_DAV1D    = 4, // dav1d software fallback (AV1)
+    MELLO_DECODER_DAV1D    = 4, // retired: kept for ABI stability, never reported
+    MELLO_DECODER_VIDEOTOOLBOX = 5,     // macOS
+    MELLO_DECODER_MEDIA_FOUNDATION = 6, // Windows: the Microsoft H.264 decoder
 } MelloDecoderBackend;
 
 /// Returns available encoder backends on this machine, in priority order.
@@ -1143,7 +1169,7 @@ typedef struct MelloStreamStats {
     uint32_t keyframes_sent;
     uint64_t bytes_sent;
     char     encoder_name[32];  // "NVENC", "AMF", "QSV-oneVPL"
-    char     decoder_name[32];  // "NVDEC", "AMF-Decode", "OpenH264", "VideoToolbox"
+    char     decoder_name[32];  // "NVDEC", "AMF-Decode", "MediaFoundation", "OpenH264", "VideoToolbox"
 } MelloStreamStats;
 
 void mello_stream_get_stats(MelloStreamHost* host, MelloStreamStats* stats);
@@ -1211,7 +1237,8 @@ libmello/src/video/
 ├── decoder_factory.hpp / .cpp      # Probe + instantiate best decoder
 ├── decoder_nvdec.hpp / .cpp        # NVIDIA NVDEC
 ├── decoder_amf.hpp / .cpp          # AMD AMF decode
-├── decoder_openh264.hpp / .cpp     # OpenH264 (H.264) software fallback
+├── decoder_mf.hpp / .cpp           # Media Foundation (Microsoft H.264 decoder, GPU or CPU)
+├── decoder_openh264.hpp / .cpp     # OpenH264 (H.264), test lane and developer builds
 ├── video_viewer.hpp / .cpp         # Viewer: decode thread, 3-slot ring, present thread
 ├── staging_texture.hpp / .cpp      # Converter: picture → keyed-mutex shared RGBA
 └── cursor.hpp / .cpp               # Cursor packet encode/decode
