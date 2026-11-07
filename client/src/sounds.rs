@@ -1,6 +1,6 @@
 //! Notification sounds: which event plays which sound, and the guards that
 //! keep a snapshot, a reconnect or a burst from playing false or repeated
-//! sounds (plans/NOTIFICATION-SOUNDS.md §5).
+//! sounds (specs/features/NOTIFICATION-SOUNDS.md §6).
 //!
 //! The handlers call [`cue`] and the helpers below. [`SoundCues`] checks the
 //! settings group and the rate limit, and plays through the core's

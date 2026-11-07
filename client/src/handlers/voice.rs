@@ -80,7 +80,7 @@ pub(crate) fn sync_member_audio(ctx: &AppContext) {
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
         Event::VoiceStateChanged { in_call, transport } => {
-            // The sounds (plans/NOTIFICATION-SOUNDS.md §5): a call that comes
+            // The sounds (specs/features/NOTIFICATION-SOUNDS.md §6): a call that comes
             // up plays the join sound, and a call that was up and ends plays
             // the leave sound. A call that comes back after a drop is silent,
             // and a reconnect that gave up already played connection lost.

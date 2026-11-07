@@ -343,7 +343,7 @@ mic test frame ──▶ mello_voice_feed_packet ──┤  (network, command lo
                                                    │
 device thread: mix_output ──▶ render_frame ──▶ AudioMixerImpl::Mix (GetAudio per peer, 10 ms)
                                    │              volume, pan, output gain, limiter (stereo)
-                                   ├──▶ deafen, clip tap, clip playback, AEC render reference
+                                   ├──▶ deafen, clip tap, clip playback, sounds, AEC render reference
                                    ▼
                               output ring (10 ms) ──▶ device callback (any size, 1 or 2 channels)
 ```
@@ -398,7 +398,7 @@ Network jitter, loss, outages and clock drift are otherwise NetEQ's own decision
 - Per-peer volume (`mello_voice_set_peer_volume`, 0..2, default 1) times the output volume (`mello_voice_set_output_volume`) applies in the source, before the mixer's limiter. Above 1.0 a loud peer can clip; the limiter acts only on a sum of two or more peers.
 - Pan (`mello_voice_set_peer_pan`, -1..+1, default 0) is a balance law: the far channel fades, the near channel stays at unity. Centre is unity on both channels, so a mono downmix is the decoded signal.
 - `AudioMixerImpl::Mix(2, ...)` sums the peers with the AGC2 limiter of its `FrameCombiner` (one peer: no limiter). The mix is 10 ms stereo at 48 kHz.
-- `render_frame` (device thread) then: deafen zeroes the mix (NetEQ keeps running, so the voice is back at once); the clip buffer records the mono downmix plus the local mic; clip playback adds to both channels; the AEC render reference and the echo suppressor's far end get the mono downmix of what plays. A mix with no peer audio and no clip feeds nothing to the AEC.
+- `render_frame` (device thread) then: deafen zeroes the mix (NetEQ keeps running, so the voice is back at once); the clip buffer records the mono downmix plus the local mic; clip playback adds to both channels; the notification sounds add to both channels (`UiSoundMixer`, NOTIFICATION-SOUNDS.md §3); the AEC render reference and the echo suppressor's far end get the mono downmix of what plays. A mix with no peer audio, no clip and no sound feeds nothing to the AEC.
 - The output ring holds less than one 10 ms frame. `mix_output` fills the device callback from it, with the backend's channel count: 2 on WASAPI and plain CoreAudio, 1 on VPIO, RemoteIO and the test backend (the downmix).
 - Stream-delay hint (spec 03 section 4): device output latency + device input latency + the output ring. NetEQ's buffer is before the render reference, so it is not in the echo path.
 
@@ -700,6 +700,13 @@ Controls added with the encoder adaptation (sections 4.6 and 7.5):
 | Channel bitrate (the top rung) | `mello_voice_set_max_bitrate` | The `voice_join` response at each join (`Client::start_voice_media`), and `Command::SetVoiceChannelBitrate { kbps }` -> `VoiceManager::set_channel_bitrate` | The handlers send `SetVoiceChannelBitrate` for the joined channel on `VoiceChannelsUpdated`, `CrewStateLoaded` and `VoiceChannelBitrateChanged` |
 | Change a channel's bitrate | - | `Command::UpdateVoiceChannelBitrate { crew_id, channel_id, bitrate_kbps }` -> `channel_update` RPC -> `Event::VoiceChannelBitrateChanged` | Not exposed yet (channel settings UI, follow-up) |
 | Receiver reports | `mello_peer_set_send_feedback_callback` -> `mello_voice_report_send_feedback` | `SfuConnection` wires them on the libdatachannel thread | - |
+
+Controls added with the notification sounds (features/NOTIFICATION-SOUNDS.md):
+
+| Control | C API | mello-core | Client |
+|---|---|---|---|
+| Load a sound | `mello_sound_load` (slot 0..`MELLO_SOUND_SLOTS` - 1) | `VoiceManager` loads every `Sound` when it attaches the `SoundPlayer` | - |
+| Play a sound | `mello_sound_play` (gain 0..1) | `SoundPlayer::play` | `SoundCues::cue` with the sound volume setting |
 
 All user-facing voice toggles in `client` and `mello-core` must map to these runtime controls (no dead settings).
 

@@ -386,7 +386,7 @@ MELLO_API MelloResult mello_clip_play_mp4(MelloContext* ctx, const char* mp4_pat
 MELLO_API MelloResult mello_clip_stop_playback(MelloContext* ctx);
 
 /* ============================================================================
- * Notification sounds (plans/NOTIFICATION-SOUNDS.md)
+ * Notification sounds (specs/features/NOTIFICATION-SOUNDS.md)
  * Short sounds that play on app events. They play through the voice output
  * device also outside a call, after the deafen gate, and not into a voice
  * clip. The output volume does not apply; `gain` is the sound volume.

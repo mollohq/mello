@@ -9701,7 +9701,7 @@ fn the_bar_names_the_roblox_experience_under_the_game() {
 }
 
 // ---------------------------------------------------------------------------
-// Notification sounds (plans/NOTIFICATION-SOUNDS.md §5)
+// Notification sounds (specs/features/NOTIFICATION-SOUNDS.md §6)
 // ---------------------------------------------------------------------------
 
 fn sounds_cued(h: &Harness) -> Vec<mello_core::sounds::Sound> {

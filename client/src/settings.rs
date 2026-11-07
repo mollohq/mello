@@ -106,7 +106,7 @@ pub struct Settings {
     /// When false, sensed play is kept local — no crew presence or session-end RPCs.
     #[serde(default = "default_share_game_activity")]
     pub share_game_activity: bool,
-    // Notification sounds (plans/NOTIFICATION-SOUNDS.md §6).
+    // Notification sounds (specs/features/NOTIFICATION-SOUNDS.md §7).
     /// The volume of the notification sounds, 0..1.
     pub sound_volume: f32,
     pub sound_voice: bool,

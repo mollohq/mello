@@ -1,4 +1,4 @@
-// Notification sounds (plans/NOTIFICATION-SOUNDS.md): the mixer that the
+// Notification sounds (specs/features/NOTIFICATION-SOUNDS.md): the mixer that the
 // render thread runs, and the sound in the pipeline's speaker output.
 
 #include <gtest/gtest.h>

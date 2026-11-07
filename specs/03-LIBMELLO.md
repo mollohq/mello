@@ -42,7 +42,8 @@ libmello/
 │   │   ├── voice_playout.hpp/cpp   # NetEQ per peer + game audio + AudioMixerImpl (C++20 island)
 │   │   ├── stream_audio_pipeline.hpp/cpp # Game audio: host encode, viewer playout (NetEQ in the mix)
 │   │   ├── stream_audio_link.hpp   # Host audio capture times and receiver reports for the peer
-│   │   └── stream_resampler.hpp/cpp # PushSincResampler for the WASAPI edges
+│   │   ├── stream_resampler.hpp/cpp # PushSincResampler for the WASAPI edges
+│   │   └── ui_sound_mixer.hpp/cpp  # Notification sounds: preloaded slots, mixed into the output
 │   │
 │   ├── video/
 │   │   ├── video_pipeline.hpp/cpp
@@ -138,6 +139,7 @@ The entire library is exposed through a single C header (`mello.h`). This is the
 | **Game clip replay** | `mello_replay_start`, `stop`, `state`, `capture` | Windows and macOS. One replay at a time per context: a start stops a running one. `MelloReplayConfig` names the game window (an HWND, a CGWindowID; NULL: the game's main window) and pid, the clip quality (height, fps, kbps) and the ring folder (NULL: the OS temp folder). `capture` writes the last N seconds as an MP4 and a JPEG poster and blocks for about a second. `MelloReplayState`: `OFF`, `RECORDING`, `WAITING` (no frames now, or a monitor frame), `FAILED`, `PAUSED` (overload, 12-STREAMING.md §3.7). CLIPS.md §15 |
 | **Game clip player** | `mello_clip_player_start`, `set_native_frame_callback`, `set_frame_callback`, `set_paused`, `seek`, `get_state`, `stop` | Every platform: m3llo's own MP4 demux and libopus. The caller gives the clip's length and a read callback (`MelloClipReadCallback`, which returns the bytes, 0 at the end, `MELLO_CLIP_READ_WAIT` or -1). The video goes through the viewer's decoder and the native frame callback (Windows) or the RGBA frame callback (macOS, Linux), the sound into the voice output on its own stereo stream. `stop` joins threads. CLIPS.md §15.9 |
 | **Game clip tests** | `mello_test_replay_start_reference`, `mello_test_replay_reference_info` | The stream gate's replay lane: the replay on the reference clip in place of a game window. No product code calls them |
+| **Notification sounds** | `mello_sound_load`, `mello_sound_play` | `MELLO_SOUND_SLOTS` (32) preloaded 48 kHz stereo sounds, at most 4 at once. `play` is safe from any thread and never blocks the render thread. The sounds play while deafened and outside a call, are not in a voice clip, and are in the AEC render reference. features/NOTIFICATION-SOUNDS.md §3 |
 | **Devices** | `mello_get_audio_inputs`, `get_audio_outputs`, `set_audio_input`, `set_audio_output`, `get_encoders` | Query/switch audio devices and video encoders at runtime |
 
 ### Callbacks

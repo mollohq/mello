@@ -1,0 +1,10 @@
+Notification sounds
+===================
+
+Copyright (c) 2026 Petter B. (https://www.instagram.com/petterb). All rights reserved.
+
+The sound files in this directory are used in m3llo with the permission of
+their author. They are not covered by the Apache License 2.0 of this
+repository. Any other use needs the author's written permission.
+
+specs/features/NOTIFICATION-SOUNDS.md lists which event plays which file.

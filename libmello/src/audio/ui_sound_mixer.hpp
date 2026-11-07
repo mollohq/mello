@@ -1,6 +1,6 @@
 #pragma once
 
-// Notification sounds (plans/NOTIFICATION-SOUNDS.md): short 48 kHz stereo
+// Notification sounds (specs/features/NOTIFICATION-SOUNDS.md): short 48 kHz stereo
 // sounds that the app loads once and plays on events (a member joins, a
 // mute, a message). The render thread mixes them into the speaker output
 // after the deafen gate and after the clip-buffer tap.

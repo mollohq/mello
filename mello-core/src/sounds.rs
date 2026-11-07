@@ -1,4 +1,4 @@
-//! Notification sounds (plans/NOTIFICATION-SOUNDS.md).
+//! Notification sounds (specs/features/NOTIFICATION-SOUNDS.md).
 //!
 //! The sounds are 48 kHz stereo 16-bit WAV files, built into the binary.
 //! [`SoundPlayer`] loads them into libmello once the voice context exists,
