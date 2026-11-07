@@ -3,7 +3,7 @@ pub(crate) mod chat;
 mod clip;
 pub(crate) mod crew;
 mod crew_settings;
-mod game;
+pub(crate) mod game;
 mod games;
 pub(crate) mod onboarding;
 mod quests;
@@ -16,7 +16,7 @@ pub(crate) use quests::{emoji_name_ok as emoji_name_ok_for_test, emoji_png as em
 pub(crate) use quests::{on_gift_result, on_invite_name_checked, refresh_picker_art};
 mod sealed;
 pub(crate) mod settings;
-mod streaming;
+pub(crate) mod streaming;
 mod voice;
 mod window;
 

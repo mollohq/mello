@@ -12,6 +12,8 @@
 //!   core loop (`mello_core::e2e_game`). `ago_min` moves a start into the past.
 //! - `POST /game-clip-key` — press the game clip key (F8) once. The poll loop
 //!   takes the press as it takes the real key (`take_game_clip_keys`).
+//! - `POST /stream-key` — press the stream key (F9) once. The poll loop
+//!   takes the press as it takes the real key (`take_stream_keys`).
 //! - `GET /disabled` — the controls on screen that declare
 //!   `accessible-enabled: false`. Slint MCP drops a `false` value from its
 //!   answer, so the driver cannot tell a disabled control from one that does
@@ -60,6 +62,9 @@ static STREAM_MEMBERS: Mutex<Vec<StreamMember>> = Mutex::new(Vec::new());
 /// Game clip key presses from `POST /game-clip-key` that the poll loop has
 /// not taken.
 static GAME_CLIP_KEYS: AtomicU32 = AtomicU32::new(0);
+/// Stream key presses from `POST /stream-key` that the poll loop has not
+/// taken.
+static STREAM_KEYS: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Serialize, Clone)]
 struct EventRecord {
@@ -953,6 +958,12 @@ pub fn take_game_clip_keys() -> u32 {
     GAME_CLIP_KEYS.swap(0, Ordering::Relaxed)
 }
 
+/// The stream key presses that `POST /stream-key` made since the last call.
+/// Called from the poll loop.
+pub fn take_stream_keys() -> u32 {
+    STREAM_KEYS.swap(0, Ordering::Relaxed)
+}
+
 /// Start the port when `MELLO_E2E_STATE_PORT` is set. A no-op otherwise.
 pub fn start(app: &MainWindow) {
     let Ok(port) = std::env::var(PORT_ENV) else {
@@ -1006,6 +1017,10 @@ fn serve(mut stream: TcpStream, weak: &slint::Weak<MainWindow>) {
         "/fake-game" if method == "POST" => fake_game(&body_bytes),
         "/game-clip-key" if method == "POST" => {
             GAME_CLIP_KEYS.fetch_add(1, Ordering::Relaxed);
+            ("200 OK", r#"{"ok":true}"#.into())
+        }
+        "/stream-key" if method == "POST" => {
+            STREAM_KEYS.fetch_add(1, Ordering::Relaxed);
             ("200 OK", r#"{"ok":true}"#.into())
         }
         "/state" => match snapshot(weak) {
@@ -1973,6 +1988,14 @@ mod tests {
         GAME_CLIP_KEYS.fetch_add(2, Ordering::Relaxed);
         assert_eq!(take_game_clip_keys(), 2);
         assert_eq!(take_game_clip_keys(), 0);
+    }
+
+    #[test]
+    fn a_stream_key_post_is_taken_once() {
+        let _ = take_stream_keys();
+        STREAM_KEYS.fetch_add(2, Ordering::Relaxed);
+        assert_eq!(take_stream_keys(), 2);
+        assert_eq!(take_stream_keys(), 0);
     }
 
     fn state_changed(in_call: bool, transport: VoiceMode) -> Event {

@@ -1435,6 +1435,27 @@ Streaming-quality stage 6: the start runs off the command loop (`client/stream_h
 
 Log lines: "Stream live N ms after the click: start_stream, capture, SFU" and, at the first access unit on the open track, "Stream start timing: click_to_first_rtp_ms=… click_to_live_ms=… rpc_ms=… capture_ms=… sfu_ms=…".
 
+### Stream key
+
+The stream key starts and ends a stream from a fullscreen game, with no alt-tab. The default is F9. KEYBINDS changes it (specs/01-CLIENT.md, "KEYBINDS tab"). The setting is `Settings::stream_key`.
+
+The poll loop takes each press (`HotkeyManager::poll_stream`) and calls `stream_key::stream_key_pressed`.
+
+| State at the press | Result | OS notification |
+|---|---|---|
+| The user hosts a stream (game, window or monitor), live or reconnecting | The stream ends through `callbacks::streaming::stop_stream`, the path of the end-stream button | "Stream ended" at `StreamEnded` |
+| A start is in flight: the host card shows "starting" (after `StreamStarting`, before `StreamStarted` or `StreamFailed`) | The press is ignored and logged | None |
+| No stream, an active crew, a detected game | The quick start (`callbacks::game::quick_start_stream`), the path of the STREAM button of the NOW PLAYING card. Same crew, pid, exe, `igdb_id`, title and preset | "You are live" at `StreamStarted`, "Stream failed" at `StreamFailed` |
+| No active crew | No start | "Pick a crew to stream to" |
+| No detected game | No start. The key does not fall back to a monitor | "No game to stream" |
+
+- Only a start or a stop that the key made gets a notification. `AppContext::stream_key_action` holds it until `StreamStarted`, `StreamEnded` or `StreamFailed`. A start or a stop from the app UI clears it, and sends no notification.
+- The key needs no voice call. It does not use the HUD, and it works with the HUD off.
+- A held or auto-repeating key gives one press. The key has its own held state, apart from the clip keys. A push-to-talk binding on the same keys keeps the keys for push-to-talk.
+- Platforms: Windows and Linux X11 (`rdev`), macOS (CGEventTap). On a Wayland session the GlobalShortcuts portal binds no stream key, so the key has no effect.
+- The hook only listens. The key also reaches the game. Some games load a quick save on F9. The KEYBINDS row says so.
+- E2e builds: `POST /stream-key` on the state port presses the key once (`e2e_state::take_stream_keys`).
+
 ### Nakama reconnect
 
 The backend removes the stream records when the host's realtime socket ends (`OnSessionEnd` → `StreamCleanupUser`). The SFU session and the encoder keep running. After the reconnect, `resync_after_reconnect` calls `start_stream` with `crew_id` and `resume_session_id` (the live session), bounded by 10 s. The backend restores the same session (specs/04-BACKEND.md §5). When it cannot, no viewer can find the stream, so the host ends it (`StreamEnded { reason: "lost_on_server" }`). No answer within 10 s keeps the stream; the next resync asks again. A start in flight is not advertised yet: `stream_live` advertises it.
