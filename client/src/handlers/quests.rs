@@ -297,7 +297,7 @@ fn reveal(i: usize, q: &ZoneQuests, inp: &Input, g: &QuestGift, done: usize) -> 
             }
             r.name = "For the crew".into();
             r.gift_text = "30 DAYS".into();
-            r.gift_line = "m3llo+ for every member".into();
+            r.gift_line = "30 days of m3llo+\nfor every member in the crew".into();
         }
     }
     r

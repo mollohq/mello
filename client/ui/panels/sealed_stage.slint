@@ -329,14 +329,18 @@ global QuestCard {
         return r.content == "art" ? 125px : r.content == "link" ? 84px : r.content == "emoji" ? 48px : 150px;
     }
     public pure function top(r: QuestReveal) -> length {
-        let block = 24px + gift-h(r) + 18px + 36px + (r.gift-line != "" ? 26px : 0px) + (r.action1 != "" ? 46px : 0px);
+        let block = 24px + gift-h(r) + 18px + 36px + line-h(r) + (r.action1 != "" ? 46px : 0px);
         return 118px + (364px - block) / 2;
+    }
+    /// The line under the name: one row, or two for a long one.
+    public pure function line-h(r: QuestReveal) -> length {
+        return r.gift-line == "" ? 0px : r.gift-line.character-count > 38 ? 44px : 26px;
     }
     public pure function name-y(r: QuestReveal) -> length {
         return top(r) + 24px + gift-h(r) + 18px;
     }
     public pure function actions-y(r: QuestReveal) -> length {
-        return name-y(r) + 36px + (r.gift-line != "" ? 26px : 0px) + 10px;
+        return name-y(r) + 36px + line-h(r) + 10px;
     }
 }
 
@@ -382,6 +386,9 @@ component QuestFace inherits Rectangle {
 
     property <color> hue: H2hHue.of(root.reveal.hue-index);
     property <bool> wide: root.reveal.content == "art" || root.reveal.content == "link";
+    // The week and m3llo+ are a square gift: it stands in the middle, with
+    // its name and line under it.
+    property <bool> square: root.reveal.content == "week" || root.reveal.content == "plus";
 
     CutShape { width: parent.width; height: parent.height; n: 24px; corner: "bl"; fill: root.hue; }
     CutShape { width: parent.width; height: parent.height; n: 24px; corner: "bl"; inset: 2px; fill: Theme.card-bg; }
@@ -437,11 +444,17 @@ component QuestFace inherits Rectangle {
     }
     Rectangle { x: 26px; y: 118px; width: parent.width - 52px; height: 1px; background: Theme.card-border; }
 
-    Kicker { x: 26px; y: QuestCard.top(root.reveal); text: "UNLOCKED"; color: Theme.text-body; }
+    Kicker {
+        x: 26px; y: QuestCard.top(root.reveal);
+        width: parent.width - 52px;
+        horizontal-alignment: root.square ? center : left;
+        text: "UNLOCKED"; color: Theme.text-body;
+    }
 
     // The gift, in a frame of the hue.
     Rectangle {
-        x: 26px; y: QuestCard.top(root.reveal) + 24px;
+        x: root.square ? (parent.width - 150px) / 2 : 26px;
+        y: QuestCard.top(root.reveal) + 24px;
         width: root.wide ? parent.width - 52px : 150px;
         height: QuestCard.gift-h(root.reveal);
 
@@ -497,22 +510,32 @@ component QuestFace inherits Rectangle {
                 Text { text: "3"; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 40px; color: Theme.live; }
                 Text { text: "llo+"; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 40px; color: Theme.text-primary; }
             }
-            Kicker { text: root.reveal.gift-text; horizontal-alignment: center; }
+            // The days stand out in red, as the 3 of the mark.
+            Text {
+                text: root.reveal.gift-text;
+                horizontal-alignment: center;
+                font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 18px;
+                letter-spacing: 1px;
+                color: Theme.live;
+            }
         }
     }
 
     // Name and line.
     Text {
         x: 26px; y: QuestCard.name-y(root.reveal); width: parent.width - 52px;
+        horizontal-alignment: root.square ? center : left;
         text: root.reveal.name;
         font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 30px;
         color: Theme.text-primary; overflow: elide;
     }
     Text {
         x: 26px; y: QuestCard.name-y(root.reveal) + 38px; width: parent.width - 52px;
+        horizontal-alignment: root.square ? center : left;
         text: root.reveal.gift-line;
         font-family: Theme.font-body; font-weight: Theme.weight-sentence; font-size: 14px;
-        color: Theme.text-body; overflow: elide;
+        color: Theme.text-body;
+        wrap: word-wrap;
     }
 
     // Foot.
