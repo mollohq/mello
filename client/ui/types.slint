@@ -368,6 +368,11 @@ export struct FeedCardData {
     // Session card redesign (voice/stream): typed content, pre-formatted.
     session-kind: string,     // "stream" | "" (non-session cards)
     duration-human: string,   // "3m" / "9h 7m"
+    // The duration of a game session for StatValue: "2" "m", or "2" "h" "05".
+    // "~" leads the value when the card shows the active time.
+    duration-value: string,
+    duration-unit: string,
+    duration-tail: string,
     peak-count: int,          // stream: peak viewers; voice: peak participants
     channel-name: string,     // voice channel display name
     channel-id: string,       // voice channel id (the idle voice card joins it)

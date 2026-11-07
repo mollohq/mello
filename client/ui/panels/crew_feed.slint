@@ -14,6 +14,7 @@ import { GameArt } from "../components/game_art.slint";
 import { ClipPlayRing, DotWaveform } from "../components/clip_wave.slint";
 import { RecapDur, RecapKicker } from "../components/recap_parts.slint";
 import { StatValue } from "../components/stat.slint";
+import { MediaChip, FootageWash } from "../components/stream_hero.slint";
 
 component NewBadge inherits Rectangle {
     width: new-text.preferred-width + 12px;
@@ -1092,104 +1093,196 @@ component GameSessionRecordPanel inherits VerticalLayout {
     }
 }
 
-// Zero-telemetry session: icon + "X played Y" + duration, no empty stat slots.
-component GameSessionCompactBody inherits VerticalLayout {
+// A game session without a match record (GAME-SURFACING C1), in the
+// language of the stream card: the game's header art fills the card under the
+// black washes. The top wash carries the PLAYED chip with the age; the bottom
+// wash carries the game, the duration and who played. Without art: the tint
+// and the game's monogram. Chrome over the art is black, not the graphite
+// ramp. The card is not a control.
+component PlayedSessionCard inherits Rectangle {
     in property <FeedCardData> card;
-    in property <color> game-accent;
 
-    spacing: 8px;
-    alignment: start;
+    property <string> game-text: card.game-name != "" ? card.game-name : card.title;
+    property <string> players-text: card.participants-line != "" ? card.participants-line : card.actor-name;
+    /// The 9 px kicker stands on the baseline of the 11 px age (StatValue rule).
+    property <length> kicker-lift: max(0px, 11px * Theme.descent(Theme.font-body) - 9px * Theme.descent(Theme.font-label));
 
-    HorizontalLayout {
-        spacing: 10px;
-        cross-axis-alignment: center;
+    background: transparent;
+    border-width: 0px;
+    clip: true;
 
-        GameArt { game-id: card.game-id; monogram: card.game-monogram; hue-index: card.game-hue-index; icon: card.game-icon; has-icon: card.game-has-icon; capsule: card.game-capsule; has-capsule: card.game-has-capsule; size: 36px; }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        fill: Theme.card-border;
+    }
 
-        VerticalLayout {
-            spacing: 2px;
-            horizontal-stretch: 1;
-            alignment: start;
+    // The art sits inside the keyline.
+    Rectangle {
+        x: Theme.keyline;
+        y: Theme.keyline;
+        width: parent.width - 2 * Theme.keyline;
+        height: parent.height - 2 * Theme.keyline;
+        clip: true;
+        background: Theme.raised;
 
+        if root.card.game-has-capsule: Image {
+            width: parent.width;
+            height: parent.height;
+            source: root.card.game-capsule;
+            image-fit: cover;
+        }
+        if !root.card.game-has-capsule: Rectangle {
+            width: parent.width;
+            height: parent.height;
+            background: @linear-gradient(135deg, #2A2140 0%, Theme.card-bg-inset 100%);
             Text {
+                text: root.card.game-monogram;
                 font-family: Theme.font-display;
-                text: card.title != "" ? card.title : card.game-name;
-                font-size: 13px;
-                font-weight: Theme.weight-display;
-                color: Theme.text-primary;
-                overflow: elide;
-            }
-            if card.duration-human != "": Text {
-                font-family: Theme.font-display;
-                text: card.duration-human;
-                font-size: 20px;
                 font-weight: Theme.weight-display-bold;
+                font-size: parent.height * 0.42;
+                color: #FFFFFF12;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+        }
+        FootageWash { width: parent.width; height: parent.height; }
+    }
+
+    // The art reaches the cut corner: paint the corner back and draw its
+    // keyline, as the stream card does.
+    CutMask {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        fill: Theme.bg-app;
+    }
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: self.width / 1px;
+        viewbox-height: self.height / 1px;
+        stroke: Theme.card-border;
+        stroke-width: 1px;
+        commands: "M \{self.width / 1px} \{(self.height - Theme.notch) / 1px} L \{(self.width - Theme.notch) / 1px} \{self.height / 1px}";
+    }
+
+    // PLAYED | 4m ago
+    MediaChip {
+        x: 14px;
+        y: 14px;
+        row-align: CrossAxisAlignment.end;
+        VerticalLayout {
+            padding-bottom: root.kicker-lift;
+            Text {
+                text: "PLAYED";
+                font-family: Theme.font-label;
+                font-weight: Theme.weight-label;
+                font-size: 9px;
+                letter-spacing: 1.4px;
                 color: Theme.text-primary;
             }
         }
-    }
-
-    if card.participant-count > 1: HorizontalLayout {
-        spacing: 6px;
-        cross-axis-alignment: center;
-        height: 20px;
-
-        HorizontalLayout {
-            spacing: 4px;
-            alignment: start;
-            horizontal-stretch: 0;
-            UserAvatar {
-                initials: card.part0-initials != "" ? card.part0-initials : card.actor-initials;
-                avatar: card.part0-has-avatar ? card.part0-avatar : card.actor-avatar;
-                has-avatar: card.part0-has-avatar || card.actor-has-avatar;
-                color-index: 0;
-                size: 20px;
-            }
-            if card.participant-count > 1: UserAvatar {
-                initials: card.part1-initials;
-                avatar: card.part1-avatar;
-                has-avatar: card.part1-has-avatar;
-                color-index: 1;
-                size: 20px;
-            }
-            if card.participant-count > 2: UserAvatar {
-                initials: card.part2-initials;
-                avatar: card.part2-avatar;
-                has-avatar: card.part2-has-avatar;
-                color-index: 2;
-                size: 20px;
+        if root.card.timestamp != "": VerticalLayout {
+            padding-bottom: 2px;
+            Rectangle {
+                width: 1px;
+                height: 10px;
+                background: #FFFFFF47;
             }
         }
-
-        if card.participants-line != "": Text {
-            font-weight: Theme.weight-sentence;
+        if root.card.timestamp != "": Text {
+            text: root.card.timestamp;
             font-family: Theme.font-body;
-            text: card.participants-line;
+            font-weight: Theme.weight-sentence;
             font-size: 11px;
-            color: Theme.text-sub;
-            overflow: elide;
-            horizontal-stretch: 1;
+            color: #C9C9CF;
         }
     }
 
-    Rectangle { vertical-stretch: 1; }
+    // The game, the duration, who played.
+    VerticalLayout {
+        x: 16px;
+        y: parent.height - self.height - 14px;
+        width: parent.width - 32px;
+        height: self.preferred-height;
+        spacing: 4px;
 
-    Text {
-        font-weight: Theme.weight-sentence;
-        font-family: Theme.font-body;
-        text: card.timestamp;
-        font-size: 11px;
-        color: Theme.skel-text;
+        Text {
+            text: root.game-text;
+            font-family: Theme.font-display;
+            font-weight: Theme.weight-display;
+            font-size: 17px;
+            color: Theme.text-primary;
+            overflow: elide;
+        }
+        if root.card.duration-value != "": StatValue {
+            value: root.card.duration-value;
+            unit: root.card.duration-unit;
+            tail: root.card.duration-tail;
+            value-size: 22px;
+            unit-size: 13px;
+            value-weight: Theme.weight-display-bold;
+            hue: Theme.text-primary;
+            unit-color: #C9C9CF;
+        }
+        HorizontalLayout {
+            height: 22px;
+            padding-top: 2px;
+            spacing: 8px;
+            cross-axis-alignment: center;
+
+            HorizontalLayout {
+                spacing: 4px;
+                horizontal-stretch: 0;
+                UserAvatar {
+                    bg-color: #000000;
+                    initials: root.card.part0-initials != "" ? root.card.part0-initials : root.card.actor-initials;
+                    avatar: root.card.part0-has-avatar ? root.card.part0-avatar : root.card.actor-avatar;
+                    has-avatar: root.card.part0-has-avatar || root.card.actor-has-avatar;
+                    color-index: 0;
+                    size: 20px;
+                }
+                if root.card.participant-count > 1: UserAvatar {
+                    bg-color: #000000;
+                    initials: root.card.part1-initials;
+                    avatar: root.card.part1-avatar;
+                    has-avatar: root.card.part1-has-avatar;
+                    color-index: 1;
+                    size: 20px;
+                }
+                if root.card.participant-count > 2: UserAvatar {
+                    bg-color: #000000;
+                    initials: root.card.part2-initials;
+                    avatar: root.card.part2-avatar;
+                    has-avatar: root.card.part2-has-avatar;
+                    color-index: 2;
+                    size: 20px;
+                }
+            }
+            if root.players-text != "": Text {
+                text: root.players-text;
+                font-family: Theme.font-body;
+                font-weight: Theme.weight-sentence;
+                font-size: 13px;
+                color: #C9C9CF;
+                overflow: elide;
+                horizontal-stretch: 1;
+                min-width: 0px;
+            }
+        }
     }
 }
 
-// Rich game-session card for notable sessions (spec 19 B2); compact T0 variant
-// when the session has no W/L record (GAME-SURFACING C1).
+// Rich game-session card for notable sessions (spec 19 B2): a session with a
+// W/L record. A session without one is the PlayedSessionCard.
 component GameSessionCard inherits Rectangle {
     in property <FeedCardData> card;
 
     property <bool> has-record: card.game-matches > 0;
-    property <color> game-accent: card.game-has-color ? card.game-color : Theme.accent;
     property <color> record-color: card.game-streak-positive ? Theme.text-primary : Theme.live;
 
     background: transparent;
@@ -1210,17 +1303,6 @@ component GameSessionCard inherits Rectangle {
         corner: "br";
         inset: Theme.keyline;
         fill: Theme.card-bg;
-    }
-
-    if !has-record: VerticalLayout {
-        padding: 12px;
-        spacing: 0px;
-        alignment: start;
-
-        GameSessionCompactBody {
-            card: root.card;
-            game-accent: root.game-accent;
-        }
     }
 
     if has-record: VerticalLayout {
@@ -1668,7 +1750,10 @@ component FeedSlot inherits Rectangle {
     if card.card-type == "session": SessionCard {
         width: parent.width; height: parent.height; card: root.card;
     }
-    if card.card-type == "game-session": GameSessionCard {
+    if card.card-type == "game-session" && card.game-matches == 0: PlayedSessionCard {
+        width: parent.width; height: parent.height; card: root.card;
+    }
+    if card.card-type == "game-session" && card.game-matches > 0: GameSessionCard {
         width: parent.width; height: parent.height; card: root.card;
     }
     if card.card-type == "live-session": LiveSessionCard {

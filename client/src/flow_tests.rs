@@ -5953,10 +5953,10 @@ fn zero_telemetry_game_session_feed() -> mello_core::crew_events::FeedResponse {
     )
 }
 
-/// Zero-telemetry sessions must render the compact card shell, not empty W/L
-/// stat slots.
+/// Zero-telemetry sessions must render the played card, not empty W/L stat
+/// slots.
 #[test]
-fn zero_telemetry_game_session_renders_compact_card_without_record() {
+fn zero_telemetry_game_session_renders_the_played_card_without_record() {
     let mut h = Harness::new();
     tall_window(&h);
     logged_in_app(&mut h);
@@ -5965,18 +5965,18 @@ fn zero_telemetry_game_session_renders_compact_card_without_record() {
         response: zero_telemetry_game_session_feed(),
     });
 
+    let played: Vec<_> =
+        ElementHandle::find_by_element_type_name(h.app(), "PlayedSessionCard").collect();
+    assert!(
+        !played.is_empty(),
+        "expected a PlayedSessionCard in the feed for a zero-telemetry game session"
+    );
+
     let cards: Vec<_> =
         ElementHandle::find_by_element_type_name(h.app(), "GameSessionCard").collect();
     assert!(
-        !cards.is_empty(),
-        "expected a GameSessionCard in the feed for a zero-telemetry game session"
-    );
-
-    let compact: Vec<_> =
-        ElementHandle::find_by_element_type_name(h.app(), "GameSessionCompactBody").collect();
-    assert!(
-        !compact.is_empty(),
-        "zero-telemetry sessions must use the compact body, not the rich record layout"
+        cards.is_empty(),
+        "zero-telemetry sessions must not use the card with the record"
     );
 
     let record: Vec<_> =
@@ -8182,9 +8182,9 @@ fn a_session_card_without_art_wears_the_two_letter_monogram() {
             "{name}: the same monogram as every game tile"
         );
         assert_eq!(
-            count_of(&h, "GameArt"),
+            count_of(&h, "PlayedSessionCard"),
             1,
-            "{name}: the session card draws the shared game tile"
+            "{name}: the played card draws the monogram in place of the art"
         );
     }
 }
@@ -8329,8 +8329,9 @@ fn install_with_header(h: &Harness, appid: &str, name: &str, installed: bool) ->
 }
 
 /// One game id, one art form per frame shape. Brawlhalla has Steam art on
-/// disk and an exe icon. The session card and the NOW PLAYING pill (square
-/// frames) show the icon and never the header.
+/// disk and an exe icon. The tile of the card with the record and the NOW
+/// PLAYING pill (square frames) show the icon and never the header. The
+/// played card (a header frame) shows the header and never the icon.
 #[test]
 fn one_game_id_resolves_to_one_art_form_per_frame_shape() {
     // (installed list knows the game, id the session carries)
@@ -8348,15 +8349,29 @@ fn one_game_id_resolves_to_one_art_form_per_frame_shape() {
         let _art = install_with_header(&h, "291550", "Brawlhalla", installed);
         let case = format!("installed {installed}, id {wire_id}");
 
-        // Session card (40 px square) and the NOW PLAYING pill: both are
-        // icon slot frames, so both take the exe icon and never the header.
+        // The played card (a header frame) takes the Steam header on disk,
+        // under the same ids as the live card.
         h.ctx().game_icon_cache.borrow_mut().insert(
             "brawlhalla".into(),
             crate::avatar::rgba_to_image(&[255u8; 4 * 4 * 4], 4, 4),
         );
         let mut feed = zero_telemetry_game_session_feed();
         feed.zones.sessions[0].data["game_name"] = serde_json::json!("Brawlhalla");
+        feed.zones.sessions[0].data["game_id"] = serde_json::json!(wire_id);
+        h.emit(Event::FeedLoaded {
+            response: feed.clone(),
+        });
+        let card = first_card(&h);
+        assert!(
+            card.game_has_capsule && !card.game_has_icon,
+            "{case}: the played card takes the header, not the icon"
+        );
+
+        // The tile of the card with the record (40 px square) and the NOW
+        // PLAYING pill: both are icon slot frames, so both take the exe icon
+        // and never the header.
         feed.zones.sessions[0].data["game_id"] = serde_json::json!("brawlhalla");
+        feed.zones.sessions[0].data["wins"] = serde_json::json!(1);
         h.emit(Event::FeedLoaded { response: feed });
         let card = first_card(&h);
         assert!(
@@ -8702,7 +8717,7 @@ fn the_live_card_is_gone_after_the_session_end_and_the_session_card_is_there_onc
         ]),
     });
     assert_eq!(count_of(&h, "LiveSessionCard"), 0);
-    assert_eq!(count_of(&h, "GameSessionCard"), 1, "one session card");
+    assert_eq!(count_of(&h, "PlayedSessionCard"), 1, "one session card");
 }
 
 /// A fresh feed load keeps the live card: it is presence state, not a feed entry.
