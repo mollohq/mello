@@ -507,6 +507,19 @@ impl super::Client {
         }
     }
 
+    /// Read the sidebar state of crews that are not active. Unlike
+    /// `set_active_crew`, this keeps the server's active crew and subscriptions.
+    pub(super) async fn handle_refresh_sidebar_crews(&self, crew_ids: &[String]) {
+        match self.nakama.crew_state_get_sidebar(crew_ids).await {
+            Ok(crews) => {
+                let _ = self.event_tx.send(Event::SidebarUpdated { crews });
+            }
+            Err(e) => {
+                log::warn!("crew_state_get_sidebar failed: {}", e);
+            }
+        }
+    }
+
     pub(super) async fn handle_update_crew(
         &self,
         crew_id: &str,

@@ -475,6 +475,11 @@ pub enum Command {
     SubscribeSidebar {
         crew_ids: Vec<String>,
     },
+    /// Read the sidebar state of the crews again (`crew_state_get_sidebar`).
+    /// It does not change the active crew or the subscriptions.
+    RefreshSidebarCrews {
+        crew_ids: Vec<String>,
+    },
 
     // --- Clips ---
     StartClipBuffer,

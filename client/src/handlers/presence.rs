@@ -845,10 +845,19 @@ pub fn handle(ctx: &AppContext, event: Event) {
         Event::CrewEventReceived { event } => {
             log::info!("UI: crew event {} in crew {}", event.event, event.crew_id);
             let crew_id = event.crew_id.clone();
-            let _ = ctx.cmd_tx.send(Command::SetActiveCrew {
-                crew_id: crew_id.clone(),
-            });
-            let _ = ctx.cmd_tx.send(Command::LoadCrewFeed { crew_id });
+            // The server sends 111 to sidebar subscribers too. set_active_crew
+            // moves the server's active crew and its subscriptions, so it is
+            // only for the open crew. Another crew gets a read-only sidebar read.
+            if ctx.app.get_active_crew_id() == crew_id.as_str() {
+                let _ = ctx.cmd_tx.send(Command::SetActiveCrew {
+                    crew_id: crew_id.clone(),
+                });
+                let _ = ctx.cmd_tx.send(Command::LoadCrewFeed { crew_id });
+            } else {
+                let _ = ctx.cmd_tx.send(Command::RefreshSidebarCrews {
+                    crew_ids: vec![crew_id],
+                });
+            }
         }
         Event::FeedChanged { crew_id } => {
             // The core loads the feed of the active crew, at most once every

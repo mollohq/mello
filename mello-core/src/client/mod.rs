@@ -1199,6 +1199,9 @@ impl Client {
             Command::SubscribeSidebar { crew_ids } => {
                 self.handle_subscribe_sidebar(&crew_ids).await;
             }
+            Command::RefreshSidebarCrews { crew_ids } => {
+                self.handle_refresh_sidebar_crews(&crew_ids).await;
+            }
 
             // --- Clips ---
             Command::StartClipBuffer => {
