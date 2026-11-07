@@ -364,17 +364,17 @@ export component PreviewFeedJoinCall inherits Panel {
 // ── Crew quests (mockup feed-quests.html, frames 1, 2, 8, 9) ──────────
 
 global Q {
-    out property <QuestGift> banner-ready: { key: "quest:banner:c1", label: "BANNER", state: "ready", can-open: true, bright: SealedFixtures.gift-ready-bright, dim: SealedFixtures.gift-ready-dim };
+    out property <QuestGift> banner-ready: { key: "quest:banner:c1", label: "DROP 1", state: "ready", can-open: true, bright: SealedFixtures.gift-ready-bright, dim: SealedFixtures.gift-ready-dim };
     out property <QuestGift> banner-open: { key: "quest:banner:c1", label: "BANNER", state: "open", content: "art", art: @image-url("fixtures/stream-sample-2.png"), has-art: true };
-    out property <QuestGift> link-locked: { key: "quest:friend:c1", label: "INVITE LINK", state: "locked", dim: SealedFixtures.gift-locked-dim };
-    out property <QuestGift> link-ready: { key: "quest:friend:c1", label: "INVITE LINK", state: "ready", can-open: true, bright: SealedFixtures.gift-ready-bright, dim: SealedFixtures.gift-ready-dim };
+    out property <QuestGift> link-locked: { key: "quest:friend:c1", label: "DROP 2", state: "locked", dim: SealedFixtures.gift-locked-dim };
+    out property <QuestGift> link-ready: { key: "quest:friend:c1", label: "DROP 2", state: "ready", can-open: true, bright: SealedFixtures.gift-ready-bright, dim: SealedFixtures.gift-ready-dim };
     out property <QuestGift> link-open: { key: "quest:friend:c1", label: "INVITE LINK", state: "open", content: "link" };
-    out property <QuestGift> emoji-locked: { key: "quest:call:c1", label: "CREW EMOJI", state: "locked", dim: SealedFixtures.gift-locked-dim };
-    out property <QuestGift> emoji-member: { key: "quest:call:c1", label: "CREW EMOJI", state: "ready", can-open: false, bright: SealedFixtures.gift-member-bright, dim: SealedFixtures.gift-member-dim };
+    out property <QuestGift> emoji-locked: { key: "quest:call:c1", label: "DROP 3", state: "locked", dim: SealedFixtures.gift-locked-dim };
+    out property <QuestGift> emoji-member: { key: "quest:call:c1", label: "DROP 3", state: "ready", can-open: false, bright: SealedFixtures.gift-member-bright, dim: SealedFixtures.gift-member-dim };
     out property <QuestGift> emoji-open: { key: "quest:call:c1", label: "CREW EMOJI", state: "open", content: "emoji", art: Crew.ida.avatar, has-art: true };
-    out property <QuestGift> week-locked: { key: "quest:clip:c1", label: "FIRST WEEK", state: "locked", dim: SealedFixtures.gift-locked-dim };
+    out property <QuestGift> week-locked: { key: "quest:clip:c1", label: "DROP 4", state: "locked", dim: SealedFixtures.gift-locked-dim };
     out property <QuestGift> week-open: { key: "quest:clip:c1", label: "FIRST WEEK", state: "open", content: "week", text: "W45" };
-    out property <QuestGift> plus-locked: { key: "quest:session:c1", label: "M3LLO+ 30 D", state: "locked", big: true, dim: SealedFixtures.gift-locked-big-dim };
+    out property <QuestGift> plus-locked: { key: "quest:session:c1", label: "DROP 5", state: "locked", big: true, dim: SealedFixtures.gift-locked-big-dim };
 
     out property <QuestRow> made: { name: "Crew made", done: true, meta: "bob_test_26" };
     out property <QuestRow> friend-todo: { name: "A friend joins", meta: "Works in the browser", action: "invite" };

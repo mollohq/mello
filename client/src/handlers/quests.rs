@@ -18,7 +18,9 @@ const DAY_MS: i64 = 86_400_000;
 
 /// The steps in order. Each step unlocks the gift at the same index.
 pub(crate) const STEPS: [&str; 5] = ["made", "friend", "call", "clip", "session"];
-const LABELS: [&str; 5] = [
+/// The name of a gift, shown once it is open. Until then it is "DROP 1" to
+/// "DROP 5": what is in it stays a surprise.
+const NAMES: [&str; 5] = [
     "BANNER",
     "INVITE LINK",
     "CREW EMOJI",
@@ -120,7 +122,7 @@ fn gift(i: usize, q: &ZoneQuests, inp: &Input, done: bool, owner: bool, opened: 
     let seed = sealed::quest_seed(STEPS[i], inp.crew_id);
     let mut g = QuestGift {
         key: key.into(),
-        label: LABELS[i].into(),
+        label: format!("DROP {}", i + 1).into(),
         big: i == 4,
         content: CONTENT[i].into(),
         ..Default::default()
@@ -143,6 +145,7 @@ fn gift(i: usize, q: &ZoneQuests, inp: &Input, done: bool, owner: bool, opened: 
         g.dim = dim.into();
     } else {
         g.state = "open".into();
+        g.label = NAMES[i].into();
         match i {
             0 => {
                 if let Some(art) = &inp.banner_art {
@@ -382,6 +385,12 @@ mod tests {
         assert!(c.gifts[0].can_open, "the owner opens the banner");
         assert!(!c.gifts[0].bright.is_empty(), "a ready gift has its field");
         assert!(c.gifts[4].big, "the last gift is the big one");
+        let labels: Vec<String> = c.gifts.iter().map(|g| g.label.to_string()).collect();
+        assert_eq!(
+            labels,
+            ["DROP 1", "DROP 2", "DROP 3", "DROP 4", "DROP 5"],
+            "a gift is a mystery until it is open"
+        );
         assert_eq!(c.rows[1].action, "invite");
         assert_eq!(c.rows[2].action, "voice");
         assert_eq!(c.rows[3].key_cap, "F8");
@@ -398,6 +407,11 @@ mod tests {
         });
         let c = build(&q, &input("own", &opened)).expect("card");
         assert_eq!(states(&c), ["open", "ready", "locked", "locked", "locked"]);
+        assert_eq!(c.gifts[0].label, "BANNER", "an open gift shows its name");
+        assert_eq!(
+            c.gifts[1].label, "DROP 2",
+            "a ready gift is still a mystery"
+        );
         assert_eq!(c.count, "2 / 5");
         assert_eq!(c.fill, 0.25);
         assert_eq!(c.rows[1].title, "Ida joined");
