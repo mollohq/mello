@@ -792,8 +792,8 @@ func questsGrantPlus(ctx context.Context, logger runtime.Logger, nk runtime.Naka
 // pushCrewGiftsChanged tells the members who have the crew open that a gift
 // changed: the banner, the invite name or the crew emoji. It is a crew event
 // (code 111), which makes the client load crew state and the feed again. Only
-// the open crew gets it: a crew event on a sidebar crew would switch the
-// active crew of the client.
+// the members with the crew open get it: the gifts draw in the open crew, and
+// a sidebar crew has nothing to load again.
 func pushCrewGiftsChanged(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID, gift string) {
 	content := map[string]interface{}{
 		"type":    "crew_event",

@@ -607,8 +607,8 @@ func (f *fakeQuestsNk) ChannelMessagesList(_ context.Context, _ string, _ int, _
 
 // A member adds an emoji. The owner has the crew open and gets a crew event,
 // so the client loads crew state with the new emoji (seen in a local journey,
-// 2026-11-07). A member with the crew only in the sidebar gets none: on the
-// client a crew event makes its crew the active one.
+// 2026-11-07). A member with the crew only in the sidebar gets none: the
+// gifts draw only in the open crew.
 func TestAGiftChangeTellsTheOpenCrewOnly(t *testing.T) {
 	nk := giftsCrew(t)
 	markStep(t, nk, "gc", func(q *CrewQuests) { q.Steps.Call = &QuestCall{DoneMs: 1} })
