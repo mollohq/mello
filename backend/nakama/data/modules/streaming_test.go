@@ -45,7 +45,7 @@ func seedStreamCrew(t *testing.T) *fakeStreamNk {
 func startTestStream(t *testing.T, nk *fakeStreamNk) string {
 	t.Helper()
 	out, err := StartStreamRPC(ctxWithUser(sfuOnlyUser), testLogger(), nil, nk,
-		`{"crew_id":"`+sfuOnlyCrew+`","title":"Raid night"}`)
+		`{"crew_id":"`+sfuOnlyCrew+`","title":"Raid night","igdb_id":1234}`)
 	if err != nil {
 		t.Fatalf("start_stream: %v", err)
 	}
@@ -149,7 +149,8 @@ func TestStartStreamResume_RestoresTheCleanedUpStream(t *testing.T) {
 		t.Fatalf("resume response %s, want session %s on %s", out, sessionID, before.SFUEndpoint)
 	}
 	meta := readStreamMeta(context.Background(), nk, sfuOnlyCrew)
-	if meta == nil || meta.StreamID != sessionID || meta.StreamerID != sfuOnlyUser || meta.Title != "Raid night" {
+	if meta == nil || meta.StreamID != sessionID || meta.StreamerID != sfuOnlyUser || meta.Title != "Raid night" ||
+		meta.IgdbID != 1234 {
 		t.Fatalf("stream meta after resume: %+v", meta)
 	}
 	if after := loadStreamSession(context.Background(), nk, sessionID); after == nil || *after != *before {
@@ -274,7 +275,7 @@ func TestStopStream_LedgerKeepsPeakAndAllViewers(t *testing.T) {
 func startTestStreamOnLive(t *testing.T, nk *fakeStreamNk) string {
 	t.Helper()
 	out, err := StartStreamRPC(ctxWithUser(sfuOnlyUser), testLogger(), nil, nk,
-		`{"crew_id":"`+sfuOnlyCrew+`","title":"Raid night","width":1280,"height":720,"fps":60,"advertise":"on_live"}`)
+		`{"crew_id":"`+sfuOnlyCrew+`","title":"Raid night","width":1280,"height":720,"fps":60,"igdb_id":1234,"advertise":"on_live"}`)
 	if err != nil {
 		t.Fatalf("start_stream: %v", err)
 	}
@@ -373,11 +374,65 @@ func TestStreamLive_SecondCallChangesNothing(t *testing.T) {
 func TestStreamStartedPayload_CarriesModeSizeAndRate(t *testing.T) {
 	data := streamStartedPayload(streamAdvert{
 		SessionID: "s1", HostID: "h1", HostName: "alice", Title: "t",
-		Width: 1280, Height: 720, Fps: 60,
+		Width: 1280, Height: 720, Fps: 60, IgdbID: 1234,
 	})
 	if data["mode"] != "sfu" || data["width"] != uint32(1280) || data["height"] != uint32(720) ||
-		data["fps"] != uint32(60) || data["stream_id"] != "s1" {
+		data["fps"] != uint32(60) || data["stream_id"] != "s1" || data["igdb_id"] != uint32(1234) {
 		t.Fatalf("stream_started data %v", data)
+	}
+}
+
+func streamPicture(nk *fakeStreamNk, userID, sessionID string) (string, error) {
+	return StreamPictureRPC(ctxWithUser(userID), testLogger(), nil, nk,
+		`{"crew_id":"`+sfuOnlyCrew+`","session_id":"`+sessionID+`"}`)
+}
+
+func pictureURL(t *testing.T, out string) string {
+	t.Helper()
+	var resp struct {
+		URL *string `json:"url"`
+	}
+	if err := json.Unmarshal([]byte(out), &resp); err != nil || resp.URL == nil {
+		t.Fatalf("stream_picture response %q: %v", out, err)
+	}
+	return *resp.URL
+}
+
+// The tests have no snapshots S3, so a crew member gets an empty URL for the
+// live stream, and no error.
+func TestStreamPicture_NoSnapshotsGivesEmptyURL(t *testing.T) {
+	nk := seedStreamCrew(t)
+	sessionID := startTestStream(t, nk)
+
+	out, err := streamPicture(nk, streamTestViewer, sessionID)
+	if err != nil {
+		t.Fatalf("stream_picture: %v", err)
+	}
+	if url := pictureURL(t, out); url != "" {
+		t.Fatalf("want an empty URL, got %q", url)
+	}
+}
+
+// A user that is not a crew member gets PERMISSION_DENIED.
+func TestStreamPicture_NonMemberIsRejected(t *testing.T) {
+	nk := seedStreamCrew(t)
+	sessionID := startTestStream(t, nk)
+
+	_, err := streamPicture(nk, "user-not-in-crew-0009", sessionID)
+	assertRuntimeCode(t, err, 7)
+}
+
+// A session id that is not the live stream gives an empty URL, and no error.
+func TestStreamPicture_OtherSessionGivesEmptyURL(t *testing.T) {
+	nk := seedStreamCrew(t)
+	startTestStream(t, nk)
+
+	out, err := streamPicture(nk, streamTestViewer, "stream-that-ended")
+	if err != nil {
+		t.Fatalf("stream_picture: %v", err)
+	}
+	if url := pictureURL(t, out); url != "" {
+		t.Fatalf("want an empty URL, got %q", url)
 	}
 }
 

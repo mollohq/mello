@@ -313,6 +313,10 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("stream_live", StreamLiveRPC); err != nil {
 		return err
 	}
+	// The stream card picture before a viewer joins.
+	if err := initializer.RegisterRpc("stream_picture", StreamPictureRPC); err != nil {
+		return err
+	}
 	if err := initializer.RegisterRpc("refresh_stream_token", RefreshStreamTokenRPC); err != nil {
 		return err
 	}

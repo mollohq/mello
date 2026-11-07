@@ -1067,6 +1067,14 @@ height) with the 1 s `StreamViewerTimeline` values: DELAY (target delay),
 JITTER, DECODE (p95), LATE (frames released after their decode deadline),
 AUDIO (game-audio delay) and A/V (offset, positive when the audio is late).
 AUDIO and A/V show "-" when the stream has no game audio. The switch stays for
+**The picture before you watch.** The card of a stream that you did not
+join shows the newest SFU snapshot of the session. The client calls
+`stream_picture` {crew_id, session_id} every 15 s. The RPC gives the public
+URL of the newest snapshot, or an empty URL on an SFU without snapshots.
+Without a snapshot the card shows the hero art of the game (local Steam), else
+the tint and the monogram. The stream records and the crew state keep the
+host's `igdb_id` from `start_stream`, so the card knows the game.
+
 the session.
 
 ---
