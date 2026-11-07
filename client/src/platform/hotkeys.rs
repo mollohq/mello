@@ -28,6 +28,11 @@ pub const DEFAULT_CLIP_KEY: &str = "F7";
 /// macOS. Keybinds in Settings changes it.
 pub const DEFAULT_GAME_CLIP_KEY: &str = "F8";
 
+/// The stream key (spec 12 section 11, "Stream key"), in the same format.
+/// A press starts a stream of the detected game, or ends the hosted stream.
+/// Keybinds in Settings changes it.
+pub const DEFAULT_STREAM_KEY: &str = "F9";
+
 /// One step of the clip key: `held` is true while the key is down, so a
 /// key that auto-repeats clips once. Returns true on the press that clips.
 /// The modifiers must match the binding. A PTT binding on the same keys
@@ -67,6 +72,8 @@ pub struct HotkeyManager {
     clip_rx: mpsc::Receiver<()>,
     game_clip_binding: Arc<Mutex<Option<PttBinding>>>,
     game_clip_rx: mpsc::Receiver<()>,
+    stream_binding: Arc<Mutex<Option<PttBinding>>>,
+    stream_rx: mpsc::Receiver<()>,
 }
 
 impl HotkeyManager {
@@ -80,6 +87,7 @@ impl HotkeyManager {
         let (_tx, event_rx) = mpsc::channel();
         let (_clip_tx, clip_rx) = mpsc::channel();
         let (_game_clip_tx, game_clip_rx) = mpsc::channel();
+        let (_stream_tx, stream_rx) = mpsc::channel();
         Self {
             binding: Arc::new(Mutex::new(None)),
             active: Arc::new(AtomicBool::new(false)),
@@ -88,6 +96,8 @@ impl HotkeyManager {
             clip_rx,
             game_clip_binding: Arc::new(Mutex::new(None)),
             game_clip_rx,
+            stream_binding: Arc::new(Mutex::new(None)),
+            stream_rx,
         }
     }
 
@@ -99,6 +109,8 @@ impl HotkeyManager {
         let (clip_tx, clip_rx) = mpsc::channel();
         let game_clip_binding: Arc<Mutex<Option<PttBinding>>> = Arc::new(Mutex::new(None));
         let (game_clip_tx, game_clip_rx) = mpsc::channel();
+        let stream_binding: Arc<Mutex<Option<PttBinding>>> = Arc::new(Mutex::new(None));
+        let (stream_tx, stream_rx) = mpsc::channel();
 
         start_listener(
             binding.clone(),
@@ -108,6 +120,8 @@ impl HotkeyManager {
             clip_tx,
             game_clip_binding.clone(),
             game_clip_tx,
+            stream_binding.clone(),
+            stream_tx,
         )?;
 
         Ok(Self {
@@ -118,6 +132,8 @@ impl HotkeyManager {
             clip_rx,
             game_clip_binding,
             game_clip_rx,
+            stream_binding,
+            stream_rx,
         })
     }
 
@@ -158,11 +174,26 @@ impl HotkeyManager {
     pub fn poll_game_clip(&self) -> bool {
         self.game_clip_rx.try_recv().is_ok()
     }
+
+    /// The stream key (F9). `None` turns the key off. It keeps its own held
+    /// state, apart from the clip keys.
+    pub fn register_stream(&self, binding: Option<PttBinding>) {
+        *self
+            .stream_binding
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = binding;
+    }
+
+    /// True once for each press of the stream key since the last call.
+    pub fn poll_stream(&self) -> bool {
+        self.stream_rx.try_recv().is_ok()
+    }
 }
 
 // ── macOS: direct CGEventTap (avoids rdev's TSM crash on bg threads) ───────
 
 #[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
 fn start_listener(
     binding: Arc<Mutex<Option<PttBinding>>>,
     active: Arc<AtomicBool>,
@@ -171,6 +202,8 @@ fn start_listener(
     clip_tx: mpsc::Sender<()>,
     game_clip_binding: Arc<Mutex<Option<PttBinding>>>,
     game_clip_tx: mpsc::Sender<()>,
+    stream_binding: Arc<Mutex<Option<PttBinding>>>,
+    stream_tx: mpsc::Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::os::raw::c_void;
 
@@ -200,9 +233,12 @@ fn start_listener(
         clip_tx: mpsc::Sender<()>,
         game_clip_binding: Arc<Mutex<Option<PttBinding>>>,
         game_clip_tx: mpsc::Sender<()>,
+        stream_binding: Arc<Mutex<Option<PttBinding>>>,
+        stream_tx: mpsc::Sender<()>,
         ptt_held: bool,
         clip_held: bool,
         game_clip_held: bool,
+        stream_held: bool,
         prev_modifier_flags: u64,
     }
 
@@ -262,6 +298,39 @@ fn start_listener(
             ) {
                 log::info!("[hotkeys] game clip key pressed");
                 let _ = ctx.game_clip_tx.send(());
+            }
+        }
+
+        // The stream key (F9), with its own held state: a held key starts
+        // or ends one stream.
+        let stream = ctx
+            .stream_binding
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let (Some(stream), true) = (stream, ev == K_CG_EVENT_KEY_DOWN || ev == K_CG_EVENT_KEY_UP)
+        {
+            let vk = CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE) as u16;
+            let flags = CGEventGetFlags(event);
+            let mods_match = (flags & FLAG_CONTROL != 0) == stream.ctrl
+                && (flags & FLAG_ALT != 0) == stream.alt
+                && (flags & FLAG_SHIFT != 0) == stream.shift
+                && (flags & FLAG_COMMAND != 0) == stream.meta;
+            let ptt_on_key = ptt_on_clip_key(
+                &ctx.binding
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                &stream,
+            ) && ctx.active.load(Ordering::Relaxed);
+            if clip_key_step(
+                &mut ctx.stream_held,
+                Some(vk) == code_str_to_macos_vk(&stream.code_str),
+                ev == K_CG_EVENT_KEY_DOWN,
+                mods_match,
+                ptt_on_key,
+            ) {
+                log::info!("[hotkeys] stream key pressed");
+                let _ = ctx.stream_tx.send(());
             }
         }
 
@@ -339,9 +408,12 @@ fn start_listener(
         clip_tx,
         game_clip_binding,
         game_clip_tx,
+        stream_binding,
+        stream_tx,
         ptt_held: false,
         clip_held: false,
         game_clip_held: false,
+        stream_held: false,
         prev_modifier_flags: 0,
     });
     // Safety: Ctx only contains Send types (Arc, mpsc::Sender, bool, u64).
@@ -489,6 +561,7 @@ fn code_str_to_macos_vk(s: &str) -> Option<u16> {
 // ── Windows and Linux X11: rdev listener ──────────────────────────────────
 
 #[cfg(target_os = "windows")]
+#[allow(clippy::too_many_arguments)]
 fn start_listener(
     binding: Arc<Mutex<Option<PttBinding>>>,
     active: Arc<AtomicBool>,
@@ -497,6 +570,8 @@ fn start_listener(
     clip_tx: mpsc::Sender<()>,
     game_clip_binding: Arc<Mutex<Option<PttBinding>>>,
     game_clip_tx: mpsc::Sender<()>,
+    stream_binding: Arc<Mutex<Option<PttBinding>>>,
+    stream_tx: mpsc::Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     start_rdev_listener(
         binding,
@@ -506,12 +581,15 @@ fn start_listener(
         clip_tx,
         game_clip_binding,
         game_clip_tx,
+        stream_binding,
+        stream_tx,
     )
 }
 
 /// Linux: the GlobalShortcuts portal on Wayland (`rdev` sees no key while
 /// another app's window has focus there), `rdev` on X11.
 #[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
 fn start_listener(
     binding: Arc<Mutex<Option<PttBinding>>>,
     active: Arc<AtomicBool>,
@@ -520,11 +598,15 @@ fn start_listener(
     clip_tx: mpsc::Sender<()>,
     game_clip_binding: Arc<Mutex<Option<PttBinding>>>,
     game_clip_tx: mpsc::Sender<()>,
+    stream_binding: Arc<Mutex<Option<PttBinding>>>,
+    stream_tx: mpsc::Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if super::linux_shortcuts::wayland_session() {
         // Game clips are Windows only (CLIPS.md 15.14): the portal
-        // binds no game clip key.
+        // binds no game clip key. It binds no stream key either (spec 12
+        // section 11, "Stream key").
         drop(game_clip_tx);
+        drop(stream_tx);
         super::linux_shortcuts::start(binding, active, event_tx, clip_binding, clip_tx)
     } else {
         start_rdev_listener(
@@ -535,11 +617,14 @@ fn start_listener(
             clip_tx,
             game_clip_binding,
             game_clip_tx,
+            stream_binding,
+            stream_tx,
         )
     }
 }
 
 #[cfg(not(target_os = "macos"))]
+#[allow(clippy::too_many_arguments)]
 fn start_rdev_listener(
     binding: Arc<Mutex<Option<PttBinding>>>,
     active: Arc<AtomicBool>,
@@ -548,6 +633,8 @@ fn start_rdev_listener(
     clip_tx: mpsc::Sender<()>,
     game_clip_binding: Arc<Mutex<Option<PttBinding>>>,
     game_clip_tx: mpsc::Sender<()>,
+    stream_binding: Arc<Mutex<Option<PttBinding>>>,
+    stream_tx: mpsc::Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use rdev::{self, EventType, Key};
 
@@ -672,6 +759,8 @@ fn start_rdev_listener(
             let mut clip_held = false;
             // The game clip key keeps its own held state (CLIPS.md 15.2).
             let mut game_clip_held = false;
+            // The stream key keeps its own held state too.
+            let mut stream_held = false;
 
             if let Err(e) = rdev::listen(move |event| {
                 let (key, pressed) = match event.event_type {
@@ -710,6 +799,28 @@ fn start_rdev_listener(
                     ) {
                         log::info!("[hotkeys] game clip key pressed");
                         let _ = game_clip_tx.send(());
+                    }
+                }
+                let stream = stream_binding
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
+                if let Some(stream) = stream {
+                    let ptt_on_key = ptt_on_clip_key(
+                        &binding
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner),
+                        &stream,
+                    ) && active.load(Ordering::Relaxed);
+                    if clip_key_step(
+                        &mut stream_held,
+                        Some(key) == code_str_to_rdev_key(&stream.code_str),
+                        pressed,
+                        clip_mods.matches(&stream),
+                        ptt_on_key,
+                    ) {
+                        log::info!("[hotkeys] stream key pressed");
+                        let _ = stream_tx.send(());
                     }
                 }
 
@@ -1017,6 +1128,36 @@ mod tests {
         assert!(ptt_on_clip_key(&Some(f7.clone()), &f7));
         assert!(!ptt_on_clip_key(&Some(ctrl_f7), &f7));
         assert!(!ptt_on_clip_key(&None, &f7));
+    }
+
+    #[test]
+    fn the_default_stream_key_parses() {
+        let (b, label) = parse_ptt_string(DEFAULT_STREAM_KEY).expect("default stream key");
+        assert_eq!(b.code_str, "F9");
+        assert!(!(b.ctrl || b.alt || b.shift || b.meta));
+        assert_eq!(label, "F9");
+    }
+
+    /// The stream key has its own held state: the game clip key that is
+    /// still held does not hide a press of the stream key, and a stream key
+    /// that auto-repeats gives one press.
+    #[test]
+    fn the_stream_key_keeps_its_own_held_state() {
+        let mut game_clip_held = false;
+        let mut stream_held = false;
+        // F8 goes down and stays down.
+        assert!(clip_key_step(&mut game_clip_held, true, true, true, false));
+        // F9 goes down while F8 is held: one stream press.
+        assert!(!clip_key_step(
+            &mut game_clip_held,
+            false,
+            true,
+            true,
+            false
+        ));
+        assert!(clip_key_step(&mut stream_held, true, true, true, false));
+        // F9 repeats: no second press.
+        assert!(!clip_key_step(&mut stream_held, true, true, true, false));
     }
 
     #[test]

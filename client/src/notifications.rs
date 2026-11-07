@@ -47,6 +47,36 @@ pub fn notify_closed_to_tray() -> bool {
     }
 }
 
+/// Shows an OS notification with this text.
+///
+/// A seam (`AppContext::stream_key_notice`): the test harness sets none, so
+/// a test never posts a real notification.
+pub type ShowText = Box<dyn Fn(&str)>;
+
+/// The stream key started a stream, and the stream is live.
+pub const STREAM_KEY_LIVE: &str = "You are live";
+/// The stream key ended the stream.
+pub const STREAM_KEY_ENDED: &str = "Stream ended";
+/// The stream that the stream key started did not start.
+pub const STREAM_KEY_FAILED: &str = "Stream failed";
+/// The stream key found no active crew.
+pub const STREAM_KEY_NO_CREW: &str = "Pick a crew to stream to";
+/// The stream key found no detected game.
+pub const STREAM_KEY_NO_GAME: &str = "No game to stream";
+
+/// The result of a press of the stream key (spec 12 section 11). The user
+/// plays in fullscreen and does not see the app, so the OS tells them.
+pub fn notify_stream_key(text: &str) {
+    if let Err(e) = notification()
+        .summary("Stream")
+        .body(text)
+        .timeout(notify_rust::Timeout::Milliseconds(4000))
+        .show()
+    {
+        log::warn!("[stream key] notice {text:?} not shown: {e}");
+    }
+}
+
 pub fn notify_member_joined(name: &str) {
     notification()
         .summary("Crew")

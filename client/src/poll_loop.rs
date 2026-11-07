@@ -279,6 +279,15 @@ impl PollState {
                 crate::game_clip::game_clip_key_pressed(poll_ctx);
             }
 
+            // --- Stream key (F9) ---
+            while poll_ctx.hotkey_mgr.borrow().poll_stream() {
+                crate::stream_key::stream_key_pressed(poll_ctx);
+            }
+            #[cfg(feature = "e2e")]
+            for _ in 0..crate::e2e_state::take_stream_keys() {
+                crate::stream_key::stream_key_pressed(poll_ctx);
+            }
+
             // --- HUD foreground monitor + state push ---
             if poll_ctx.hud_manager.is_enabled() {
                 // Update foreground monitor with current voice state

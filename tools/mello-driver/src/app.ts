@@ -664,6 +664,15 @@ export class App {
     if (!r.ok) throw new DriverError(`${this.name}: gameClipKey failed: HTTP ${r.status} ${await r.text()}`);
   }
 
+  /**
+   * Press the stream key (F9) once, through the real key path. E2e builds
+   * only (`POST /stream-key`).
+   */
+  async streamKey(): Promise<void> {
+    const r = await fetch(`http://127.0.0.1:${this.statePort}/stream-key`, { method: "POST" });
+    if (!r.ok) throw new DriverError(`${this.name}: streamKey failed: HTTP ${r.status} ${await r.text()}`);
+  }
+
   /** The controls on screen that declare accessible-enabled: false. */
   async disabledControls(): Promise<DisabledControl[]> {
     const r = await fetch(`http://127.0.0.1:${this.statePort}/disabled`);
