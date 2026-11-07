@@ -25,9 +25,11 @@ type StartStreamRequest struct {
 	// Exe is the game executable name (e.g. "Heaven.exe"), for logging and
 	// policy-mismatch diagnostics only.
 	Exe string `json:"exe,omitempty"`
-	// IgdbID is the catalogue identity of the captured process, for logging
-	// only. The client supplies it and the server cannot verify it. The
-	// client matches it against the capture block lists.
+	// IgdbID is the catalogue identity of the captured process. The client
+	// supplies it and the server cannot verify it. It goes to the stream
+	// records, the stream_started push and the crew state, so a viewer's
+	// card knows the game. The client matches it against the capture block
+	// lists.
 	IgdbID uint32 `json:"igdb_id,omitempty"`
 	// PreferredRegion is optional: an SFU region from sfu_routing.go for the
 	// host's session. Viewers join the host's region (watch_stream). An empty

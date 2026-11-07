@@ -305,6 +305,8 @@ badge on the game colour when extraction fails.
 The art Worker, its cache and its interface are in `specs/features/GAME-ART.md`.
 
 One art form per frame shape. A game never shows in two forms side by side.
+The stream card is the one exception: the `hero` art is the picture behind the
+card, and the `icon` tile is on its game line.
 The `capsule` slot is not used in any frame.
 
 | Frame | Slot | Ladder, first hit wins |
@@ -322,7 +324,8 @@ The `capsule` slot is not used in any frame.
 | Settings, game integration rows | Square 36 px | `icon` |
 | Settings, hidden games rows | Square 28 px | `icon` |
 | Recent games, list row | Square 48 px | `icon` |
-| Session card, stream card | Square 40 px | `icon` |
+| Session card | Square 40 px | `icon` |
+| Stream card, game line | Square 18 px | `icon` |
 | Game session compact body | Square 32 or 36 px | `icon` |
 | Live session card tile | Square 40 px | `icon` |
 | Recap card, game tile | Wide | `header` |
@@ -330,6 +333,7 @@ The `capsule` slot is not used in any frame.
 | Opened recap, games grid | Wide | `header` |
 | Board top game (Today, Week) | Wide | `header` |
 | Live session card, 420 px or wider | Poster | `hero` |
+| Stream card, before the first SFU picture, and the hosted card | Poster | `hero` |
 
 `GameArt` enforces the rule. A frame with `art-width` set draws `capsule`
 (header art) and never `icon`. A frame without it draws `icon` and never

@@ -25,7 +25,7 @@ no other layout rule.
 The feed has cards only. There are no headings or label lines outside a card.
 The You strip (spec 19 section 2.3) stays pinned above the zones.
 
-Red is state. A live stream on the Stage wears the red keyline. A clip never
+Red is state. A live stream on the Stage wears the red LIVE tag. A clip never
 wears a red border; an unread clip keeps its red tag.
 
 ## 2. Stage
@@ -33,7 +33,8 @@ wears a red border; an unread clip keeps its red tag.
 The Stage holds one card. The first of these that exists wins:
 
 1. A live stream. It is client state (`crew_state`), so the client puts it on
-   the Stage ahead of the payload.
+   the Stage ahead of the payload. While you watch it, the Stage is at least
+   as high as the watched card (spec 12 §7.9).
 2. The newest game clip with a poster in the free window (`game_clip`).
 3. The best stream replay in the free window (`stream_replay`).
 4. The belt hero (`belt`): a move that involves the viewer, at most 14 days

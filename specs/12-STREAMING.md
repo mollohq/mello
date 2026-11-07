@@ -1006,6 +1006,7 @@ geometry through `VideoRect.geometry-changed` as it follows the feed's card.
 1. Multiplies logical pixel coords by `window.scale_factor()` to get physical pixels.
 2. Intersects the canvas rect with the scroll container (Flickable) viewport.
 3. Calls `SetOffsetX/Y`, `SetTransform2` (scale matrix), `SetClip` (viewport intersection), `Commit`.
+   The scale is uniform (contain-fit). The watched card in the feed has a 16:9 media rect at its width (§7.9), so a 16:9 stream fills it with no bars.
 4. When fully scrolled out of view, removes swap chain content from the visual (`SetContent(None)`).
 
 Scroll is cheap: only offset + clip + commit, no swap chain resize.
@@ -1059,23 +1060,63 @@ bottom at the button's.
 |---|---|
 | Format, "720p60" | The height of the decoded picture (the SPS: the presenter's swap chain size) and the frame rate of the host's rung message (`[0x04, 0x05, w, h, fps]`, §8.1.1). The viewer's control callback stores the last rung in `stream::viewer_format`; the stream timer reads it with the pointer. Without a decoded picture the rung's height; without a rung the height alone ("1080p"). It replaces the present rate, which is not the stream's. |
 | "N WATCHING" | Hosted card: the live viewers. Each host tick (`host_link_tick`) compares the sink's viewer set (one entry per `member_joined`, out on `member_left` or a rejoin's reconcile) with the set the UI was told of and sends `StreamViewerJoined` and `StreamViewerLeft`. Watched card: the SFU membership (`StreamMembersChanged`, the viewers plus you). A card that is not watched, and the watched card before the first membership snapshot: the crew state's `viewer_count` (the backend's `viewer_ids`, stage 2b). The outline badge of the design system. |
-| STARTING | Hosted card: §11. Watched card: from the Watch click to the first frame (the first present, or a timeline with a released frame); "Connecting to <name>'s stream" in the media area, which the video layer does not cover before its first present. |
+| STARTING | Hosted card: §11. Watched card: from the click on the play ring to the first frame (the first present, or a timeline with a released frame); "Connecting to <name>'s stream" in the media area, which the video layer does not cover before its first present. |
 | RECONNECTING, ENDED, NOT LIVE | §11.1 and the 8 s notice card. |
 
-**Stats strip.** A 40 px strip under the picture (the picture gives up the
-height) with the 1 s `StreamViewerTimeline` values: DELAY (target delay),
+**Stats strip.** A 40 px black strip under the picture with the 1 s
+`StreamViewerTimeline` values: DELAY (target delay),
 JITTER, DECODE (p95), LATE (frames released after their decode deadline),
 AUDIO (game-audio delay) and A/V (offset, positive when the audio is late).
 AUDIO and A/V show "-" when the stream has no game audio. The switch stays for
+the session. In the feed the card grows by the strip. In the expanded view the
+picture gives up the height.
+
 **The picture before you watch.** The card of a stream that you did not
 join shows the newest SFU snapshot of the session. The client calls
-`stream_picture` {crew_id, session_id} every 15 s. The RPC gives the public
-URL of the newest snapshot, or an empty URL on an SFU without snapshots.
-Without a snapshot the card shows the hero art of the game (local Steam), else
+`stream_picture` {crew_id, session_id} every 15 s, on a spawned task
+(`client/src/stream_picture.rs`). The RPC gives the public
+URL of the newest snapshot, or an empty URL on an SFU without snapshots or
+after the stream ended. The client fetches each URL once. The polls stop when you
+watch, and when no such card shows. Without a snapshot the card shows the hero art
+of the game (the local Steam poster, else the Worker `hero`), else
 the tint and the monogram. The stream records and the crew state keep the
-host's `igdb_id` from `start_stream`, so the card knows the game.
+host's `igdb_id` from `start_stream`, so the card knows the game. Game art
+that arrives late from the art Worker builds the stream cards again.
 
-the session.
+**The card before you watch** (mockup next-gen-feed frames C and D):
+
+- The picture fills the whole card under black washes. The card has no footer.
+- The play ring in the centre is the action. A click on the card starts the
+  watch. The accessible label is "Watch <name>".
+- Top left: the LIVE tag with "N WATCHING".
+- Bottom left: the streamer octagon and the name. Under the name: the game's
+  icon tile and the game name. A stream that is not a catalogue game shows
+  the stream title there ("Live now" without a title).
+
+**Strips** (frames D and G). When there are two or three cards, each of a
+stream you have not joined, and you watch nothing, the cards share one card
+of strips (`LiveStripsCard`). Each strip has its picture, its play ring, the
+streamer and the game. One tag at the top left says "LIVE | N STREAMING".
+Rust sets `StreamCardUi.strips-layout` with the cards. Four or more cards, or
+a set with a watched or a hosted card, use the two-column grid.
+
+**The card while you watch:**
+
+- The picture is 16:9 at the card's width inside the keylines, with no black
+  bars. The card takes that height, plus the stats strip and the 72 px footer
+  (`StreamCardSize.card-height`).
+- The Stage is at least as high as the card. On the full row it grows to
+  the card's height. In the wide slot beside the board the card is shorter
+  than the Stage and sits at its top. In
+  the two-column grid each row is at least 300 px and holds the watched card.
+- The footer is black: the octagon, the name, the LIVE chip with the count and
+  the format chip, the game line under the name, and the buttons at the right.
+- Under 480 px the format chip does not show, and the count moves to the game
+  line ("Counter-Strike 2 · 12 watching").
+
+**The hosted card.** "YOU ARE LIVE" and END STREAM over the hero art of your
+own game (else the tint and the monogram), with the same footer. The quick
+start and the picker both set the game of the card (§11).
 
 ---
 
@@ -1384,7 +1425,7 @@ Streaming-quality stage 6: the start runs off the command loop (`client/stream_h
 | Native | own thread | 10 s | Encoder check, capture backend init (hook injection included), encoder, audio. `allow_hook` comes from the `capture` block and `igdb_id` (§3.1.1) |
 | SFU | task | 5 s connect, 10 s join | WebSocket and welcome, host peer, `join_stream`, offer and answer, video track and control channel open |
 
-1. User picks a capture source (game process, window or monitor) in the UI. For a game, the client takes `exe` and `igdb_id` from the `stream_games` row of that pid. The picker opening probes the SFU regions again when the last probe is older than 60 s (spec 10 section 7.6 has the method), so `preferred_region` in `start_stream` is the region that is fastest now; the login probe and the 10-minute cycle stay.
+1. User picks a capture source (game process, window or monitor) in the UI. For a game, the client takes `exe` and `igdb_id` from the `stream_games` row of that pid. The quick start of the NOW PLAYING card has no picker, so the source list has no row: the client then takes the detected game of that pid (the catalogue `igdb_id` of the sensor's game id, 0 for a discovered game, and the exe). Both paths set the game of the hosted card. The picker opening probes the SFU regions again when the last probe is older than 60 s (spec 10 section 7.6 has the method), so `preferred_region` in `start_stream` is the region that is fastest now; the login probe and the 10-minute cycle stay.
 2. The RPC step runs. With `advertise: "on_live"` the backend records the session only; the crew sees nothing yet (specs/04-BACKEND.md).
 3. The native step and the SFU step run at the same time. Capture init and SFU negotiation overlap.
 4. When the native step ends, `create_stream_session` starts the `StreamManager` at once on an `SfuSink` with no connection. The manager drains the encoder from the first access unit, so the 32-AU channel cannot overflow while the SFU join runs. The sink drops what it cannot send as backpressure (no recovery mode, no key frame request).
@@ -1583,6 +1624,7 @@ DComp presenter diagnostics:
 | Pop-out window (Windows) | `client/src/stream_popout.rs` |
 | Expanded view | `ExpandedStreamCard` in `client/ui/panels/active_streams_panel.slint`, placed in `client/ui/main.slint` |
 | Stream card state, volume, labels, stats | `client/src/handlers/streaming.rs`, `client/src/handlers/stream_cards.rs`, `StreamCardUi` in `client/ui/types.slint` |
+| The picture before you watch (`stream_picture` polls) | `client/src/stream_picture.rs` |
 | The watched stream's format slot (rung message) | `mello-core/src/stream/viewer_format.rs` |
 | The watched stream's volume command | `mello-core/src/client/stream_view_audio.rs` |
 | Client render loop + metrics | `client/src/main.rs` |
@@ -1631,6 +1673,7 @@ DComp presenter diagnostics:
 | Input passthrough not implemented | No remote control | Large |
 | DComp visual uses overlay, not true underlay | Video composites on top of Slint content: a Slint popup, menu or modal over the picture is hidden under it, and the pause card needs the content detach. The card's popovers open under the footer. Slint renders with the Skia CPU rasterizer into the window's redirection surface (12-NATIVE-PLATFORM §3.1), which every DComp target composites above, and `WS_EX_NOREDIRECTIONBITMAP` would remove that surface and the UI with it. A true underlay needs the UI in a DComp visual above the video (Skia on wgpu with a visual the app supplies, which the spec rejects for its RAM), or the video in an owned window under a hole in the main window. Open for Bob (stage 9 report). | Large |
 | The host cannot change the quality preset mid-stream | The card's settings show the preset; a change needs a runtime preset command in mello-core (the stage 4 controller's ceiling, the encode size and fps) | Medium |
+| The strips card does not show in the app | The crew state carries one stream per crew, so the client builds one watchable card and never two or three (§7.9). Only the previews show the strips | Medium (more than one stream in the crew state) |
 | The pop-out window has no controls of its own | Volume, settings and expand stay on the card in the main window; the window shows only the picture (no pause card, so a pause brings the stream back) | Small (Slint content over the picture needs the underlay above) |
 | No pop-out on macOS | The macOS viewer has no compositor path (row above); Pop out logs and does nothing there. The expanded view works (the card draws the frame) | Medium |
 | Adapter/device mismatch diagnostics are log-based only | Better in-UI error reasons still needed | Small |
