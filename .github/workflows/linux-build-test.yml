@@ -86,6 +86,10 @@ jobs:
     name: Test (Linux)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    # libmello/CMakeLists.txt keeps the rnnoise model tarball here. The cache
+    # step below keeps it between runs, so a build needs no download.
+    env:
+      MELLO_DEPS_DIR: ${{ github.workspace }}/.mello-deps
 
     steps:
       - name: Checkout repository
@@ -96,6 +100,13 @@ jobs:
 
       - name: Set up the build
         uses: ./.github/actions/linux-setup
+
+      - name: Cache libmello downloads
+        uses: actions/cache@v6
+        with:
+          path: .mello-deps
+          key: mello-deps-${{ runner.os }}-${{ hashFiles('libmello/CMakeLists.txt') }}
+          restore-keys: mello-deps-${{ runner.os }}-
 
       - name: Run tests
         # --tests and no doc-tests: see the Windows job in pr-checks.yml.
@@ -110,6 +121,9 @@ jobs:
     if: ${{ inputs.native != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    # See the test job.
+    env:
+      MELLO_DEPS_DIR: ${{ github.workspace }}/.mello-deps
 
     steps:
       - name: Checkout repository
@@ -123,6 +137,13 @@ jobs:
         uses: ./.github/actions/linux-setup
         with:
           rust: 'false'
+
+      - name: Cache libmello downloads
+        uses: actions/cache@v6
+        with:
+          path: .mello-deps
+          key: mello-deps-${{ runner.os }}-${{ hashFiles('libmello/CMakeLists.txt') }}
+          restore-keys: mello-deps-${{ runner.os }}-
 
       # See the Windows job in pr-checks.yml for why MELLO_BUILD_TESTS is opt-in.
       # No Rust build runs first in this job, so external/vcpkg has no vcpkg
