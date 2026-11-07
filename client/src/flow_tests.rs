@@ -745,6 +745,80 @@ fn a_crew_update_before_the_call_starts_keeps_the_joined_channel_active() {
     assert_eq!(active_voice_channels(&h), vec!["ch-squad"]);
 }
 
+/// A code-111 crew event for `crew_id`.
+fn crew_event(crew_id: &str, event: &str) -> Event {
+    Event::CrewEventReceived {
+        event: mello_core::crew_state::CrewEvent {
+            crew_id: crew_id.into(),
+            event: event.into(),
+            data: serde_json::json!({ "user_id": "u-other", "username": "other" }),
+        },
+    }
+}
+
+/// ★ Regression: the server sends code 111 to every subscriber of a crew,
+/// also to a user who has the crew only in the sidebar. The UI answered each
+/// one with `SetActiveCrew`, so the server moved the user's active crew to the
+/// other crew and stopped the pushes for the open crew.
+#[test]
+fn a_crew_event_in_another_crew_refreshes_only_its_sidebar_card() {
+    let mut h = Harness::new();
+    h.app().set_active_crew_id("crew-1".into());
+    h.commands();
+
+    for event in [
+        "voice_joined",
+        "voice_left",
+        "stream_started",
+        "stream_ended",
+    ] {
+        h.emit(crew_event("crew-2", event));
+        let cmds = h.commands();
+        assert!(
+            !cmds.iter().any(|c| matches!(
+                c,
+                Command::SetActiveCrew { .. } | Command::LoadCrewFeed { .. }
+            )),
+            "{event} in crew-2 must not switch or reload a crew, got {cmds:?}"
+        );
+        assert!(
+            cmds.iter().any(|c| matches!(
+                c,
+                Command::RefreshSidebarCrews { crew_ids } if crew_ids == &["crew-2"]
+            )),
+            "{event} in crew-2 must refresh its sidebar card, got {cmds:?}"
+        );
+        assert_eq!(h.app().get_active_crew_id(), "crew-1");
+    }
+}
+
+/// A crew event in the open crew refreshes its state and its feed.
+#[test]
+fn a_crew_event_in_the_active_crew_refreshes_the_crew_and_the_feed() {
+    let mut h = Harness::new();
+    h.app().set_active_crew_id("crew-1".into());
+    h.commands();
+
+    h.emit(crew_event("crew-1", "stream_started"));
+    let cmds = h.commands();
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Command::SetActiveCrew { crew_id } if crew_id == "crew-1")),
+        "expected SetActiveCrew for crew-1, got {cmds:?}"
+    );
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Command::LoadCrewFeed { crew_id } if crew_id == "crew-1")),
+        "expected LoadCrewFeed for crew-1, got {cmds:?}"
+    );
+    assert!(
+        !cmds
+            .iter()
+            .any(|c| matches!(c, Command::RefreshSidebarCrews { .. })),
+        "SetActiveCrew already refreshes the card of the active crew, got {cmds:?}"
+    );
+}
+
 /// The texts on screen now.
 fn visible_texts(h: &Harness) -> Vec<String> {
     h.elements()

@@ -1477,6 +1477,22 @@ impl NakamaClient {
         Ok(parsed.crews)
     }
 
+    /// The sidebar state of the crews. Read only: no subscription changes.
+    pub async fn crew_state_get_sidebar(
+        &self,
+        crew_ids: &[String],
+    ) -> Result<Vec<crate::crew_state::CrewSidebarState>> {
+        let payload = serde_json::json!({ "crew_ids": crew_ids });
+        let resp = self.rpc("crew_state_get_sidebar", &payload).await?;
+
+        #[derive(serde::Deserialize)]
+        struct Resp {
+            crews: Vec<crate::crew_state::CrewSidebarState>,
+        }
+        let parsed: Resp = serde_json::from_str(&resp)?;
+        Ok(parsed.crews)
+    }
+
     // --- Stream viewer RPC ---
 
     pub async fn watch_stream(&self, session_id: &str) -> Result<WatchStreamResponse> {
