@@ -729,6 +729,17 @@ export struct AudioDeviceData {
     is-default: bool,
 }
 
+// Notification sounds (plans/NOTIFICATION-SOUNDS.md §6): the volume and
+// one switch per group.
+export struct SoundSettings {
+    volume: float,
+    voice: bool,
+    streams: bool,
+    chat: bool,
+    clips: bool,
+    crew: bool,
+}
+
 export struct GameIntegrationData {
     game-id: string,
     name: string,

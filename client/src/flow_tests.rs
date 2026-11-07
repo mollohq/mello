@@ -9505,7 +9505,22 @@ fn the_about_tab_is_a_control_and_opens_the_credits() {
             "{name}"
         );
     }
-    for text in ["Game data and artwork by", "Made with", "Emoji by"] {
+    // Petter made the notification sounds. He is in the credits only.
+    let petter = h.controls_labelled("Petter website");
+    assert_eq!(petter.len(), 1, "Petter: the credits");
+    let _ = crate::open_url::take_opened();
+    petter[0].mock_single_click(slint::platform::PointerEventButton::Left);
+    h.pump();
+    assert_eq!(
+        crate::open_url::take_opened(),
+        vec!["https://www.instagram.com/petterb".to_string()]
+    );
+    for text in [
+        "Game data and artwork by",
+        "Made with",
+        "Emoji by",
+        "Sounds by",
+    ] {
         assert_eq!(labelled_count(&h, text), 1, "{text}");
     }
     assert_eq!(
@@ -9947,4 +9962,41 @@ fn a_sound_group_that_is_off_is_silent() {
     h.ctx().settings.borrow_mut().sound_voice = true;
     h.app().invoke_mic_toggle();
     assert_eq!(sounds_cued(&h), vec![Sound::Unmute]);
+}
+
+/// The Chat switch under Notification sounds saves the setting, and a chat
+/// message then plays nothing.
+#[test]
+fn the_chat_sound_switch_saves_and_silences_chat() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    h.app().set_settings_open(true);
+    h.pump();
+    h.click_label("AUDIO & VIDEO");
+    assert!(h.settings().borrow().sound_chat);
+
+    // The section is below the first screen of the tab. The wheel event
+    // goes to the tab content, above the output volume row.
+    let at = h.controls_labelled("Output Volume")[0].absolute_position();
+    h.app()
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(at.x, at.y - 60.0),
+            delta_x: 0.0,
+            delta_y: -500.0,
+        });
+    h.pump();
+    h.click_label("Chat");
+    h.pump();
+    assert!(!h.settings().borrow().sound_chat, "the switch saves");
+    assert!(
+        h.settings().borrow().sound_voice,
+        "the other groups stay on"
+    );
+
+    h.app().set_active_crew_id("crew-1".into());
+    h.emit(Event::MessageReceived {
+        message: chat_message_fixture("m1", "bob", 1),
+    });
+    assert!(sounds_cued(&h).is_empty());
 }

@@ -188,6 +188,28 @@ pub(crate) fn cue_crew_event(ctx: &AppContext, event: &CrewEvent) {
 }
 
 impl Settings {
+    /// The sound settings as the Audio tab shows them.
+    pub fn sound_settings(&self) -> crate::SoundSettings {
+        crate::SoundSettings {
+            volume: self.sound_volume,
+            voice: self.sound_voice,
+            streams: self.sound_streams,
+            chat: self.sound_chat,
+            clips: self.sound_clips,
+            crew: self.sound_crew,
+        }
+    }
+
+    /// Takes the sound settings from the Audio tab.
+    pub fn set_sound_settings(&mut self, v: &crate::SoundSettings) {
+        self.sound_volume = v.volume.clamp(0.0, 1.0);
+        self.sound_voice = v.voice;
+        self.sound_streams = v.streams;
+        self.sound_chat = v.chat;
+        self.sound_clips = v.clips;
+        self.sound_crew = v.crew;
+    }
+
     /// Whether the settings group of a sound is on.
     pub fn sound_group_enabled(&self, group: SoundGroup) -> bool {
         match group {

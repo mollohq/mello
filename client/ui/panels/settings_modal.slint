@@ -1,7 +1,7 @@
 import { Theme, MelloInputField, MelloScrollArea } from "../theme.slint";
 import { UserAvatar } from "../components/avatar.slint";
 import { CutShape, CutButtonShape } from "../components/cut.slint";
-import { AudioDeviceData, GameIntegrationData, InstalledGameData, NoticeEntryData, TesterData } from "../types.slint";
+import { AudioDeviceData, GameIntegrationData, InstalledGameData, NoticeEntryData, SoundSettings, TesterData } from "../types.slint";
 import { AvatarCard } from "../components/avatar_card.slint";
 import { GameIcon } from "../components/game_icon.slint";
 import { SmallToggle } from "../components/small_toggle.slint";
@@ -842,6 +842,10 @@ component AudioTab inherits VerticalLayout {
     in-out property <bool> mic-testing: false;
     in property <float> mic-level: 0.0;
 
+    // Notification sounds
+    in-out property <SoundSettings> sounds: { volume: 0.8, voice: true, streams: true, chat: true, clips: true, crew: true };
+    callback sounds-changed(SoundSettings);
+
     callback capture-device-selected(string);
     callback playback-device-selected(string);
     callback input-volume-changed(float);
@@ -960,6 +964,77 @@ component AudioTab inherits VerticalLayout {
                     value <=> root.output-volume;
                     changed(v) => { output-volume-changed(v); }
                 }
+            }
+        }
+    }
+
+    // NOTIFICATION SOUNDS
+    VerticalLayout {
+        spacing: 24px;
+
+        SectionHeader { title: "NOTIFICATION SOUNDS"; }
+
+        Rectangle {
+            background: transparent;
+
+            CutShape {
+                width: parent.width;
+                height: parent.height;
+                n: Theme.notch-sm;
+                fill: Theme.graphic-light;
+            }
+            CutShape {
+                width: parent.width;
+                height: parent.height;
+                n: Theme.notch-sm;
+                inset: Theme.keyline;
+                fill: Theme.bg-app;
+            }
+
+            VerticalLayout {
+                padding: 24px;
+
+                VolumeSlider {
+                    label: "Sound Volume";
+                    icon-source: @image-url("../icons/speaker.svg");
+                    value <=> root.sounds.volume;
+                    changed(v) => { root.sounds-changed(root.sounds); }
+                }
+            }
+        }
+
+        VerticalLayout {
+            spacing: 8px;
+
+            ToggleRow {
+                title: "Voice";
+                description: "Joins and leaves, mute, deafen, and a lost connection.";
+                checked <=> root.sounds.voice;
+                toggled(v) => { root.sounds-changed(root.sounds); }
+            }
+            ToggleRow {
+                title: "Streams";
+                description: "A crew member goes live, you go live, a stream you watch ends.";
+                checked <=> root.sounds.streams;
+                toggled(v) => { root.sounds-changed(root.sounds); }
+            }
+            ToggleRow {
+                title: "Chat";
+                description: "New messages and mentions while m3llo is in the background.";
+                checked <=> root.sounds.chat;
+                toggled(v) => { root.sounds-changed(root.sounds); }
+            }
+            ToggleRow {
+                title: "Clips";
+                description: "Your clip is saved, someone in the crew clips.";
+                checked <=> root.sounds.clips;
+                toggled(v) => { root.sounds-changed(root.sounds); }
+            }
+            ToggleRow {
+                title: "Crew";
+                description: "A new member joins the crew.";
+                checked <=> root.sounds.crew;
+                toggled(v) => { root.sounds-changed(root.sounds); }
             }
         }
     }
@@ -2786,6 +2861,12 @@ component AboutTab inherits VerticalLayout {
                 AboutLink { name: "Twemoji"; url: "https://twemoji.twitter.com"; clicked(url) => { root.link-clicked(url); } }
                 AboutSentence { text: "(https://twemoji.twitter.com), CC BY 4.0"; }
             }
+            HorizontalLayout {
+                alignment: start;
+                spacing: 4px;
+                AboutSentence { text: "Sounds by"; }
+                AboutLink { name: "Petter"; url: "https://www.instagram.com/petterb"; clicked(url) => { root.link-clicked(url); } }
+            }
         }
     }
 }
@@ -2998,6 +3079,7 @@ export component SettingsModal inherits Rectangle {
     // Audio settings
     in-out property <float> input-volume: 1.0;
     in-out property <float> output-volume: 1.0;
+    in-out property <SoundSettings> sounds: { volume: 0.8, voice: true, streams: true, chat: true, clips: true, crew: true };
     in-out property <bool> noise-suppression: true;
     in-out property <bool> echo-cancellation: true;
     in-out property <bool> echo-suppression: false;
@@ -3149,6 +3231,7 @@ export component SettingsModal inherits Rectangle {
     // Audio callbacks
     callback setting-changed-input-volume(float);
     callback setting-changed-output-volume(float);
+    callback setting-changed-sounds(SoundSettings);
     callback setting-changed-noise-suppression(bool);
     callback setting-changed-echo-cancellation(bool);
     callback setting-changed-echo-suppression(bool);
@@ -3735,6 +3818,7 @@ export component SettingsModal inherits Rectangle {
                             selected-playback-name <=> root.selected-playback-name;
                             input-volume <=> root.input-volume;
                             output-volume <=> root.output-volume;
+                            sounds <=> root.sounds;
                             noise-suppression <=> root.noise-suppression;
                             echo-cancellation <=> root.echo-cancellation;
                             echo-suppression <=> root.echo-suppression;
@@ -3750,6 +3834,7 @@ export component SettingsModal inherits Rectangle {
                             playback-device-selected(id) => { root.playback-device-selected(id); }
                             input-volume-changed(v) => { root.setting-changed-input-volume(v); }
                             output-volume-changed(v) => { root.setting-changed-output-volume(v); }
+                            sounds-changed(v) => { root.setting-changed-sounds(v); }
                             noise-suppression-toggled(v) => { root.setting-changed-noise-suppression(v); }
                             echo-cancellation-toggled(v) => { root.setting-changed-echo-cancellation(v); }
                             echo-suppression-toggled(v) => { root.setting-changed-echo-suppression(v); }
@@ -4012,6 +4097,7 @@ export component Preview inherits SettingsPreview { tab: 0; }
 export component PreviewGeneral inherits SettingsPreview { tab: 1; }
 export component PreviewAudio inherits SettingsPreview { tab: 2; }
 export component PreviewAudioVideo inherits SettingsPreview { tab: 2; scroll: 1400px; }
+export component PreviewAudioSounds inherits SettingsPreview { tab: 2; scroll: 470px; }
 export component PreviewGames inherits SettingsPreview { tab: 3; }
 export component PreviewGamesNoPermission inherits SettingsPreview { tab: 3; game-clips-permission: true; }
 export component PreviewAbout inherits SettingsPreview { tab: 4; }
