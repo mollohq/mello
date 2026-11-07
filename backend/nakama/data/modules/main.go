@@ -412,6 +412,15 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("report_invite_copied", ReportInviteCopiedRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("admin_media_reports_list", AdminMediaReportsListRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("admin_media_takedown", AdminMediaTakedownRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("admin_media_report_dismiss", AdminMediaReportDismissRPC); err != nil {
+		return err
+	}
 
 	// -----------------------------------------------------------------------
 	// RPCs — dev tools

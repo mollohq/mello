@@ -800,6 +800,12 @@ type MediaReport struct {
 	URL        string `json:"url"`
 	ReporterID string `json:"reporter_id,omitempty"`
 	Ts         int64  `json:"ts"`
+	// Set by the admin takedown or dismiss (admin_media_reports.go). An
+	// open report has no Status.
+	Status string `json:"status,omitempty"` // taken_down | dismissed
+	Reason string `json:"reason,omitempty"`
+	Actor  string `json:"actor,omitempty"`
+	DoneMs int64  `json:"done_ms,omitempty"`
 }
 
 // ReportCrewMediaRPC records a report. A signed-in user, or the join page
