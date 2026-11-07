@@ -311,13 +311,16 @@ fn card_snap(c: &crate::FeedCardData) -> FeedCardSnap {
 /// The zone feed (`ZonesData`), zone by zone.
 #[derive(Serialize)]
 struct ZonesSnap {
-    /// `"live"`, `"card"`, `"own"` or `""` (collapsed).
+    /// `"live"`, `"quests"`, `"card"`, `"own"` or `""` (collapsed).
     stage: String,
+    /// The quest card when `stage` is `"quests"` (crew quests).
+    quests: Option<QuestsSnap>,
     /// The card on the Stage when `stage` is `"card"`.
     stage_card: Option<FeedCardSnap>,
     /// The belt hero, when the Stage card is one.
     belt_hero: Option<BeltHeroSnap>,
-    /// The viewer's own chips on the Stage (a crew of one).
+    /// The viewer's own chips (a crew of one): on the Stage, or on the solo
+    /// board while the quest card holds the Stage.
     own_chips: Vec<OwnChipSnap>,
     /// The viewer's octagon wears an image.
     you_avatar: bool,
@@ -414,11 +417,58 @@ struct HistoryWeekSnap {
     more: i32,
 }
 
+/// The quest card: the count, each gift and each step.
+#[derive(Serialize)]
+struct QuestsSnap {
+    /// "2 / 5".
+    count: String,
+    gifts: Vec<QuestGiftSnap>,
+    rows: Vec<QuestRowSnap>,
+}
+
+#[derive(Serialize)]
+struct QuestGiftSnap {
+    label: String,
+    /// `"locked"`, `"ready"` or `"open"`.
+    state: String,
+    /// The viewer opens it (the owner, a ready gift).
+    can_open: bool,
+}
+
+#[derive(Serialize)]
+struct QuestRowSnap {
+    name: String,
+    done: bool,
+    /// `"invite"`, `"voice"`, `"settings"` or `""`.
+    action: String,
+}
+
 fn read_zones(app: &MainWindow) -> ZonesSnap {
     let z = app.get_feed_zones();
     let stage_card = (z.stage == "card").then(|| z.stage_card.clone());
     ZonesSnap {
         stage: z.stage.to_string(),
+        quests: (z.stage == "quests").then(|| QuestsSnap {
+            count: z.quest_count.to_string(),
+            gifts: z
+                .quest_gifts
+                .iter()
+                .map(|g| QuestGiftSnap {
+                    label: g.label.to_string(),
+                    state: g.state.to_string(),
+                    can_open: g.can_open,
+                })
+                .collect(),
+            rows: z
+                .quest_rows
+                .iter()
+                .map(|r| QuestRowSnap {
+                    name: r.name.to_string(),
+                    done: r.done,
+                    action: r.action.to_string(),
+                })
+                .collect(),
+        }),
         stage_card: stage_card.as_ref().map(card_snap),
         belt_hero: stage_card
             .filter(|c| c.card_type == "head2head" && c.head2head.variant == "belt")

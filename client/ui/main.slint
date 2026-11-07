@@ -724,6 +724,11 @@ export component MainWindow inherits Window {
     callback voice-toggle();
     callback presence-changed(int);
     callback settings-requested();
+    /// The tab Settings opens on. A quest row opens it on Games (3); a close
+    /// puts it back on the first tab.
+    in-out property <int> settings-active-tab: 0;
+    /// The owner opened a sealed quest gift (crew quests). Its key.
+    callback quest-gift-opened(string);
     callback capture-device-selected(string);
     callback playback-device-selected(string);
     callback mic-test-toggled();
@@ -1145,6 +1150,11 @@ export component MainWindow inherits Window {
                             seek-clip-ms(m) => { root.seek-clip-ms(m); }
                             invite-clicked => { root.invite-share-requested(); }
                             start-voice-clicked(channel-id) => { root.join-voice-channel(channel-id); }
+                            quest-gift-clicked(key) => { root.quest-gift-opened(key); }
+                            game-activity-settings-clicked => {
+                                root.settings-active-tab = 3;
+                                root.settings-requested();
+                            }
                             plus-clicked => {
                                 root.plus-soon-open = true;
                                 root.zones-plus-clicked();
@@ -1717,6 +1727,7 @@ export component MainWindow inherits Window {
 
     // ===================== SETTINGS OVERLAY =====================
     if settings-open: SettingsModal {
+        active-tab <=> root.settings-active-tab;
         // Profile
         profile-nickname: root.user-name;
         profile-current-avatar: root.user-avatar;
@@ -1862,6 +1873,7 @@ export component MainWindow inherits Window {
         // Callbacks
         close-requested => {
             root.settings-open = false;
+            root.settings-active-tab = 0;
             if root.mic-testing {
                 root.mic-testing = false;
                 root.mic-test-toggled();

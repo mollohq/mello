@@ -253,6 +253,126 @@ pub struct FeedZones {
     /// The `history_before` of the next page. Zero at the end.
     #[serde(default)]
     pub history_next: i64,
+    /// The quest card of a new crew while its 14 days run (plans
+    /// crew-quests.md). The client shows it ahead of the Stage, as it does a
+    /// live stream, and decides when it goes.
+    #[serde(default)]
+    pub quests: Option<ZoneQuests>,
+}
+
+/// The quests of a crew: who owns them, the window, the done steps and what
+/// each gift holds now.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ZoneQuests {
+    #[serde(default)]
+    pub owner_id: String,
+    #[serde(default)]
+    pub made_ms: i64,
+    #[serde(default)]
+    pub ends_ms: i64,
+    #[serde(default)]
+    pub steps: QuestSteps,
+    #[serde(default)]
+    pub gifts: QuestGifts,
+}
+
+/// The done steps after crew made. A step that is not done is `None`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QuestSteps {
+    #[serde(default)]
+    pub friend: Option<QuestFriend>,
+    #[serde(default)]
+    pub call: Option<QuestCall>,
+    #[serde(default)]
+    pub clip: Option<QuestClip>,
+    #[serde(default)]
+    pub session: Option<QuestSession>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QuestFriend {
+    #[serde(default)]
+    pub done_ms: i64,
+    #[serde(default)]
+    pub user_id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub invited_by: String,
+    #[serde(default)]
+    pub invited_by_name: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QuestCall {
+    #[serde(default)]
+    pub done_ms: i64,
+    #[serde(default)]
+    pub minutes: i32,
+    #[serde(default)]
+    pub user_ids: Vec<String>,
+    #[serde(default)]
+    pub names: Vec<String>,
+    #[serde(default)]
+    pub guests: i32,
+    #[serde(default)]
+    pub channel_id: String,
+    #[serde(default)]
+    pub channel_name: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QuestClip {
+    #[serde(default)]
+    pub done_ms: i64,
+    #[serde(default)]
+    pub clip_id: String,
+    #[serde(default)]
+    pub clip_type: String,
+    #[serde(default)]
+    pub clipper_id: String,
+    #[serde(default)]
+    pub clipper_name: String,
+    #[serde(default)]
+    pub game: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QuestSession {
+    #[serde(default)]
+    pub done_ms: i64,
+    #[serde(default)]
+    pub game_id: String,
+    #[serde(default)]
+    pub game_name: String,
+    #[serde(default)]
+    pub game_igdb_id: i64,
+    #[serde(default)]
+    pub minutes: i32,
+    #[serde(default)]
+    pub user_ids: Vec<String>,
+    #[serde(default)]
+    pub names: Vec<String>,
+}
+
+/// What each gift holds now, for the open tiles.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QuestGifts {
+    #[serde(default)]
+    pub banner_url: String,
+    /// Set for a banner of game art: the client draws it from its art cache.
+    #[serde(default)]
+    pub banner_game_id: String,
+    #[serde(default)]
+    pub invite_name: String,
+    #[serde(default)]
+    pub emoji_count: i32,
+    #[serde(default)]
+    pub first_emoji_url: String,
+    #[serde(default)]
+    pub founding_weeks: Vec<i64>,
+    #[serde(default)]
+    pub plus_granted: Vec<String>,
 }
 
 /// The one thing to watch: `kind` is `game_clip`, `stream_replay` (with an
@@ -301,6 +421,9 @@ pub struct ZoneHistoryWeek {
     pub week_number: i32,
     #[serde(default)]
     pub locked: bool,
+    /// A week of the crew's first 7 days, open for every member (quest gift 4).
+    #[serde(default)]
+    pub founding: bool,
     #[serde(default)]
     pub clip_count: i32,
     #[serde(default)]

@@ -496,7 +496,7 @@ func TestZonesQuestsCarryTheGifts(t *testing.T) {
 	}
 	z := crewFeedZones(ctx, testLogger(), nk, FeedRequest{CrewID: "gc"}, "own", nil, nil, nil, time.Now().UnixMilli())
 	g := z.Quests.Gifts
-	if g.BannerURL == "" || g.InviteName != "brawlbros" || g.EmojiCount != 1 || g.FirstEmojiURL == "" {
+	if g.BannerURL == "" || g.BannerGameID != "steam-291550" || g.InviteName != "brawlbros" || g.EmojiCount != 1 || g.FirstEmojiURL == "" {
 		t.Fatalf("gifts = %+v", g)
 	}
 	data, _ := json.Marshal(z.Quests)

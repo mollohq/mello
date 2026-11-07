@@ -5,6 +5,7 @@ mod crew;
 mod game;
 pub(crate) mod games;
 mod presence;
+mod quests;
 mod stats;
 mod stream_cards;
 // stage 9: the stream card state and helpers are used by the app context,

@@ -879,7 +879,10 @@ func ReportInviteCopiedRPC(ctx context.Context, logger runtime.Logger, db *sql.D
 
 // ZoneQuestGifts is what each gift holds now, for the open tiles.
 type ZoneQuestGifts struct {
-	BannerURL     string   `json:"banner_url,omitempty"`
+	BannerURL string `json:"banner_url,omitempty"`
+	// BannerGameID is set for a banner of game art, so the client draws it
+	// from its art cache (GAME-ART.md).
+	BannerGameID  string   `json:"banner_game_id,omitempty"`
 	InviteName    string   `json:"invite_name,omitempty"`
 	EmojiCount    int      `json:"emoji_count"`
 	FirstEmojiURL string   `json:"first_emoji_url,omitempty"`
@@ -895,6 +898,7 @@ func zoneQuestGifts(q *CrewQuests, p *CrewProfile, e *CrewEmojiDoc) ZoneQuestGif
 	if p != nil {
 		if p.Banner != nil {
 			g.BannerURL = p.Banner.URL
+			g.BannerGameID = p.Banner.GameID
 		}
 		g.InviteName = p.InviteName
 	}

@@ -28,7 +28,11 @@ Quiet|5 · A quiet week
 Dormant|6 · Dormant
 HistoryPlus|7 · Crew history with m3llo+ (tall)
 QuietTwo|8 · A quiet crew of two: the first five and voice are two cards
-JoinCall|9 · Three members, a join and a call (tall)'
+JoinCall|9 · Three members, a join and a call (tall)
+Quests1|10 · Quests: a crew of one, minute one, the banner ready
+Quests2|11 · Quests: the owner, a friend joined, the invite link ready
+Quests3|12 · Quests: a member, the crew emoji waiting for the owner
+Quests4|13 · Quests: the owner at 4 / 5, game activity off'
 
 {
     echo '<!doctype html><meta charset="utf-8"><title>Zone feed matrix</title>'

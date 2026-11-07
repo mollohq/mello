@@ -897,3 +897,40 @@ export struct NoticeEntryData {
     license: string,
     text: string,
 }
+
+// Crew quests (plans/crew-quests.md). One gift on the track of the quest card.
+// `state` is "locked", "ready" (step done, sealed until the owner opens it) or
+// "open". `content` says what an open gift shows: "art" (`art`), "link" (the
+// link icon), "emoji" (`art`), "week" (`text`, "W45") or "plus" (m3llo+).
+export struct QuestGift {
+    key: string,
+    label: string,
+    state: string,
+    /// The viewer is the owner: a ready gift has the red key and opens.
+    can-open: bool,
+    big: bool,
+    /// The field of a sealed gift: `Path` commands in a box of 52 by 52.
+    bright: string,
+    dim: string,
+    content: string,
+    art: image,
+    has-art: bool,
+    text: string,
+}
+
+// One step under the track. A done step shows its data at once; a step that
+// is not done shows its action: "invite", "voice", "settings" or "".
+export struct QuestRow {
+    name: string,
+    done: bool,
+    person: H2hPerson,
+    has-person: bool,
+    title: string,
+    meta: string,
+    value: string,
+    unit: string,
+    art: image,
+    has-art: bool,
+    action: string,
+    key-cap: string,
+}
