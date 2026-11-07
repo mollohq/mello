@@ -2009,6 +2009,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 path,
                 duration_seconds
             );
+            crate::sounds::cue(ctx, mello_core::sounds::Sound::ClipSaved);
 
             // An optimistic "NEW" clip card on the feed at once
             let secs = duration_seconds as u32;

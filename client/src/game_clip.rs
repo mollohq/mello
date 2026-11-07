@@ -91,6 +91,7 @@ pub(crate) fn handle(ctx: &AppContext, event: Event) {
             width,
             height,
         } => {
+            crate::sounds::cue(ctx, mello_core::sounds::Sound::ClipSaved);
             log::info!(
                 "[game clip] saved {} ({}, {:.1} s, {}x{})",
                 path,

@@ -152,6 +152,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 session_id,
                 mode
             );
+            // A host reconnect sends StreamResumed, not this: one sound.
+            crate::sounds::cue(ctx, mello_core::sounds::Sound::YouLive);
             ctx.app.set_is_hosting(true);
             ctx.app.set_stream_host_state("live".into());
             ctx.app.set_streamer_name(ctx.app.get_user_name());
@@ -178,6 +180,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ..
         } => {
             log::info!("Watched stream ended: {}", reason);
+            // The user's own stop sends StreamWatchingStopped only: no sound.
+            crate::sounds::cue(ctx, mello_core::sounds::Sound::StreamEnded);
             end_watched_card(ctx, "the watched stream ended");
             let name = ctx.app.get_active_streamer_name().to_string();
             show_stream_notice(

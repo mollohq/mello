@@ -844,6 +844,12 @@ pub fn handle(ctx: &AppContext, event: Event) {
         }
         Event::CrewEventReceived { event } => {
             log::info!("UI: crew event {} in crew {}", event.event, event.crew_id);
+            crate::sounds::cue_crew_event(ctx, &event);
+            // A clip comes with feed_changed (116), which reloads the feed.
+            // The crew state did not change.
+            if event.event == "clip_posted" {
+                return;
+            }
             let crew_id = event.crew_id.clone();
             let _ = ctx.cmd_tx.send(Command::SetActiveCrew {
                 crew_id: crew_id.clone(),

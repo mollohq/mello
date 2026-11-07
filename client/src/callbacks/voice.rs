@@ -108,10 +108,13 @@ pub fn wire(ctx: &AppContext) {
     {
         let cmd = ctx.cmd_tx.clone();
         let app_weak = ctx.app.as_weak();
+        let sound_ctx = ctx.clone();
         ctx.app.on_mic_toggle(move || {
             if let Some(app) = app_weak.upgrade() {
+                let before = (app.get_mic_muted(), app.get_deafened());
                 let new_muted = !app.get_mic_muted();
                 app.set_mic_muted(new_muted);
+                crate::sounds::cue_mute_change(&sound_ctx, before, (new_muted, app.get_deafened()));
                 let _ = cmd.send(Command::SetMute { muted: new_muted });
                 let _ = cmd.send(Command::BroadcastMuteState {
                     muted: new_muted,
@@ -127,8 +130,10 @@ pub fn wire(ctx: &AppContext) {
         let cmd = ctx.cmd_tx.clone();
         let app_weak = ctx.app.as_weak();
         let mbd = ctx.muted_before_deafen.clone();
+        let sound_ctx = ctx.clone();
         ctx.app.on_deafen_toggle(move || {
             if let Some(app) = app_weak.upgrade() {
+                let before = (app.get_mic_muted(), app.get_deafened());
                 let new_deafened = !app.get_deafened();
                 app.set_deafened(new_deafened);
                 let _ = cmd.send(Command::SetDeafen {
@@ -147,6 +152,11 @@ pub fn wire(ctx: &AppContext) {
                         let _ = cmd.send(Command::SetMute { muted: false });
                     }
                 }
+                crate::sounds::cue_mute_change(
+                    &sound_ctx,
+                    before,
+                    (app.get_mic_muted(), new_deafened),
+                );
                 let _ = cmd.send(Command::BroadcastMuteState {
                     muted: app.get_mic_muted(),
                     deafened: new_deafened,

@@ -9684,3 +9684,267 @@ fn the_bar_names_the_roblox_experience_under_the_game() {
     h.emit(game_ended("roblox", "Roblox", 30));
     assert_eq!(h.app().get_game_activity().as_str(), "", "the game ended");
 }
+
+// ---------------------------------------------------------------------------
+// Notification sounds (plans/NOTIFICATION-SOUNDS.md §5)
+// ---------------------------------------------------------------------------
+
+fn sounds_cued(h: &Harness) -> Vec<mello_core::sounds::Sound> {
+    h.ctx().sounds.recent()
+}
+
+/// You join and leave, a member joins and leaves, the link drops and comes
+/// back: each plays its sound once, and a recovered call plays nothing.
+#[test]
+fn voice_sounds_follow_the_call() {
+    use mello_core::sounds::Sound;
+
+    let mut h = Harness::new();
+    join_squad_before_the_call_starts(&mut h);
+    assert!(sounds_cued(&h).is_empty(), "no sound before the call is up");
+
+    h.emit(Event::VoiceStateChanged {
+        in_call: true,
+        transport: VoiceMode::SFU,
+    });
+    assert_eq!(sounds_cued(&h), vec![Sound::YouJoin]);
+
+    h.emit(Event::CrewStateLoaded {
+        state: crew_state_with_channels(&["u-me", "u-bob"]),
+    });
+    assert_eq!(sounds_cued(&h).last(), Some(&Sound::MemberJoin));
+
+    h.emit(Event::CrewStateLoaded {
+        state: crew_state_with_channels(&["u-me"]),
+    });
+    assert_eq!(sounds_cued(&h).last(), Some(&Sound::MemberLeave));
+
+    // A drop plays once. The call that comes back is silent.
+    h.emit(Event::VoiceSfuDisconnected {
+        crew_id: "crew-1".into(),
+        reason: "ws_closed".into(),
+    });
+    h.emit(Event::VoiceSfuDisconnected {
+        crew_id: "crew-1".into(),
+        reason: "ws_closed".into(),
+    });
+    h.emit(Event::VoiceStateChanged {
+        in_call: true,
+        transport: VoiceMode::SFU,
+    });
+    assert_eq!(
+        sounds_cued(&h),
+        vec![
+            Sound::YouJoin,
+            Sound::MemberJoin,
+            Sound::MemberLeave,
+            Sound::ConnectionLost
+        ]
+    );
+
+    h.app().invoke_voice_toggle();
+    h.emit(Event::VoiceStateChanged {
+        in_call: false,
+        transport: VoiceMode::Disconnected,
+    });
+    assert_eq!(sounds_cued(&h).last(), Some(&Sound::YouLeave));
+}
+
+/// The members who were in the channel before you play no join sound, and a
+/// reconnect that gives up plays no leave sound after connection lost.
+#[test]
+fn voice_sounds_skip_the_members_already_there_and_a_lost_call() {
+    use mello_core::sounds::Sound;
+
+    let mut h = Harness::new();
+    join_squad_before_the_call_starts(&mut h);
+    h.emit(Event::CrewStateLoaded {
+        state: crew_state_with_channels(&["u-me", "u-bob", "u-ann"]),
+    });
+    h.emit(Event::VoiceStateChanged {
+        in_call: true,
+        transport: VoiceMode::SFU,
+    });
+    h.emit(Event::CrewStateLoaded {
+        state: crew_state_with_channels(&["u-me", "u-bob", "u-ann"]),
+    });
+    assert_eq!(sounds_cued(&h), vec![Sound::YouJoin]);
+
+    h.emit(Event::VoiceSfuDisconnected {
+        crew_id: "crew-1".into(),
+        reason: "liveness_timeout".into(),
+    });
+    h.emit(Event::VoiceStateChanged {
+        in_call: false,
+        transport: VoiceMode::Disconnected,
+    });
+    assert_eq!(sounds_cued(&h), vec![Sound::YouJoin, Sound::ConnectionLost]);
+}
+
+/// The control bar and the tray both play the mute and deafen sounds. A
+/// deafen that also mutes plays the deafen sound only.
+#[test]
+fn mute_and_deafen_play_their_sounds() {
+    use crate::voice_state::{dispatch, MuteAction};
+    use mello_core::sounds::Sound;
+
+    let h = Harness::new();
+    h.app().invoke_mic_toggle();
+    h.app().invoke_mic_toggle();
+    h.app().invoke_deafen_toggle();
+    h.app().invoke_deafen_toggle();
+    assert_eq!(
+        sounds_cued(&h),
+        vec![Sound::Mute, Sound::Unmute, Sound::Deafen, Sound::Undeafen]
+    );
+
+    dispatch(h.ctx(), MuteAction::ToggleDeafen);
+    dispatch(h.ctx(), MuteAction::ToggleMute);
+    assert_eq!(
+        sounds_cued(&h)[4..],
+        [Sound::Deafen, Sound::Undeafen],
+        "an unmute while deafened also undeafens, so it plays the undeafen sound"
+    );
+}
+
+/// A message from someone else plays the message sound, a mention plays the
+/// mention sound, and your own and system messages play nothing. The test
+/// window is never in the foreground.
+#[test]
+fn chat_messages_play_when_the_window_is_not_in_front() {
+    use mello_core::sounds::Sound;
+
+    let mut h = Harness::new();
+    h.app().set_user_id("u-me".into());
+    h.app().set_active_crew_id("crew-1".into());
+
+    h.emit(Event::MessageReceived {
+        message: chat_message_fixture("m1", "me", 1),
+    });
+    let mut system = chat_message_fixture("m2", "bob", 2);
+    system.is_system = true;
+    h.emit(Event::MessageReceived { message: system });
+    assert!(sounds_cued(&h).is_empty(), "own and system messages");
+
+    let mut mention = chat_message_fixture("m3", "bob", 3);
+    mention.mentions = vec![mello_core::chat::MentionRef {
+        user_id: "u-me".into(),
+        name: "me".into(),
+    }];
+    h.emit(Event::MessageReceived { message: mention });
+    h.emit(Event::MessageReceived {
+        message: chat_message_fixture("m4", "bob", 4),
+    });
+    // A second message within a second is the same burst.
+    h.emit(Event::MessageReceived {
+        message: chat_message_fixture("m5", "bob", 5),
+    });
+    assert_eq!(sounds_cued(&h), vec![Sound::Mention, Sound::Message]);
+}
+
+/// Crew events of the active crew that someone else caused play their
+/// sounds. A clip event does not reload the crew state.
+#[test]
+fn crew_events_play_for_the_active_crew_only() {
+    use mello_core::crew_state::CrewEvent;
+    use mello_core::sounds::Sound;
+
+    let mut h = Harness::new();
+    h.app().set_user_id("u-me".into());
+    h.app().set_active_crew_id("crew-1".into());
+    let event = |crew: &str, name: &str, data: serde_json::Value| Event::CrewEventReceived {
+        event: CrewEvent {
+            crew_id: crew.into(),
+            event: name.into(),
+            data,
+        },
+    };
+
+    h.emit(event(
+        "crew-1",
+        "stream_started",
+        serde_json::json!({"streamer_id": "u-me"}),
+    ));
+    h.emit(event(
+        "crew-2",
+        "stream_started",
+        serde_json::json!({"streamer_id": "u-bob"}),
+    ));
+    h.emit(event(
+        "crew-1",
+        "clip_posted",
+        serde_json::json!({"clipper_id": "u-me"}),
+    ));
+    assert!(sounds_cued(&h).is_empty(), "own events and other crews");
+
+    h.emit(event(
+        "crew-1",
+        "stream_started",
+        serde_json::json!({"streamer_id": "u-bob"}),
+    ));
+    h.emit(event(
+        "crew-1",
+        "member_joined",
+        serde_json::json!({"user_id": "u-new"}),
+    ));
+    h.commands();
+    h.emit(event(
+        "crew-1",
+        "clip_posted",
+        serde_json::json!({"clip_id": "c1", "clipper_id": "u-bob"}),
+    ));
+    assert_eq!(
+        sounds_cued(&h),
+        vec![Sound::CrewLive, Sound::NewMember, Sound::CrewClip]
+    );
+    assert!(
+        !h.commands().iter().any(|c| matches!(
+            c,
+            Command::SetActiveCrew { .. } | Command::LoadCrewFeed { .. }
+        )),
+        "feed_changed reloads the feed for a clip"
+    );
+}
+
+/// Your stream, a watched stream that ends and your clips play their sounds.
+#[test]
+fn stream_and_clip_sounds() {
+    use mello_core::events::StreamRole;
+    use mello_core::sounds::Sound;
+
+    let mut h = Harness::new();
+    h.emit(Event::StreamStarted {
+        crew_id: "crew-1".into(),
+        session_id: "s1".into(),
+        mode: "sfu".into(),
+    });
+    h.emit(Event::StreamEnded {
+        crew_id: "crew-1".into(),
+        role: StreamRole::Viewer,
+        reason: "host_left".into(),
+    });
+    h.emit(Event::ClipCaptured {
+        clip_id: "c1".into(),
+        path: "/tmp/clip.wav".into(),
+        duration_seconds: 10.0,
+        waveform: String::new(),
+    });
+    assert_eq!(
+        sounds_cued(&h),
+        vec![Sound::YouLive, Sound::StreamEnded, Sound::ClipSaved]
+    );
+}
+
+/// A settings group that is off plays nothing.
+#[test]
+fn a_sound_group_that_is_off_is_silent() {
+    use mello_core::sounds::Sound;
+
+    let h = Harness::new();
+    h.ctx().settings.borrow_mut().sound_voice = false;
+    h.app().invoke_mic_toggle();
+    assert!(sounds_cued(&h).is_empty());
+    h.ctx().settings.borrow_mut().sound_voice = true;
+    h.app().invoke_mic_toggle();
+    assert_eq!(sounds_cued(&h), vec![Sound::Unmute]);
+}

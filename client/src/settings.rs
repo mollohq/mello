@@ -106,6 +106,14 @@ pub struct Settings {
     /// When false, sensed play is kept local — no crew presence or session-end RPCs.
     #[serde(default = "default_share_game_activity")]
     pub share_game_activity: bool,
+    // Notification sounds (plans/NOTIFICATION-SOUNDS.md §6).
+    /// The volume of the notification sounds, 0..1.
+    pub sound_volume: f32,
+    pub sound_voice: bool,
+    pub sound_streams: bool,
+    pub sound_chat: bool,
+    pub sound_clips: bool,
+    pub sound_crew: bool,
 }
 
 impl Default for Settings {
@@ -167,6 +175,12 @@ impl Default for Settings {
             hidden_games: Vec::new(),
             riot_prompt_dismissed: false,
             share_game_activity: default_share_game_activity(),
+            sound_volume: 0.8,
+            sound_voice: true,
+            sound_streams: true,
+            sound_chat: true,
+            sound_clips: true,
+            sound_crew: true,
         }
     }
 }

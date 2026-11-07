@@ -54,6 +54,7 @@ mod sealed;
 mod settings;
 mod snapshot_cache;
 mod snapshot_loader;
+mod sounds;
 #[cfg(test)]
 mod stat_value_tests;
 mod stream_frame_timer;
@@ -412,6 +413,10 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = nakama_config();
     let lounge_host = config.lounge_host.clone();
+    // Notification sounds play from the UI thread on the core's voice
+    // context, not through the command loop (sounds.rs).
+    let sound_player = mello_core::sounds::SoundPlayer::new();
+    let sound_player_for_client = sound_player.clone();
     rt.spawn(async move {
         let mut client = Client::new(
             config,
@@ -425,6 +430,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         client.set_disabled_integrations(disabled_integrations);
         client.set_share_game_activity(share_game_activity);
         client.set_hidden_games(hidden_games);
+        client.set_sound_player(sound_player_for_client);
         client.run(cmd_rx).await;
     });
 
@@ -661,6 +667,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         tray_notice: Rc::new(RefCell::new(Some(Box::new(
             notifications::notify_closed_to_tray,
         )))),
+        sounds: Rc::new(sounds::SoundCues::new(Some(sound_player))),
         stream_frame_timer: stream_frame_timer.clone(),
         #[cfg(target_os = "windows")]
         native_frame_slot: native_frame_slot.clone(),
