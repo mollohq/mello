@@ -12,7 +12,7 @@ use mello_core::crew_events::{QuestGifts, ZoneQuests};
 use slint::Image;
 
 use crate::sealed;
-use crate::{H2hPerson, QuestGift, QuestRow};
+use crate::{H2hPerson, QuestGift, QuestReveal, QuestRow};
 
 const DAY_MS: i64 = 86_400_000;
 
@@ -54,6 +54,8 @@ pub(crate) struct Input<'a> {
     pub banner_art: Option<Image>,
     /// The first crew emoji, when it is loaded.
     pub emoji_art: Option<Image>,
+    /// The header art of a game by id, when the art cache has it.
+    pub game_art: &'a dyn Fn(&str) -> Option<Image>,
 }
 
 /// The key of the gift of a step on a crew.
@@ -97,8 +99,15 @@ pub(crate) fn build(q: &ZoneQuests, inp: &Input) -> Option<Card> {
         return None;
     }
 
+    let count_done = done.iter().filter(|d| **d).count();
     let gifts = (0..5)
-        .map(|i| gift(i, q, inp, done[i], owner, opened[i]))
+        .map(|i| {
+            let mut g = gift(i, q, inp, done[i], owner, opened[i]);
+            if g.state == "ready" && g.can_open {
+                g.reveal = reveal(i, q, inp, &g, count_done);
+            }
+            g
+        })
         .collect();
     let rows = vec![
         made_row(inp),
@@ -107,10 +116,9 @@ pub(crate) fn build(q: &ZoneQuests, inp: &Input) -> Option<Card> {
         clip_row(q, inp),
         session_row(q, inp),
     ];
-    let count = done.iter().filter(|d| **d).count();
     let last = done.iter().rposition(|d| *d).unwrap_or(0);
     Some(Card {
-        count: format!("{count} / 5"),
+        count: format!("{count_done} / 5"),
         fill: last as f32 / 4.0,
         gifts,
         rows,
@@ -170,6 +178,188 @@ fn gift(i: usize, q: &ZoneQuests, inp: &Input, done: bool, owner: bool, opened: 
     g
 }
 
+/// The face of a ready gift in the centre view: the moment of its step and
+/// the gift (mockup feed-quests.html, frames 3 to 7).
+fn reveal(i: usize, q: &ZoneQuests, inp: &Input, g: &QuestGift, done: usize) -> QuestReveal {
+    let hue_of = |id: &str| (inp.person)(id).map(|p| p.hue_index).unwrap_or(0);
+    let other = |ids: &[String]| ids.iter().find(|id| *id != inp.viewer_id).cloned();
+    let mut r = QuestReveal {
+        step: STEPS[i].into(),
+        label: format!("QUEST  ·  {}", STEP_NAMES[i].to_uppercase()).into(),
+        hue_index: hue_of(inp.viewer_id),
+        count: format!("{done} / 5").into(),
+        content: CONTENT[i].into(),
+        bright: g.bright.clone(),
+        dim: g.dim.clone(),
+        ..Default::default()
+    };
+    let set_person = |r: &mut QuestReveal, id: &str| {
+        if let Some(p) = (inp.person)(id) {
+            r.moment_person = p;
+            r.moment_has_person = true;
+        }
+    };
+    match i {
+        0 => {
+            r.moment_title = inp.crew_name.into();
+            r.moment_sub = format!("Made {}", day_month(q.made_ms)).into();
+            r.name = "Crew banner".into();
+            if let Some(art) = &inp.banner_art {
+                r.gift_art = art.clone();
+                r.gift_has_art = true;
+            }
+            r.action1 = "banner-game".into();
+            r.action1_label = "Game art".into();
+            r.action2 = "banner-upload".into();
+            r.action2_label = "Upload".into();
+        }
+        1 => {
+            if let Some(f) = &q.steps.friend {
+                r.hue_index = hue_of(&f.user_id);
+                set_person(&mut r, &f.user_id);
+                r.moment_title = format!("{} joined", who(&f.user_id, &f.name, inp)).into();
+                if !f.invited_by.is_empty() {
+                    r.moment_sub = format!(
+                        "Invited by {}",
+                        who(&f.invited_by, &f.invited_by_name, inp).replace("You", "you")
+                    )
+                    .into();
+                }
+            }
+            r.name = "Your invite link".into();
+            r.gift_text = if q.gifts.invite_name.is_empty() {
+                suggest_invite_name(inp.crew_name)
+            } else {
+                q.gifts.invite_name.clone()
+            }
+            .into();
+            r.action1 = "link".into();
+            r.action1_label = "Set the link".into();
+        }
+        2 => {
+            if let Some(c) = &q.steps.call {
+                if let Some(o) = other(&c.user_ids) {
+                    r.hue_index = hue_of(&o);
+                }
+                r.moment_value = c.minutes.to_string().into();
+                r.moment_unit = "min".into();
+                let mut sub = names_line(&c.user_ids, &c.names, inp);
+                if c.guests > 0 {
+                    let g = if c.guests == 1 { "guest" } else { "guests" };
+                    sub = format!("{sub}, +{} {g}", c.guests);
+                }
+                if !c.channel_name.is_empty() {
+                    sub = format!("{sub} · {}", c.channel_name);
+                }
+                r.moment_sub = sub.into();
+            }
+            r.name = "Crew emoji".into();
+            r.gift_line = "5 slots".into();
+            r.action1 = "emoji".into();
+            r.action1_label = "Add emoji".into();
+        }
+        3 => {
+            if let Some(c) = &q.steps.clip {
+                r.hue_index = hue_of(&c.clipper_id);
+                r.moment_title =
+                    format!("{} clipped", who(&c.clipper_id, &c.clipper_name, inp)).into();
+                r.moment_sub = c.game.clone().into();
+            }
+            r.name = "Founding week".into();
+            r.gift_text = g.text.clone();
+            if r.gift_text.is_empty() {
+                let week = q.gifts.founding_weeks.first().copied().unwrap_or(q.made_ms);
+                r.gift_text = format!("W{}", iso_week(week)).into();
+            }
+            r.gift_line = "Open in Crew history for every member".into();
+        }
+        _ => {
+            if let Some(s) = &q.steps.session {
+                if let Some(o) = other(&s.user_ids) {
+                    r.hue_index = hue_of(&o);
+                }
+                if let Some(art) = (inp.game_art)(&s.game_id) {
+                    r.moment_art = art;
+                    r.moment_has_art = true;
+                }
+                let span = if s.minutes >= 60 {
+                    format!("{} h {:02}", s.minutes / 60, s.minutes % 60)
+                } else {
+                    format!("{} min", s.minutes)
+                };
+                r.moment_title = if s.game_name.is_empty() {
+                    span
+                } else {
+                    format!("{span} · {}", s.game_name)
+                }
+                .into();
+                r.moment_sub = names_line(&s.user_ids, &s.names, inp).into();
+            }
+            r.name = "For the crew".into();
+            r.gift_text = "30 DAYS".into();
+            r.gift_line = "m3llo+ for every member".into();
+        }
+    }
+    r
+}
+
+/// The step names of the rows, in `STEPS` order.
+const STEP_NAMES: [&str; 5] = [
+    "Crew made",
+    "A friend joins",
+    "First call",
+    "First clip",
+    "First session",
+];
+
+/// A name for the invite link made from the crew name: lower case letters
+/// and digits, 3 to 24 of them (the server's rule, crew_gifts.go).
+fn suggest_invite_name(crew_name: &str) -> String {
+    let mut out: String = crew_name
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        .take(24)
+        .collect();
+    while out.len() < 3 {
+        out.push('x');
+    }
+    out
+}
+
+/// "5 November" of a time in ms (UTC).
+fn day_month(ms: i64) -> String {
+    const MONTHS: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    let (_, m, d) = civil_from_days(ms.div_euclid(DAY_MS));
+    format!("{d} {}", MONTHS[(m - 1) as usize])
+}
+
+/// The date of a day count (H. Hinnant, civil_from_days): year, month, day.
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (yoe + era * 400 + i64::from(m <= 2), m, d)
+}
+
 /// The ISO week number of a time in ms (UTC): the week of its Thursday,
 /// counted from the week of 4 January.
 fn iso_week(ms: i64) -> i64 {
@@ -180,16 +370,9 @@ fn iso_week(ms: i64) -> i64 {
     (thursday - jan1) / 7 + 1
 }
 
-/// The year of a day count (H. Hinnant, civil_from_days).
+/// The year of a day count.
 fn civil_year(days: i64) -> i64 {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    yoe + era * 400 + i64::from(m <= 2)
+    civil_from_days(days).0
 }
 
 /// The day count of a date (H. Hinnant, days_from_civil).
@@ -365,6 +548,7 @@ mod tests {
             person: &|_| None,
             banner_art: None,
             emoji_art: None,
+            game_art: &|_| None,
         }
     }
 
@@ -499,6 +683,50 @@ mod tests {
         let c = build(&q, &input("own", &all)).expect("steps 2 and 3 are not done");
         assert_eq!(c.gifts[3].text, "W45");
         assert_eq!(c.gifts[4].text, "30 DAYS");
+    }
+
+    #[test]
+    fn a_ready_gift_of_the_owner_carries_its_face() {
+        let none = |_: &str| false;
+        let mut q = quests("own");
+        q.steps.friend = Some(QuestFriend {
+            user_id: "ida".into(),
+            name: "Ida".into(),
+            invited_by: "own".into(),
+            invited_by_name: "b0bben".into(),
+            ..Default::default()
+        });
+        let c = build(&q, &input("own", &none)).expect("card");
+        let made = &c.gifts[0].reveal;
+        assert_eq!(made.label, "QUEST  ·  CREW MADE");
+        assert_eq!(made.moment_title, "bob_test_26");
+        assert_eq!(made.moment_sub, "Made 5 November");
+        assert_eq!(made.name, "Crew banner");
+        assert_eq!(
+            (made.action1.as_str(), made.action2.as_str()),
+            ("banner-game", "banner-upload")
+        );
+        assert!(!made.bright.is_empty(), "the back is the field of the tile");
+        let friend = &c.gifts[1].reveal;
+        assert_eq!(friend.moment_title, "Ida joined");
+        assert_eq!(friend.moment_sub, "Invited by you");
+        assert_eq!(
+            friend.gift_text, "bobtest26",
+            "a link name made from the crew name"
+        );
+        assert_eq!(friend.action1, "link");
+        assert_eq!(friend.count, "2 / 5");
+        assert!(
+            c.gifts[2].reveal.step.is_empty(),
+            "a locked gift has no face"
+        );
+    }
+
+    #[test]
+    fn a_member_gets_no_face() {
+        let none = |_: &str| false;
+        let c = build(&quests("own"), &input("ida", &none)).expect("card");
+        assert!(c.gifts.iter().all(|g| g.reveal.step.is_empty()));
     }
 
     #[test]

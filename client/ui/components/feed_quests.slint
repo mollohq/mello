@@ -5,6 +5,7 @@ import { StatValue } from "./stat.slint";
 import { CardLabel } from "./head2head.slint";
 import { BoardShell, Kicker, ZoneButton } from "./feed_board.slint";
 import { QuestGift, QuestRow } from "../types.slint";
+import { SealedUi } from "./sealed.slint";
 
 // ============================================================
 //  The quest card of a new crew (plans/crew-quests.md, mockup
@@ -112,12 +113,16 @@ component GiftTile inherits Rectangle {
 }
 
 /// A gift on the track: the tile, lifted under the pointer when the owner can
-/// open it, and its name under it.
+/// open it, and its label under it. A click sends the gift to the centre view
+/// (SEALED-REVEAL.md section 3). The slot is empty while the card is there,
+/// and the gift is open when it lands.
 component GiftColumn inherits Rectangle {
-    callback clicked();
     in property <QuestGift> gift;
 
-    property <bool> opens: root.gift.state == "ready" && root.gift.can-open;
+    property <string> slot-id: "quest:" + root.gift.key;
+    property <bool> away: root.gift.key != "" && SealedUi.active-key == root.gift.key
+        && SealedUi.active-slot == root.slot-id;
+    property <bool> opens: root.gift.state == "ready" && root.gift.can-open && SealedUi.active-kind == "";
     property <length> size: root.gift.big ? 96px : 72px;
     property <bool> hover: false;
 
@@ -125,7 +130,16 @@ component GiftColumn inherits Rectangle {
     height: 116px;
     background: transparent;
 
-    GiftTile {
+    if root.away: CutButtonShape {
+        x: (parent.width - self.width) / 2;
+        y: (96px - self.height) / 2;
+        width: root.size; height: root.size;
+        n: root.gift.big ? 14px : 10px;
+        stroke: Theme.card-border;
+        stroke-width: Theme.keyline;
+    }
+    tile := GiftTile {
+        visible: !root.away;
         x: (parent.width - self.width) / 2;
         y: (96px - self.height) / 2 + (root.hover && root.opens ? -3px : 0px);
         animate y { duration: 120ms; easing: ease-out; }
@@ -151,13 +165,20 @@ component GiftColumn inherits Rectangle {
         accessible-label: "Sealed gift, open it";
         mouse-cursor: pointer;
         changed has-hover => { root.hover = self.has-hover; }
-        clicked => { root.clicked(); }
+        clicked => {
+            SealedUi.quest = root.gift.reveal;
+            SealedUi.launch("quest", root.slot-id, root.gift.key, {
+                x: tile.absolute-position.x,
+                y: tile.absolute-position.y,
+                w: tile.width,
+                h: tile.height,
+            });
+        }
     }
 }
 
 /// Five gifts on a rail. The rail fills to the last done step.
 component QuestTrack inherits Rectangle {
-    callback gift-clicked(QuestGift);
     in property <[QuestGift]> gifts;
     in property <float> fill;
 
@@ -179,7 +200,6 @@ component QuestTrack inherits Rectangle {
         alignment: space-between;
         for g in root.gifts: GiftColumn {
             gift: g;
-            clicked => { root.gift-clicked(g); }
         }
     }
 }
@@ -293,7 +313,6 @@ component QuestRowView inherits Rectangle {
 
 /// The quest card on the Stage.
 export component QuestCard inherits BoardShell {
-    callback gift-clicked(QuestGift);
     callback invite();
     callback voice();
     callback settings();
@@ -333,7 +352,6 @@ export component QuestCard inherits BoardShell {
         QuestTrack {
             gifts: root.gifts;
             fill: root.fill;
-            gift-clicked(g) => { root.gift-clicked(g); }
         }
         Rectangle { height: 14px; }
         for r in root.rows: QuestRowView {

@@ -646,6 +646,7 @@ fn read_sealed(app: &MainWindow) -> SealedSnap {
         open_center: match ui.get_active_kind().as_str() {
             "belt" => "belt",
             "recap" => "recap",
+            "quest" => "quest",
             _ => "none",
         },
         resting: ui.get_resting(),

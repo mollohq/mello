@@ -1977,8 +1977,6 @@ export component CrewFeed inherits Rectangle {
     callback card-clicked(string);
     callback invite-clicked();
     callback start-voice-clicked(string);
-    /// The owner opened a sealed quest gift (its key).
-    callback quest-gift-clicked(string);
     /// The quest row of step 5 asks for the game activity setting.
     callback game-activity-settings-clicked();
     callback seek-clip-ms(int);
@@ -2129,7 +2127,6 @@ export component CrewFeed inherits Rectangle {
                             fill: zones.quest-fill;
                             gifts: zones.quest-gifts;
                             rows: zones.quest-rows;
-                            gift-clicked(g) => { root.quest-gift-clicked(g.key); }
                             invite => { root.invite-clicked(); }
                             voice => { root.start-voice-clicked(zones.channel-id); }
                             settings => { root.game-activity-settings-clicked(); }

@@ -902,7 +902,39 @@ export struct NoticeEntryData {
 // `state` is "locked", "ready" (step done, sealed until the owner opens it) or
 // "open". `content` says what an open gift shows: "art" (`art`), "link" (the
 // link icon), "emoji" (`art`), "week" (`text`, "W45") or "plus" (m3llo+).
+// The face of a quest gift in the centre view: the moment of the step on top,
+// the gift under it, and the actions that set it up. Built in Rust
+// (handlers/quests.rs) for each ready gift of the owner.
+export struct QuestReveal {
+    step: string,
+    label: string,
+    hue-index: int,
+    count: string,
+    moment-title: string,
+    moment-sub: string,
+    moment-person: H2hPerson,
+    moment-has-person: bool,
+    moment-art: image,
+    moment-has-art: bool,
+    moment-value: string,
+    moment-unit: string,
+    name: string,
+    content: string,
+    gift-art: image,
+    gift-has-art: bool,
+    gift-text: string,
+    gift-line: string,
+    /// What the actions do: "banner-game", "banner-upload", "link", "emoji".
+    action1: string,
+    action1-label: string,
+    action2: string,
+    action2-label: string,
+    bright: string,
+    dim: string,
+}
+
 export struct QuestGift {
+    reveal: QuestReveal,
     key: string,
     label: string,
     state: string,

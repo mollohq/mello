@@ -70,6 +70,17 @@ fn quest_card(
             banner_art,
             // The loader for media images comes with the gift screens.
             emoji_art: None,
+            game_art: &|id: &str| {
+                (!id.is_empty())
+                    .then(|| {
+                        crate::game_icons::resolve_art_worker(
+                            ctx,
+                            &[id.to_string()],
+                            mello_core::art::ArtSlot::Header,
+                        )
+                    })
+                    .flatten()
+            },
         },
     )
 }

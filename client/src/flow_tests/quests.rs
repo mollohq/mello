@@ -85,12 +85,24 @@ fn a_live_stream_takes_the_stage_ahead_of_the_quest_card() {
     assert_eq!(h.app().get_feed_zones().stage.as_str(), "live");
 }
 
+fn clock_at(h: &Harness, ms: i64) {
+    let clock = h.app().global::<crate::Clock>();
+    clock.set_manual(true);
+    clock.set_manual_now(ms);
+    // Run the `changed` handlers and make new conditional elements, as the
+    // event loop does between two frames.
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+}
+
+/// A ready gift goes to the centre view: the back, the flip, the face of the
+/// moment and the gift, the actions at rest. A click on the scrim brings it
+/// back open, and only that gift is open (SEALED-REVEAL.md section 3).
 #[test]
-fn opening_a_gift_opens_only_that_gift_and_keeps_it_open() {
+fn opening_a_gift_runs_the_reveal_and_opens_only_that_gift() {
     let mut h = Harness::new();
     on_crew(&mut h);
-    let steps =
-        serde_json::json!({"friend": {"done_ms": MADE_MS, "user_id": "u-ida", "name": "Ida"}});
+    let steps = serde_json::json!({"friend": {"done_ms": MADE_MS, "user_id": "u-ida", "name": "Ida",
+                                              "invited_by": "user-1", "invited_by_name": "Test User"}});
     h.emit(Event::FeedLoaded {
         response: quests_feed("user-1", steps.clone(), serde_json::json!({})),
     });
@@ -98,23 +110,98 @@ fn opening_a_gift_opens_only_that_gift_and_keeps_it_open() {
         gift_states(&h),
         ["ready", "ready", "locked", "locked", "locked"]
     );
+    clock_at(&h, 0);
     h.click_label("Sealed gift, open it");
+    let ui = |h: &Harness| {
+        h.app()
+            .global::<crate::SealedUi>()
+            .get_active_kind()
+            .to_string()
+    };
+    assert_eq!(ui(&h), "quest");
     assert_eq!(
-        gift_states(&h),
-        ["open", "ready", "locked", "locked", "locked"]
+        h.app()
+            .global::<crate::SealedUi>()
+            .get_quest()
+            .step
+            .as_str(),
+        "made",
+        "the first ready gift"
     );
     let settings = h.settings();
     assert!(
         crate::sealed::opened_keys(&settings.borrow(), "crew-0").contains("quest:made:crew-0"),
-        "the opened key is stored for the crew"
+        "the key is stored when the card leaves"
     );
-    // A new feed load keeps it open: the key is in the settings.
+    assert!(
+        h.controls_labelled("Sealed gift, open it").is_empty(),
+        "no other gift opens while one is in the centre"
+    );
+
+    clock_at(&h, 700);
+    assert_eq!(
+        (count_of(&h, "QuestBack"), count_of(&h, "QuestFace")),
+        (1, 0)
+    );
+    clock_at(&h, 1400);
+    assert_eq!(
+        (count_of(&h, "QuestBack"), count_of(&h, "QuestFace")),
+        (0, 1)
+    );
+    clock_at(&h, 2000);
+    let texts = drawn_texts(&h);
+    for t in ["Crew banner", "UNLOCKED", "2 / 5", "Made 5 November"] {
+        assert!(texts.iter().any(|x| x == t), "{t} on the face: {texts:?}");
+    }
+    assert_eq!(
+        h.controls_labelled("Game art").len(),
+        1,
+        "the actions show at rest"
+    );
+    assert_eq!(h.controls_labelled("Upload").len(), 1);
+
+    h.click_label("Close");
+    clock_at(&h, 2600);
+    h.pump();
+    assert_eq!(ui(&h), "");
+    assert_eq!(
+        gift_states(&h),
+        ["open", "ready", "locked", "locked", "locked"]
+    );
+    assert_eq!(
+        h.app()
+            .get_feed_zones()
+            .quest_gifts
+            .row_data(0)
+            .map(|g| g.label.to_string()),
+        Some("BANNER".into()),
+        "the name shows once the gift is open"
+    );
+    // A new feed load keeps it open.
     h.emit(Event::FeedLoaded {
         response: quests_feed("user-1", steps, serde_json::json!({})),
     });
     assert_eq!(
         gift_states(&h),
         ["open", "ready", "locked", "locked", "locked"]
+    );
+}
+
+/// An action on the face closes the view and asks for its screen.
+#[test]
+fn an_action_on_the_face_closes_the_view() {
+    let mut h = Harness::new();
+    on_crew(&mut h);
+    h.emit(Event::FeedLoaded {
+        response: quests_feed("user-1", serde_json::json!({}), serde_json::json!({})),
+    });
+    clock_at(&h, 0);
+    h.click_label("Sealed gift, open it");
+    clock_at(&h, 2000);
+    h.click_label("Game art");
+    assert!(
+        h.app().global::<crate::SealedUi>().get_closing(),
+        "the card goes back"
     );
 }
 
