@@ -48,6 +48,49 @@ pub(crate) fn game_clip_key_label(settings: &Settings) -> String {
         .unwrap_or_default()
 }
 
+/// The stream key of these settings, for the hotkey manager.
+pub(crate) fn stream_binding(settings: &Settings) -> Option<platform::hotkeys::PttBinding> {
+    settings
+        .stream_key
+        .as_deref()
+        .and_then(platform::hotkeys::parse_ptt_string)
+        .map(|(binding, _)| binding)
+}
+
+/// The stream key as the Keybinds row shows it, or "" with no key.
+pub(crate) fn stream_key_label(settings: &Settings) -> String {
+    settings
+        .stream_key
+        .as_deref()
+        .and_then(platform::hotkeys::parse_ptt_string)
+        .map(|(_, label)| label)
+        .unwrap_or_default()
+}
+
+/// Shows the stream key row of Keybinds as these settings have it.
+fn show_stream_key_settings(app: &MainWindow, settings: &Settings) {
+    app.set_stream_key_label(stream_key_label(settings).into());
+    app.set_settings_stream_key_warning("".into());
+    app.set_settings_stream_binding(false);
+}
+
+/// The binding other than the stream key that uses this key, as the
+/// Keybinds warnings name it. The game clip key counts on Windows and
+/// macOS only, where the client binds it.
+fn stream_key_taken_by(settings: &Settings, raw: &str) -> Option<&'static str> {
+    if settings.ptt_key.as_deref() == Some(raw) {
+        Some("Push-to-talk")
+    } else if settings.clip_key.as_deref() == Some(raw) {
+        Some("Voice clip")
+    } else if cfg!(any(windows, target_os = "macos"))
+        && settings.game_clip_key.as_deref() == Some(raw)
+    {
+        Some("Game clip")
+    } else {
+        None
+    }
+}
+
 /// The clip qualities of the Game clips section, in the dropdown's rows.
 fn game_clip_qualities() -> Vec<crate::AudioDeviceData> {
     use mello_core::events::GameClipQuality;
@@ -128,6 +171,7 @@ pub fn wire(ctx: &AppContext) {
             game_clip_qualities(),
         )));
     show_game_clip_settings(&ctx.app, &ctx.settings.borrow());
+    show_stream_key_settings(&ctx.app, &ctx.settings.borrow());
 
     // --- About: the Third-party notices view fills its model on the first open ---
     {
@@ -204,6 +248,7 @@ pub fn wire(ctx: &AppContext) {
                 app.set_settings_clip_key_warning("".into());
                 app.set_settings_clip_binding(false);
                 show_game_clip_settings(&app, &settings);
+                show_stream_key_settings(&app, &settings);
                 *prof_st.lock().unwrap() = avatar::AvatarGridState::new();
                 app.set_profile_selected_avatar(-1);
                 app.set_profile_grid_expanded(false);
@@ -585,6 +630,13 @@ pub fn wire(ctx: &AppContext) {
                     );
                     return;
                 }
+                if settings.stream_key.as_deref() == Some(raw_str.as_str()) {
+                    log::info!("Clip key refused, the stream key uses it: {}", raw_str);
+                    app.set_settings_clip_key_warning(
+                        format!("Stream key uses {label}. Pick another key.").into(),
+                    );
+                    return;
+                }
                 log::info!("Clip key registered: {} ({})", label, raw_str);
                 hk.borrow().register_clip(Some(binding));
                 settings.clip_key = Some(raw_str);
@@ -620,6 +672,8 @@ pub fn wire(ctx: &AppContext) {
                     Some("Push-to-talk")
                 } else if settings.clip_key.as_deref() == Some(raw_str.as_str()) {
                     Some("Voice clip")
+                } else if settings.stream_key.as_deref() == Some(raw_str.as_str()) {
+                    Some("Stream key")
                 } else {
                     None
                 };
@@ -636,6 +690,44 @@ pub fn wire(ctx: &AppContext) {
                 settings.save();
                 app.set_game_clip_key_label(label.into());
                 app.set_settings_game_clip_key_warning("".into());
+            });
+    }
+    // --- The stream key (specs/12-STREAMING.md section 11) ---
+    {
+        let s = ctx.settings.clone();
+        let app_weak = ctx.app.as_weak();
+        let hk = ctx.hotkey_mgr.clone();
+        ctx.app
+            .on_settings_stream_key_captured(move |key_text, ctrl, alt, shift, meta| {
+                let Some(app) = app_weak.upgrade() else {
+                    return;
+                };
+                let Some((binding, label, raw_str)) =
+                    platform::hotkeys::slint_key_to_ptt(key_text.as_str(), ctrl, alt, shift, meta)
+                else {
+                    log::debug!(
+                        "Unmappable key, staying in binding mode: {:?}",
+                        key_text.as_str()
+                    );
+                    return;
+                };
+                app.set_settings_stream_binding(false);
+                let mut settings = s.borrow_mut();
+                // A key that another binding uses stays with it. The field
+                // keeps the stream key it had.
+                if let Some(other) = stream_key_taken_by(&settings, &raw_str) {
+                    log::info!("Stream key refused, {other} uses it: {raw_str}");
+                    app.set_settings_stream_key_warning(
+                        format!("{other} uses {label}. Pick another key.").into(),
+                    );
+                    return;
+                }
+                log::info!("Stream key registered: {} ({})", label, raw_str);
+                hk.borrow().register_stream(Some(binding));
+                settings.stream_key = Some(raw_str);
+                settings.save();
+                app.set_stream_key_label(label.into());
+                app.set_settings_stream_key_warning("".into());
             });
     }
     {
@@ -690,6 +782,7 @@ pub fn wire(ctx: &AppContext) {
             if cfg!(any(windows, target_os = "macos")) {
                 hk.borrow().register_game_clip(game_clip_binding(&defaults));
             }
+            hk.borrow().register_stream(stream_binding(&defaults));
             hk.borrow()
                 .set_active(defaults.input_mode == "push_to_talk");
             let _ = cmd.send(defaults.game_clips_command());
@@ -751,6 +844,7 @@ pub fn wire(ctx: &AppContext) {
                 app.set_clip_key_label(clip_key_label(&defaults).into());
                 app.set_settings_clip_key_warning("".into());
                 show_game_clip_settings(&app, &defaults);
+                show_stream_key_settings(&app, &defaults);
                 app.set_settings_hud_enabled(defaults.hud_enabled);
                 app.set_settings_hud_overlay_opacity(defaults.hud_overlay_opacity);
                 app.set_settings_hud_clip_toasts(defaults.hud_show_clip_toasts);

@@ -355,6 +355,10 @@ export component MainWindow inherits Window {
     in property <string> game-clip-key-label: "";
     in property <string> settings-game-clip-key-warning: "";
     in-out property <bool> settings-game-clip-binding: false;
+    /// The stream key as Keybinds shows it ("F9"), or "" when no key is bound.
+    in property <string> stream-key-label: "";
+    in property <string> settings-stream-key-warning: "";
+    in-out property <bool> settings-stream-binding: false;
     in-out property <float> settings-vad-threshold: -40.0;
     in-out property <bool> settings-vad-auto: true;
     in property <string> settings-build-version: "v0.1.0";
@@ -779,6 +783,7 @@ export component MainWindow inherits Window {
     callback settings-ptt-key-captured(/* key_text */ string, /* ctrl */ bool, /* alt */ bool, /* shift */ bool, /* meta */ bool);
     callback settings-clip-key-captured(/* key_text */ string, /* ctrl */ bool, /* alt */ bool, /* shift */ bool, /* meta */ bool);
     callback settings-game-clip-key-captured(/* key_text */ string, /* ctrl */ bool, /* alt */ bool, /* shift */ bool, /* meta */ bool);
+    callback settings-stream-key-captured(/* key_text */ string, /* ctrl */ bool, /* alt */ bool, /* shift */ bool, /* meta */ bool);
     callback setting-changed-game-clips(bool);
     callback setting-changed-game-clip-quality(/* quality id */ string);
     callback settings-reset-defaults();
@@ -1899,6 +1904,9 @@ export component MainWindow inherits Window {
         game-clip-key-label: root.game-clip-key-label;
         game-clip-key-warning: root.settings-game-clip-key-warning;
         game-clip-binding <=> root.settings-game-clip-binding;
+        stream-key-label: root.stream-key-label;
+        stream-key-warning: root.settings-stream-key-warning;
+        stream-binding <=> root.settings-stream-binding;
         vad-threshold <=> root.settings-vad-threshold;
         vad-auto <=> root.settings-vad-auto;
         build-version: root.settings-build-version;
@@ -2044,6 +2052,10 @@ export component MainWindow inherits Window {
         game-clip-key-captured(key, ctrl, alt, shift, meta) => {
             root.settings-show-saved = true;
             root.settings-game-clip-key-captured(key, ctrl, alt, shift, meta);
+        }
+        stream-key-captured(key, ctrl, alt, shift, meta) => {
+            root.settings-show-saved = true;
+            root.settings-stream-key-captured(key, ctrl, alt, shift, meta);
         }
         setting-changed-game-clips(v) => {
             root.settings-show-saved = true;

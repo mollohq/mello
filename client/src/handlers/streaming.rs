@@ -171,6 +171,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_dbg_host_pacing_sleep_delta_ms(0);
             set_host_quality(ctx);
             sync_active_stream_cards(ctx);
+            crate::stream_key::stream_started(ctx);
         }
         // A watched stream ended: the card says why. StreamWatchingStopped
         // follows and stops the viewer.
@@ -252,6 +253,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_dbg_host_pacing_sleep_delta_count(0);
             ctx.app.set_dbg_host_pacing_sleep_delta_ms(0);
             sync_active_stream_cards(ctx);
+            crate::stream_key::stream_ended(ctx);
         }
         Event::StreamTargetExited => {
             // The captured game quit. Stop hosting through the normal path so
@@ -511,6 +513,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     ctx.app.set_stream_label("".into());
                     let name = ctx.app.get_user_name().to_string();
                     show_stream_notice(ctx, "failed", "STREAM DID NOT START", &name, &reason);
+                    crate::stream_key::stream_failed(ctx);
                 }
                 StreamRole::Viewer => {
                     end_watched_card(ctx, "the watch failed");

@@ -1,6 +1,8 @@
 use mello_core::Command;
 use slint::{ComponentHandle, Model};
 
+use tokio::sync::mpsc::UnboundedSender;
+
 use crate::app_context::AppContext;
 use crate::converters::parse_capture_source_id;
 
@@ -116,6 +118,16 @@ fn resolve_stream_source_name(
         .or_else(|| source_name_from_model(app.get_stream_windows(), source_id))
 }
 
+/// End the hosted stream. The end-stream button and the stream key
+/// (`stream_key.rs`) both end a stream through this function.
+pub(crate) fn stop_stream(app: &crate::MainWindow, cmd: &UnboundedSender<Command>) {
+    // Show the result of the click at once. The core confirms with
+    // StreamEnded, which clears the rest of the stream state. If the
+    // core is busy, the button must still respond (2026-09-15 beta).
+    app.set_is_hosting(false);
+    let _ = cmd.send(Command::StopStream);
+}
+
 pub fn wire(ctx: &AppContext) {
     {
         let cmd = ctx.cmd_tx.clone();
@@ -127,6 +139,7 @@ pub fn wire(ctx: &AppContext) {
     {
         let cmd = ctx.cmd_tx.clone();
         let app_weak = ctx.app.as_weak();
+        let stream_key_action = ctx.stream_key_action.clone();
         ctx.app
             .on_start_stream(move |source_id, source_mode, preset_idx| {
                 let mode = source_mode.to_string();
@@ -163,6 +176,8 @@ pub fn wire(ctx: &AppContext) {
                 if let Some(app) = app_weak.upgrade() {
                     app.set_stream_igdb_id(igdb_id as i32);
                 }
+                // The picker made this start: no stream key notification.
+                stream_key_action.set(None);
                 let _ = cmd.send(Command::StopThumbnailRefresh);
                 let _ = cmd.send(Command::StartStream {
                     crew_id,
@@ -180,14 +195,15 @@ pub fn wire(ctx: &AppContext) {
     {
         let cmd = ctx.cmd_tx.clone();
         let app_weak = ctx.app.as_weak();
+        let stream_key_action = ctx.stream_key_action.clone();
         ctx.app.on_stop_stream(move || {
-            // Show the result of the click at once. The core confirms with
-            // StreamEnded, which clears the rest of the stream state. If the
-            // core is busy, the button must still respond (2026-09-15 beta).
+            // The app UI ends the stream: no stream key notification.
+            stream_key_action.set(None);
             if let Some(app) = app_weak.upgrade() {
-                app.set_is_hosting(false);
+                stop_stream(&app, &cmd);
+            } else {
+                let _ = cmd.send(Command::StopStream);
             }
-            let _ = cmd.send(Command::StopStream);
         });
     }
     {

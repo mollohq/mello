@@ -42,6 +42,10 @@ pub struct Settings {
     pub game_clip_quality: String,
     /// The game clip key, in the format of `clip_key` ("F8").
     pub game_clip_key: Option<String>,
+    /// The stream key, in the format of `clip_key` ("F9"). A press starts
+    /// a stream of the detected game, or ends the hosted stream. `None`
+    /// turns the key off.
+    pub stream_key: Option<String>,
     // General tab
     pub start_minimized: bool,
     pub close_to_tray: bool,
@@ -141,6 +145,7 @@ impl Default for Settings {
                 .as_str()
                 .to_string(),
             game_clip_key: Some(crate::platform::hotkeys::DEFAULT_GAME_CLIP_KEY.to_string()),
+            stream_key: Some(crate::platform::hotkeys::DEFAULT_STREAM_KEY.to_string()),
             start_minimized: false,
             close_to_tray: true,
             tray_notice_shown: false,
@@ -347,6 +352,14 @@ mod tests {
                 quality: mello_core::events::GameClipQuality::P720Fps60,
             }
         ));
+    }
+
+    /// A settings file from before the stream key loads with the key on F9.
+    #[test]
+    fn the_stream_key_defaults_to_f9_also_for_old_settings_files() {
+        assert_eq!(Settings::default().stream_key.as_deref(), Some("F9"));
+        let old: Settings = toml::from_str("dark_theme = false\n").expect("old file parses");
+        assert_eq!(old.stream_key.as_deref(), Some("F9"));
     }
 
     #[test]

@@ -812,6 +812,15 @@ Event types:
 }
 ```
 
+**Client handling.** The server sends 111 to all subscribers of the crew. This includes users who have the crew only in the sidebar.
+
+| Crew of the event | Commands from the UI |
+|---|---|
+| The active crew | `SetActiveCrew` and `LoadCrewFeed` for the crew |
+| Another crew | `RefreshSidebarCrews` for the crew (`crew_state_get_sidebar`) |
+
+The UI does not send `SetActiveCrew` for another crew. `set_active_crew` moves the server's active crew, removes the user from the subscribers of the open crew, and sets `last_seen` of the other crew.
+
 #### Code 112 — `sidebar_update`
 
 Batched sidebar update (every 30s). Includes `voice_channels` per crew (members
@@ -1233,6 +1242,7 @@ dispatched as events in the same way.
 Command::UpdatePresence { status, activity }
 Command::SetActiveCrew { crew_id }
 Command::SubscribeSidebar { crew_ids }
+Command::RefreshSidebarCrews { crew_ids }  // crew_state_get_sidebar, read only
 Command::JoinVoice { channel_id }
 Command::CreateVoiceChannel { name }
 Command::RenameVoiceChannel { channel_id, name }
