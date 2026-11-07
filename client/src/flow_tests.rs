@@ -9506,7 +9506,7 @@ fn the_about_tab_is_a_control_and_opens_the_credits() {
         );
     }
     // Petter made the notification sounds. He is in the credits only.
-    let petter = h.controls_labelled("Petter website");
+    let petter = h.controls_labelled("Petter B. website");
     assert_eq!(petter.len(), 1, "Petter: the credits");
     let _ = crate::open_url::take_opened();
     petter[0].mock_single_click(slint::platform::PointerEventButton::Left);
