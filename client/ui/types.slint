@@ -368,6 +368,11 @@ export struct FeedCardData {
     // Session card redesign (voice/stream): typed content, pre-formatted.
     session-kind: string,     // "stream" | "" (non-session cards)
     duration-human: string,   // "3m" / "9h 7m"
+    // The duration of a game session for StatValue: "2" "m", or "2" "h" "05".
+    // "~" leads the value when the card shows the active time.
+    duration-value: string,
+    duration-unit: string,
+    duration-tail: string,
     peak-count: int,          // stream: peak viewers; voice: peak participants
     channel-name: string,     // voice channel display name
     channel-id: string,       // voice channel id (the idle voice card joins it)
@@ -540,6 +545,18 @@ export struct StreamCardData {
     // `title` and the reason in `subtitle` for a few seconds.
     state: string,
     title: string,
+    // The game of the stream (mockup next-gen-feed frames C, D and G): the
+    // catalogue id, the name, and the icon-slot art of the tile ladder.
+    game-id: string,
+    game-name: string,
+    game-monogram: string,
+    game-hue-index: int,
+    game-icon: image,
+    has-game-icon: bool,
+    // What fills the card before you watch: the SFU's last picture of the
+    // stream ("frame"), else the game's hero art ("poster"), else "".
+    picture: image,
+    picture-kind: string,
 }
 
 export struct MemberData {
@@ -854,6 +871,10 @@ export global StreamCardUi {
     in-out property <bool> popped-out: false;
     // The watchable card, for the expanded view.
     in-out property <StreamCardData> watched-card;
+    /// Two or three streams and none watched or hosted: one card of
+    /// strips instead of the grid (mockup frames D and G). Rust sets it
+    /// with the cards.
+    in-out property <bool> strips-layout: false;
     // The hosted stream: its quality preset and what it sends.
     in-out property <string> host-quality: "";
     in-out property <string> host-sending: "";

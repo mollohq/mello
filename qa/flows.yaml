@@ -463,7 +463,7 @@ flows:
     title: Game session cards render from real sessions in the Sessions zone
     priority: P2
     users: 2
-    harness: [zero_telemetry_game_session_renders_compact_card_without_record, the_zones_payload_drives_every_zone]
+    harness: [zero_telemetry_game_session_renders_the_played_card_without_record, the_played_card_takes_the_header_art, the_zones_payload_drives_every_zone]
     journeys: []
     protocol: []
     issues: []

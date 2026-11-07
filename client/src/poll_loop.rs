@@ -165,11 +165,16 @@ impl PollState {
                                 .set_voice_state(VoiceState::Connected);
                         }
                     }
-                    Event::GameDetected { pid, .. } => {
+                    Event::GameDetected {
+                        pid,
+                        game_id,
+                        exe_path,
+                        ..
+                    } => {
                         poll_ctx
                             .fg_monitor
                             .borrow_mut()
-                            .set_game_active(true, Some(*pid));
+                            .set_detected_game(*pid, game_id, exe_path);
                     }
                     Event::GameEnded { .. } => {
                         poll_ctx

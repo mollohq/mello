@@ -70,6 +70,9 @@ pub struct AppContext {
     /// Single-shot timer that auto-dismisses the post-game prompt after 30 s
     /// without interaction (spec 17 §7.2). Cancelled when the user interacts.
     pub post_game_timer: Rc<RefCell<Option<slint::Timer>>>,
+    /// Repeated timer that asks the backend for the newest SFU picture of
+    /// the live stream that you do not watch. `None` when no card needs it.
+    pub stream_picture_timer: Rc<RefCell<Option<slint::Timer>>>,
     /// Set when a Riot-linkable game session just ended; the next RiotStatus
     /// event decides whether to surface the post-game "connect" CTA.
     pub riot_cta_pending: Rc<Cell<bool>>,
@@ -210,6 +213,7 @@ impl AppContext {
             avatar_shuffle_timer: Rc::new(RefCell::new(None)),
             diag_autostop_timer: Rc::new(RefCell::new(None)),
             post_game_timer: Rc::new(RefCell::new(None)),
+            stream_picture_timer: Rc::new(RefCell::new(None)),
             riot_cta_pending: Rc::new(Cell::new(false)),
             session_recovery: Rc::new(Cell::new(false)),
             games_integrations: Rc::new(RefCell::new(Vec::new())),
@@ -288,6 +292,7 @@ impl Clone for AppContext {
             avatar_shuffle_timer: self.avatar_shuffle_timer.clone(),
             diag_autostop_timer: self.diag_autostop_timer.clone(),
             post_game_timer: self.post_game_timer.clone(),
+            stream_picture_timer: self.stream_picture_timer.clone(),
             riot_cta_pending: self.riot_cta_pending.clone(),
             session_recovery: self.session_recovery.clone(),
             games_integrations: self.games_integrations.clone(),

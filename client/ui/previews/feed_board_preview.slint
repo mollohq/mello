@@ -149,10 +149,23 @@ global Hist {
         part1-initials: "SA", part1-avatar: Crew.sara.avatar, part1-has-avatar: true,
         part2-initials: "B0", part2-avatar: Crew.bob.avatar, part2-has-avatar: true };
     out property <FeedCardData> s-drg: { id: "s-drg", card-type: "game-session", game-name: "Deep Rock Galactic", game-capsule: Crew.drg, game-has-capsule: true,
-        actor-name: "Nils", actor-initials: "NI", actor-avatar: Crew.nils.avatar, actor-has-avatar: true, duration-human: "2h 05m", timestamp: "Yesterday", participant-count: 3,
+        actor-name: "Nils", actor-initials: "NI", actor-avatar: Crew.nils.avatar, actor-has-avatar: true, duration-human: "2h 05m", duration-value: "2", duration-unit: "h", duration-tail: "05", timestamp: "Yesterday", participant-count: 3,
+        participants-line: "Nils, Alva +1",
         part0-initials: "NI", part0-avatar: Crew.nils.avatar, part0-has-avatar: true,
         part1-initials: "AL", part1-avatar: Crew.alva.avatar, part1-has-avatar: true,
         part2-initials: "HU", part2-avatar: Crew.hugo.avatar, part2-has-avatar: true };
+    out property <FeedCardData> s-hs: { id: "s-hs", card-type: "game-session", game-name: "Hearthstone", game-monogram: "HS",
+        actor-name: "Oskar", actor-initials: "OS", actor-avatar: Crew.oskar.avatar, actor-has-avatar: true,
+        duration-human: "2m", duration-value: "2", duration-unit: "m", timestamp: "4m ago", participant-count: 1,
+        participants-line: "Oskar",
+        part0-initials: "OS", part0-avatar: Crew.oskar.avatar, part0-has-avatar: true };
+    out property <FeedCardData> s-bg3: { id: "s-bg3", card-type: "game-session", game-name: "Baldur's Gate 3: The Long Night Edition", game-monogram: "BG",
+        actor-name: "Saga", actor-initials: "SA", actor-avatar: Crew.saga.avatar, actor-has-avatar: true,
+        duration-human: "1h 30m", duration-value: "1", duration-unit: "h", duration-tail: "30", timestamp: "2h ago", participant-count: 5,
+        participants-line: "Saga, Juni-Marie Lindqvist +3",
+        part0-initials: "SA", part0-avatar: Crew.saga.avatar, part0-has-avatar: true,
+        part1-initials: "JU", part1-avatar: Crew.juni.avatar, part1-has-avatar: true,
+        part2-initials: "EL", part2-avatar: Crew.elin.avatar, part2-has-avatar: true };
     out property <FeedCardData> s-rl: { id: "s-rl", card-type: "game-session", game-name: "Rocket League", game-capsule: Crew.rl, game-has-capsule: true,
         actor-name: "Max", actor-initials: "MA", actor-avatar: Crew.max.avatar, actor-has-avatar: true, duration-human: "48m", timestamp: "Monday",
         game-record: "2W 1L", game-wins: 2, game-losses: 1, game-matches: 3, participant-count: 2,
@@ -247,7 +260,7 @@ export component PreviewFeedSmall inherits Panel {
         week-big: Base.week-big, week-stats: Base.week-stats,
         titles: Data.titles-monday, title-count: 13, more-label: "+8 MORE",
         people: true, members: [Crew.bob, Crew.jonas, Crew.max], open-seats: 2,
-        sessions: [Hist.s-cs, Hist.s-rl],
+        sessions: [Hist.s-drg, Hist.s-hs, Hist.s-rl],
     };
 }
 
@@ -266,7 +279,7 @@ export component PreviewFeedBig inherits Panel {
         people: true,
         joined: [Crew.elin, Crew.noah, Crew.saga], joined-line: "Elin, Noah and Saga joined", joined-sub: "invited by Max, 20:46", say-hi-card: "j1",
         voice: "call", channel: "Lounge", voice-line: "5 in the call", voice-people: [Crew.jonas, Crew.sara, Crew.ida, Crew.oskar], voice-more: 1,
-        sessions: [Hist.s-cs, Hist.s-drg, Hist.s-rl],
+        sessions: [Hist.s-drg, Hist.s-bg3, Hist.s-cs],
         history: Hist.locked, history-more: true,
     };
 }
@@ -357,6 +370,6 @@ export component PreviewFeedJoinCall inherits Panel {
         people: true, members: [Crew.bob, Crew.jonas, Crew.elin], open-seats: 2,
         joined: [Crew.elin], joined-line: "Elin joined", joined-sub: "invited by Jonas, 20:46", say-hi-card: "j1", say-hi-name: "Elin",
         voice: "call", channel: "Lounge", voice-line: "2 in the call", voice-people: [Crew.jonas, Crew.elin],
-        sessions: [Hist.s-cs, Hist.s-rl],
+        sessions: [Hist.s-hs, Hist.s-cs, Hist.s-drg],
     };
 }

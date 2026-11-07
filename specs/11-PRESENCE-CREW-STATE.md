@@ -151,7 +151,8 @@ voice is "active" for the crew is derived from whether any channel has members
     "title": "PROJECT AVALON",
     "viewer_count": 3,
     "thumbnail_url": "https://...",
-    "thumbnail_updated_at": "2026-03-08T14:15:30Z"
+    "thumbnail_updated_at": "2026-03-08T14:15:30Z",
+    "igdb_id": 1942
   },
   
   "recent_messages": [
@@ -258,7 +259,8 @@ Metadata in Nakama storage: `stream_meta/{stream_id}`
   "started_at": "2026-03-08T14:00:00Z",
   "thumbnail_url": "https://storage.mello.app/thumbnails/stream_123/latest.jpg",
   "thumbnail_updated_at": "2026-03-08T14:15:30Z",
-  "viewer_ids": ["user_a", "user_b", "user_d"]
+  "viewer_ids": ["user_a", "user_b", "user_d"],
+  "igdb_id": 1942
 }
 ```
 
@@ -775,12 +777,13 @@ Priority event (immediate to all subscribers).
     "mode": "sfu",
     "width": 1920,
     "height": 1080,
-    "fps": 60
+    "fps": 60,
+    "igdb_id": 1942
   }
 }
 ```
 
-`stream_started` comes from `stream_live`, when the host's SFU track is open (streaming-quality stage 6). It carries the mode and the encode size and rate, so a viewer starts its decoder with no second RPC. An older client's `start_stream` sends it at the start, without `fps`.
+`stream_started` comes from `stream_live`, when the host's SFU track is open (streaming-quality stage 6). It carries the mode and the encode size and rate, so a viewer starts its decoder with no second RPC. It also carries `igdb_id`, the catalogue id of the captured game from `start_stream` (0 when the stream is not a catalogue game). The crew state's `stream.igdb_id` is the same value; the viewer's stream card draws the game from it (spec 12 §7.9). An older client's `start_stream` sends it at the start, without `fps`.
 
 Event types:
 - `stream_started`
@@ -1191,6 +1194,7 @@ pub struct StreamState {
     pub title: Option<String>,
     pub viewer_count: u32,
     pub thumbnail_url: Option<String>,
+    pub igdb_id: u32, // 0: not a catalogue game
 }
 
 pub struct MessagePreview { pub message_id: Option<String>, pub user_id: Option<String>, pub username: String, pub preview: String, pub timestamp: String }

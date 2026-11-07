@@ -215,6 +215,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.stream_frame_timer.set_watching(false);
             ctx.app.set_streamer_name("".into());
             ctx.app.set_stream_label("".into());
+            ctx.app.set_stream_igdb_id(0);
             ctx.app.set_stream_frame(slint::Image::default());
             #[cfg(target_os = "windows")]
             {
@@ -440,6 +441,19 @@ pub fn handle(ctx: &AppContext, event: Event) {
         }
         Event::StreamError { message } => {
             log::error!("Stream error: {}", message);
+        }
+        Event::StreamPictureLoaded { session_id, url } => {
+            // A reply for a stream that is gone, no picture yet, or the
+            // picture on screen: nothing changes.
+            if session_id != ctx.app.get_active_stream_session_id().as_str()
+                || url.is_empty()
+                || url == ctx.app.get_active_stream_thumbnail_url().as_str()
+            {
+                return;
+            }
+            log::debug!("[stream-picture] new picture for {session_id}");
+            ctx.app.set_active_stream_thumbnail_url(url.into());
+            crate::stream_picture::request(ctx);
         }
         // --- stage 6 (streaming-quality): stream session states ---
         Event::StreamStarting { crew_id } => {

@@ -58,6 +58,8 @@ type CrewStreamState struct {
 	Width              uint32 `json:"width,omitempty"`
 	Height             uint32 `json:"height,omitempty"`
 	ThumbnailUpdatedAt string `json:"thumbnail_updated_at,omitempty"`
+	// IgdbID is the catalogue id of the captured game, 0 when unknown.
+	IgdbID uint32 `json:"igdb_id,omitempty"`
 }
 
 type MessagePreview struct {
@@ -354,6 +356,7 @@ func getActiveStreamForCrew(ctx context.Context, nk runtime.NakamaModule, crewID
 		ThumbnailUpdatedAt: meta.ThumbnailUpdatedAt,
 		Width:              meta.Width,
 		Height:             meta.Height,
+		IgdbID:             meta.IgdbID,
 	}
 }
 

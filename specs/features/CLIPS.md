@@ -263,8 +263,12 @@ are in [CREW-FEED-ZONES.md](./CREW-FEED-ZONES.md). This section has the cards.
   - On the Stage the card is footage edge to edge, cut at the top right. A STREAM tag sits at the top left. A play ring (56 px, white outline, black disc) sits at 46 % of the height. The snapshot plays from the ring, so the card has no filled white button.
   - Bottom left: the time word in capitals ("YESTERDAY"), the streamer octagon, the streamer name, the game and "N watched". Bottom right: the length ("1 h 12 min") on a black chip. The feed shows no stream names: the Stage leads with the game.
   - In a carousel the card keeps the poster on top and a text strip under it.
-- **Live stream card** — one person streaming now, drawn by `StreamCard`, with the red keyline. A live stream is client state (`crew_state`), not a feed entry. The client puts it on the Stage ahead of anything else.
+- **Live stream card** — one person streaming now, drawn by `StreamCard` (`active_streams_panel.slint`). A live stream is client state (`crew_state`), not a feed entry. The client puts it on the Stage ahead of anything else. The red is the LIVE tag, not the keyline. Spec 12 section 7.9 has the card.
+  - Before you watch, the newest SFU picture of the stream fills the card under black washes. Before the first picture the game's hero art fills it, else the tint and the monogram. The play ring is the action ("Watch <name>").
+  - Top left: LIVE with "N WATCHING". Bottom left: the streamer octagon, the name, and under it the game's icon tile and name (the stream title when the stream is not a catalogue game).
+  - While you watch, the picture is 16:9 at the card's width, over a black footer with the controls.
 - **Session card** — a game, voice or stream session in the Sessions carousel. Game icon, participant avatars, duration, clip count. From the event ledger. A game session with a record shows the time under the game name, the record, and a footer with the octagons of who played, "Bob, solo" when one person did, and the length at the right.
+  - A game session without a match record is the played card (`PlayedSessionCard`). The header art of the game fills the card under black washes. Without art, the card shows the tint and the game's monogram. The chip at the top left shows the kicker PLAYED, a keyline and the age of the session. At the bottom left the card shows the game name, then the duration, then the players. The duration uses StatValue: the number in Oxanium, the unit in Barlow, as in "2 m" or "2 h 05". The players row shows up to three octagons and the names; long names elide. The card keeps its cut corner and keyline, and it is not a control.
 - **Live session card** (`live-session`, `LiveSessionCard`) — a game in progress, at the front of the Sessions carousel. Label NOW PLAYING with the red live pip. Red is only the pip. It shows the game art, the game name, the member octagons and "since N min". The client builds it from presence (game id, name, `started_at`) and the sensor of the viewer. It is not a ledger event.
   - One card for each game. Crewmates in the same game share one card and count from the earliest start.
   - When the game ends, the live card leaves. The session card from the ledger replaces it. The two never show together.
@@ -281,34 +285,24 @@ Clip cards render audio as a dot-matrix waveform (`DotWaveform` in `crew_feed.sl
 
 ### 7.2 State: Active Stream(s)
 
-**Single stream:** Stream takes over center, full size. Crew feed accessible via a tab/icon showing "X new clips" badge.
+The live stream stays in the feed, on the Stage. The other zones stay under it.
 
-**Multiple streams:** One stream is always "main" and fills the center at full size. Other active streams appear as small thumbnails along the bottom of the center panel. Click a thumbnail to swap it into main. The crew feed tab/icon sits alongside the stream thumbnails.
+| Cards on the Stage | Layout |
+|---|---|
+| One | One card at the Stage's width |
+| Two or three, none watched or hosted | One card of strips with one "LIVE \| N STREAMING" tag (`LiveStripsCard`) |
+| Four or more, or a watched or a hosted card among them | The two-column grid |
 
-```
-┌──────────────────────────────────────┐
-│                                      │
-│          MAIN STREAM (full)          │
-│          ostkatt · CS2               │
-│                                      │
-│                                      │
-├──────────┬──────────┬────────────────┤
-│ FaiL     │ b0bben   │               │
-│ Valorant │ LoL      │  📋 Feed (3)  │
-└──────────┴──────────┴────────────────┘
-```
+- A stream you do not watch shows its newest SFU picture, asked for every 15 s (`stream_picture`). The client decodes only the stream you watch.
+- The watched card plays in the card. Expand takes the feed area; pop out moves the picture to its own window (spec 12 section 7.9).
+- Your own stream is the hosted card: "YOU ARE LIVE" and END STREAM over your game's hero art.
+- `TwoStreamHero` in `stream_hero.slint` is not used in the feed. The strips card of `active_streams_panel.slint` is the two-stream hero. The crew state carries one stream today, so the app does not show the strips yet (spec 12 section 14).
 
-Stream thumbnails are semi-static: they update with a keyframe roughly every 10 seconds. No continuous decode, no extra CPU/GPU cost for streams you're not actively watching. Only the main stream is fully decoded and rendered.
-
-When the user first opens the center while multiple streams are live, the most recently started stream is main by default. The user's own stream (if they're streaming) is never shown as main to themselves.
-
-Clip button captures from whatever the user is currently watching (the main stream for stream clips, voice audio regardless).
+Clip button captures from whatever the user is currently watching (the watched stream for stream clips, voice audio regardless).
 
 ### 7.3 State: Stream Ends
 
-When the main stream ends: if other streams are still live, the next thumbnail auto-promotes to main. If no streams remain, center transitions back to crew feed. A new session card appears at top with the stream summary.
-
-When a non-main stream ends: its thumbnail disappears. No other change.
+When a stream you watch or host ends, its card says ENDED for 8 s and then goes (spec 12 section 7.9). Without another live stream, the Stage shows the next item of its list (CREW-FEED-ZONES.md section 2). The stream's session goes to the Sessions zone.
 
 ### 7.4 Scroll Behavior
 

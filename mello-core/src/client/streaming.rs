@@ -1208,6 +1208,26 @@ mod capture_source_tests {
     }
 
     #[test]
+    fn hearthstone_carries_its_igdb_id() {
+        // Battle.net installs Hearthstone outside Steam, so only the curated
+        // exe table resolves it.
+        let head = Head::bundled().expect("bundled head.bin must parse");
+        let (known, source) = game_capture_source(
+            Some(&head),
+            5150,
+            "Hearthstone.exe".into(),
+            r"C:\Program Files (x86)\Hearthstone\Hearthstone.exe",
+            "Hearthstone".into(),
+            "Hearthstone.exe".into(),
+            false,
+        )
+        .expect("a catalogue game is a source");
+        assert!(known);
+        assert_eq!(source.igdb_id, 1279, "Hearthstone");
+        assert_eq!(source.exe, "Hearthstone.exe");
+    }
+
+    #[test]
     fn an_unknown_process_with_a_window_carries_zero() {
         let head = Head::bundled().expect("bundled head.bin must parse");
         let (known, source) = game_capture_source(
