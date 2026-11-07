@@ -335,12 +335,33 @@ pub fn wire(ctx: &AppContext) {
                 log::warn!("[invite] no active crew for share");
                 return;
             }
+            // A crew with a custom invite name shares that link (crew quests
+            // gift 2); no new code is needed.
+            let name = {
+                let crews = app.get_crews();
+                (0..crews.row_count())
+                    .filter_map(|i| crews.row_data(i))
+                    .find(|c| c.id.as_str() == crew_id)
+                    .map(|c| c.invite_name.to_string())
+                    .unwrap_or_default()
+            };
+            if !name.is_empty() {
+                app.set_invite_share_url(format!("https://m3llo.app/join/{name}").into());
+                app.set_invite_share_copied(false);
+                app.set_invite_share_open(true);
+                log::info!(
+                    "[invite] sharing the crew's invite name for crew={}",
+                    crew_id
+                );
+                return;
+            }
             log::info!("[invite] requesting new invite code for crew={}", crew_id);
             let _ = cmd.send(Command::CreateInviteCode { crew_id });
         });
     }
     {
         let app_weak = ctx.app.as_weak();
+        let cmd = ctx.cmd_tx.clone();
         ctx.app.on_invite_copy_link(move || {
             let Some(app) = app_weak.upgrade() else {
                 return;
@@ -350,6 +371,11 @@ pub fn wire(ctx: &AppContext) {
                 let _ = clipboard.set_text(&url);
                 log::info!("[invite] copied invite link to clipboard: {}", url);
                 app.set_invite_share_copied(true);
+            }
+            // For the funnel: the first copy of a crew's link (crew quests).
+            let crew_id = app.get_active_crew_id().to_string();
+            if !crew_id.is_empty() {
+                let _ = cmd.send(Command::ReportInviteCopied { crew_id });
             }
         });
     }

@@ -1,0 +1,160 @@
+import { Theme, MelloInputField } from "../theme.slint";
+import { CutShape, CutButton } from "../components/cut.slint";
+import { ZoneButton, Kicker } from "../components/feed_board.slint";
+
+// ============================================================
+//  The custom invite link (crew quests gift 2, plans/crew-quests.md 4.2).
+//  Opened from the face of the gift (Set the link). The name is checked as
+//  it is typed; Save is red and commits a free name.
+// ============================================================
+
+/// The state of the screen, driven from Rust (callbacks/quests.rs).
+export global InviteNamePicker {
+    in-out property <bool> open: false;
+    in-out property <string> crew-name;
+    in-out property <string> name;
+    /// "", "checking", "free", "taken" or "not_allowed".
+    in-out property <string> state;
+    in-out property <bool> busy;
+    in-out property <string> error;
+    callback edited(string);
+    callback save();
+}
+
+export component InviteNameModal inherits Rectangle {
+    in property <string> crew-name;
+    in-out property <string> name;
+    in property <string> state;
+    in property <bool> busy;
+    in property <string> error;
+    callback edited(string);
+    callback save();
+    callback close-requested();
+
+    property <bool> can-save: !root.busy && root.state == "free";
+
+    width: 100%;
+    height: 100%;
+    background: Theme.scrim;
+
+    init => { key-scope.focus(); }
+
+    key-scope := FocusScope {
+        width: 100%;
+        height: 100%;
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.close-requested();
+                accept
+            } else {
+                reject
+            }
+        }
+
+        TouchArea {
+            // a11y: none (backdrop: a click outside the dialog closes it)
+            clicked => { root.close-requested(); }
+        }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 440px;
+            height: inner.preferred-height;
+            background: transparent;
+
+            CutShape { width: parent.width; height: parent.height; n: Theme.notch; fill: Theme.graphic-light; }
+            CutShape { width: parent.width; height: parent.height; n: Theme.notch; inset: Theme.keyline; fill: Theme.surface; }
+            TouchArea {
+                // a11y: none (input blocker: stops clicks reaching the backdrop)
+            }
+
+            inner := VerticalLayout {
+                padding: 22px;
+                spacing: 12px;
+
+                Kicker { text: "INVITE LINK"; }
+                Text {
+                    text: root.crew-name;
+                    font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 20px;
+                    color: Theme.text-primary; overflow: elide;
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    cross-axis-alignment: center;
+                    Text {
+                        text: "m3llo.app/join/";
+                        font-family: Theme.font-body; font-weight: Theme.weight-sentence; font-size: 14px;
+                        color: Theme.text-dim;
+                    }
+                    MelloInputField {
+                        horizontal-stretch: 1;
+                        label: "Invite name";
+                        text <=> root.name;
+                        field-height: 36px;
+                        invalid: root.state == "taken" || root.state == "not_allowed";
+                        edited => { root.edited(self.text); }
+                        accepted => { if root.can-save { root.save(); } }
+                    }
+                }
+                Text {
+                    text: root.state == "free" ? "Free"
+                        : root.state == "taken" ? "Taken"
+                        : root.state == "not_allowed" ? "3 to 24 letters, digits or dashes. Not in the shape of a code."
+                        : root.state == "checking" ? "Checking" : " ";
+                    font-family: Theme.font-body; font-weight: Theme.weight-sentence; font-size: 13px;
+                    color: root.state == "taken" || root.state == "not_allowed" ? Theme.live : Theme.text-body;
+                    wrap: word-wrap;
+                }
+                if root.error != "": Text {
+                    text: root.error;
+                    font-family: Theme.font-body; font-size: 13px; color: Theme.live;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: end;
+                    ZoneButton {
+                        label: "CANCEL"; a11y-label: "Cancel"; tone: "line";
+                        clicked => { root.close-requested(); }
+                    }
+                    Rectangle {
+                        width: save-text.preferred-width + 56px;
+                        height: 36px;
+                        opacity: root.can-save ? 1 : 0.4;
+                        accessible-role: button;
+                        accessible-label: "Save";
+                        accessible-enabled: root.can-save;
+                        CutButton { width: parent.width; height: parent.height; fill-color: Theme.confirm; }
+                        save-text := Text {
+                            text: root.busy ? "SAVING" : "SAVE";
+                            font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 10px;
+                            letter-spacing: Theme.track-kicker; color: Theme.on-confirm;
+                        }
+                        TouchArea {
+                            enabled: root.can-save;
+                            mouse-cursor: root.can-save ? pointer : default;
+                            clicked => { root.save(); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A free name.
+export component Preview inherits Rectangle {
+    width: 865px;
+    height: 500px;
+    background: Theme.bg-app;
+    InviteNameModal { crew-name: "bob_test_26"; name: "brawlbros"; state: "free"; }
+}
+
+/// A taken name.
+export component PreviewTaken inherits Rectangle {
+    width: 865px;
+    height: 500px;
+    background: Theme.bg-app;
+    InviteNameModal { crew-name: "bob_test_26"; name: "squad"; state: "taken"; }
+}

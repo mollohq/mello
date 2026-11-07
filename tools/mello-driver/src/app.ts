@@ -159,13 +159,19 @@ export type AppState = {
   };
   /** The zone feed of the active crew (client/src/handlers/zones.rs). */
   feed_zones: {
-    /** "live", "card", "own" or "" (collapsed). */
-    stage: "live" | "card" | "own" | "";
+    /** "live", "quests", "card", "own" or "" (collapsed). */
+    stage: "live" | "quests" | "card" | "own" | "";
+    /** The quest card of a new crew, when `stage` is "quests" (plans/crew-quests.md). */
+    quests: {
+      count: string;
+      gifts: { label: string; state: "locked" | "ready" | "open"; can_open: boolean }[];
+      rows: { name: string; done: boolean; action: "invite" | "voice" | "settings" | "" }[];
+    } | null;
     /** The card on the Stage when `stage` is "card". */
     stage_card: FeedCard | null;
     /** The belt hero, when the Stage card is one. */
     belt_hero: { headline: string; detail: string; age: string } | null;
-    /** The viewer's own chips on the Stage (a crew of one). */
+    /** The viewer's own chips (a crew of one): on the Stage, or on the solo board while the quest card holds the Stage. */
     own_chips: { title: string; value: string; sealed: boolean }[];
     /** The viewer's octagon wears an image. */
     you_avatar: boolean;

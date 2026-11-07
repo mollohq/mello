@@ -381,6 +381,38 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 		return err
 	}
 
+	// Crew quests gifts (crew_gifts.go)
+	if err := initializer.RegisterRpc("crew_banner_upload_url", CrewBannerUploadURLRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("set_crew_banner", SetCrewBannerRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("clear_crew_banner", ClearCrewBannerRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("check_invite_name", CheckInviteNameRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("set_invite_name", SetInviteNameRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("crew_emoji_upload_url", CrewEmojiUploadURLRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("crew_emoji_add", CrewEmojiAddRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("crew_emoji_remove", CrewEmojiRemoveRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("report_crew_media", ReportCrewMediaRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("report_invite_copied", ReportInviteCopiedRPC); err != nil {
+		return err
+	}
+
 	// -----------------------------------------------------------------------
 	// RPCs — dev tools
 	// -----------------------------------------------------------------------

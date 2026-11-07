@@ -1,0 +1,365 @@
+import { Theme } from "../theme.slint";
+import { CutButtonShape, CutMask } from "./cut.slint";
+import { UserAvatar } from "./avatar.slint";
+import { StatValue } from "./stat.slint";
+import { CardLabel } from "./head2head.slint";
+import { BoardShell, Kicker, ZoneButton } from "./feed_board.slint";
+import { QuestGift, QuestRow } from "../types.slint";
+import { SealedUi } from "./sealed.slint";
+
+// ============================================================
+//  The quest card of a new crew (plans/crew-quests.md, mockup
+//  mello-backlog/mockups/feed-quests.html, approved 7 November 2026).
+//
+//  It stands on the Stage for the first 14 days. On top a reward track:
+//  five gifts on a rail, the last one big. Under it the five steps. A done
+//  step unlocks its gift sealed; the owner opens it. The rows never seal.
+// ============================================================
+
+/// One gift tile: a two-corner tile. Locked: dim cells. Ready: the field
+/// and, for the owner, the red key and a white keyline. Open: the gift.
+component GiftTile inherits Rectangle {
+    in property <QuestGift> gift;
+    in property <bool> hot: false;
+
+    property <bool> ready: root.gift.state == "ready";
+    property <bool> open: root.gift.state == "open";
+    property <length> n: root.gift.big ? 14px : 10px;
+    property <length> key: root.gift.big ? 14px : 11px;
+    property <length> field: root.width - (root.gift.big ? 24px : 20px);
+
+    background: transparent;
+
+    CutButtonShape {
+        width: parent.width; height: parent.height;
+        n: root.n;
+        fill: root.ready && root.gift.can-open
+            ? (root.hot ? Theme.action-line-hover : Theme.text-primary)
+            : root.open || root.ready ? Theme.graphic-med : Theme.card-border;
+    }
+    CutButtonShape {
+        width: parent.width; height: parent.height;
+        n: root.n; inset: Theme.keyline;
+        fill: root.open ? Theme.card-bg : Theme.surface;
+    }
+
+    // The sealed field: dim cells for a locked gift, bright and dim for a
+    // ready one. Same box at every size, so the cells grow with the tile.
+    if !root.open: Path {
+        x: (parent.width - root.field) / 2;
+        y: (parent.height - root.field) / 2;
+        width: root.field; height: root.field;
+        viewbox-width: 52; viewbox-height: 52;
+        commands: root.gift.dim;
+        fill: root.ready ? Theme.card-border : Theme.raised;
+    }
+    if root.ready: Path {
+        x: (parent.width - root.field) / 2;
+        y: (parent.height - root.field) / 2;
+        width: root.field; height: root.field;
+        viewbox-width: 52; viewbox-height: 52;
+        commands: root.gift.bright;
+        fill: Theme.action-quiet;
+    }
+    // The key: the unread state, for the owner only.
+    if root.ready && root.gift.can-open: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: root.key; height: root.key;
+        background: Theme.live;
+    }
+
+    // Open: what the crew got.
+    if root.open && root.gift.content == "art" && root.gift.has-art: Rectangle {
+        x: 1px; y: 1px;
+        width: parent.width - 2px; height: parent.height - 2px;
+        clip: true;
+        Image { source: root.gift.art; width: parent.width; height: parent.height; image-fit: cover; }
+        CutMask { width: parent.width; height: parent.height; n: root.n - 1px; corner: "tl"; fill: Theme.graphic-med; }
+        CutMask { width: parent.width; height: parent.height; n: root.n - 1px; corner: "br"; fill: Theme.graphic-med; }
+    }
+    if root.open && root.gift.content == "link": Image {
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        width: 30px; height: 30px;
+        source: @image-url("../icons/link.svg");
+        colorize: Theme.text-primary;
+    }
+    if root.open && root.gift.content == "emoji" && root.gift.has-art: Image {
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        width: 40px; height: 40px;
+        source: root.gift.art;
+        image-fit: cover;
+    }
+    if root.open && root.gift.content == "week": Text {
+        width: parent.width; height: parent.height;
+        horizontal-alignment: center; vertical-alignment: center;
+        text: root.gift.text;
+        font-family: Theme.font-display;
+        font-weight: Theme.weight-display-bold;
+        font-size: 20px;
+        color: Theme.text-primary;
+    }
+    if root.open && root.gift.content == "plus": VerticalLayout {
+        alignment: center;
+        spacing: 2px;
+        HorizontalLayout {
+            alignment: center;
+            Text { text: "m"; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 22px; color: Theme.text-primary; }
+            Text { text: "3"; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 22px; color: Theme.live; }
+            Text { text: "llo+"; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 22px; color: Theme.text-primary; }
+        }
+        Kicker { text: root.gift.text; horizontal-alignment: center; color: Theme.live; }
+    }
+}
+
+/// A gift on the track: the tile, lifted under the pointer when the owner can
+/// open it, and its label under it. A click sends the gift to the centre view
+/// (SEALED-REVEAL.md section 3). The slot is empty while the card is there,
+/// and the gift is open when it lands.
+component GiftColumn inherits Rectangle {
+    in property <QuestGift> gift;
+
+    property <string> slot-id: "quest:" + root.gift.key;
+    property <bool> away: root.gift.key != "" && SealedUi.active-key == root.gift.key
+        && SealedUi.active-slot == root.slot-id;
+    property <bool> opens: root.gift.state == "ready" && root.gift.can-open && SealedUi.active-kind == "";
+    property <length> size: root.gift.big ? 96px : 72px;
+    property <bool> hover: false;
+
+    width: 96px;
+    height: 116px;
+    background: transparent;
+
+    if root.away: CutButtonShape {
+        x: (parent.width - self.width) / 2;
+        y: (96px - self.height) / 2;
+        width: root.size; height: root.size;
+        n: root.gift.big ? 14px : 10px;
+        stroke: Theme.card-border;
+        stroke-width: Theme.keyline;
+    }
+    tile := GiftTile {
+        visible: !root.away;
+        x: (parent.width - self.width) / 2;
+        y: (96px - self.height) / 2 + (root.hover && root.opens ? -3px : 0px);
+        animate y { duration: 120ms; easing: ease-out; }
+        width: root.size; height: root.size;
+        gift: root.gift;
+        hot: root.hover;
+    }
+    Text {
+        y: 102px;
+        width: parent.width;
+        horizontal-alignment: center;
+        text: root.gift.label;
+        font-family: Theme.font-label;
+        font-weight: Theme.weight-label;
+        font-size: 9px;
+        letter-spacing: Theme.track-kicker;
+        color: root.gift.state == "ready" ? Theme.text-primary
+            : root.gift.state == "open" ? Theme.text-body : Theme.text-tertiary;
+    }
+    // Only a gift the viewer can open is a control.
+    if root.opens: TouchArea {
+        accessible-role: button;
+        accessible-label: "Sealed gift, open it";
+        mouse-cursor: pointer;
+        changed has-hover => { root.hover = self.has-hover; }
+        clicked => {
+            SealedUi.quest = root.gift.reveal;
+            SealedUi.launch("quest", root.slot-id, root.gift.key, {
+                x: tile.absolute-position.x,
+                y: tile.absolute-position.y,
+                w: tile.width,
+                h: tile.height,
+            });
+        }
+    }
+}
+
+/// Five gifts on a rail. The rail fills to the last done step.
+component QuestTrack inherits Rectangle {
+    in property <[QuestGift]> gifts;
+    in property <float> fill;
+
+    height: 116px;
+    background: transparent;
+
+    // The rail runs from the centre of the first tile to the centre of the last.
+    Rectangle {
+        x: 48px; y: 47px;
+        width: parent.width - 96px; height: 2px;
+        background: Theme.card-border;
+        Rectangle {
+            x: 0px;
+            width: parent.width * root.fill; height: parent.height;
+            background: Theme.text-body;
+        }
+    }
+    HorizontalLayout {
+        alignment: space-between;
+        for g in root.gifts: GiftColumn {
+            gift: g;
+        }
+    }
+}
+
+/// One step: a state mark, the name, then the data of a done step or the
+/// action of the next one.
+component QuestRowView inherits Rectangle {
+    callback invite();
+    callback voice();
+    callback settings();
+    in property <QuestRow> step;
+
+    background: transparent;
+
+    Rectangle { y: 0px; height: 1px; background: Theme.card-border; }
+
+    HorizontalLayout {
+        spacing: 14px;
+        cross-axis-alignment: center;
+
+        Rectangle {
+            width: 16px; height: 16px;
+            background: root.step.done ? Theme.text-body : transparent;
+            border-width: root.step.done ? 0px : 1px;
+            border-color: Theme.graphic-med;
+            if root.step.done: Image {
+                x: 2px; y: 2px; width: 12px; height: 12px;
+                source: @image-url("../icons/checkmark.svg");
+                colorize: Theme.on-action;
+            }
+        }
+        Text {
+            width: 132px;
+            text: root.step.name;
+            font-family: Theme.font-display;
+            font-weight: Theme.weight-display;
+            font-size: 14px;
+            color: root.step.done ? Theme.text-body : Theme.text-primary;
+            overflow: elide;
+        }
+        HorizontalLayout {
+            horizontal-stretch: 1;
+            alignment: end;
+            spacing: 10px;
+            cross-axis-alignment: center;
+
+            if root.step.has-person: UserAvatar {
+                size: 20px;
+                initials: root.step.person.initials;
+                color-index: root.step.person.hue-index;
+                avatar: root.step.person.avatar;
+                has-avatar: root.step.person.has-avatar;
+                bg-color: Theme.card-bg;
+            }
+            if root.step.has-art: Rectangle {
+                width: 52px; height: 26px;
+                clip: true;
+                background: Theme.raised;
+                Image { source: root.step.art; width: parent.width; height: parent.height; image-fit: cover; }
+                CutMask { width: parent.width; height: parent.height; n: 6px; corner: "tl"; fill: Theme.card-bg; }
+                CutMask { width: parent.width; height: parent.height; n: 6px; corner: "br"; fill: Theme.card-bg; }
+            }
+            if root.step.title != "": Text {
+                text: root.step.title;
+                font-family: Theme.font-display;
+                font-weight: Theme.weight-display;
+                font-size: 13.5px;
+                color: Theme.text-primary;
+            }
+            if root.step.meta != "": Text {
+                text: root.step.meta;
+                font-family: Theme.font-body;
+                font-weight: Theme.weight-sentence;
+                font-size: 12px;
+                color: Theme.text-dim;
+                overflow: elide;
+            }
+            if root.step.value != "": StatValue {
+                value: root.step.value;
+                unit: root.step.unit;
+                value-size: 14px;
+                unit-size: 12px;
+            }
+            if root.step.key-cap != "": Rectangle {
+                width: max(34px, cap.preferred-width + 16px); height: 24px;
+                border-width: 1px;
+                border-color: Theme.graphic-med;
+                cap := Text {
+                    text: root.step.key-cap;
+                    font-family: Theme.font-display;
+                    font-weight: Theme.weight-display;
+                    font-size: 12px;
+                    color: Theme.text-primary;
+                }
+            }
+            if root.step.action == "invite": ZoneButton {
+                label: "INVITE"; a11y-label: "Invite"; tone: "line";
+                clicked => { root.invite(); }
+            }
+            if root.step.action == "voice": ZoneButton {
+                label: "START VOICE"; a11y-label: "Start voice"; tone: "line";
+                clicked => { root.voice(); }
+            }
+            if root.step.action == "settings": ZoneButton {
+                label: "SETTINGS"; a11y-label: "Game activity settings"; tone: "line";
+                clicked => { root.settings(); }
+            }
+        }
+    }
+}
+
+/// The quest card on the Stage.
+export component QuestCard inherits BoardShell {
+    callback invite();
+    callback voice();
+    callback settings();
+    in property <string> count;
+    in property <float> fill;
+    in property <[QuestGift]> gifts;
+    in property <[QuestRow]> rows;
+
+    // The rows share what the label and the track leave: 16 + 16 + 12 + 116
+    // + 14 above, 6 under. A row reads the size limits of its own layout, so
+    // it does not stretch on its own.
+    property <length> row-h: max(40px, (root.height - 180px) / max(1, root.rows.length));
+
+    corner: "tr";
+
+    VerticalLayout {
+        width: parent.width;
+        height: parent.height;
+        padding: 22px;
+        padding-top: 16px;
+        padding-bottom: 6px;
+        spacing: 0px;
+
+        HorizontalLayout {
+            height: 16px;
+            CardLabel { text: "QUESTS"; vertical-alignment: center; horizontal-stretch: 1; }
+            Text {
+                text: root.count;
+                font-family: Theme.font-display;
+                font-weight: Theme.weight-display;
+                font-size: 13px;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+            }
+        }
+        Rectangle { height: 12px; }
+        QuestTrack {
+            gifts: root.gifts;
+            fill: root.fill;
+        }
+        Rectangle { height: 14px; }
+        for r in root.rows: QuestRowView {
+            height: root.row-h;
+            step: r;
+            invite => { root.invite(); }
+            voice => { root.voice(); }
+            settings => { root.settings(); }
+        }
+    }
+}

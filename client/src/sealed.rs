@@ -122,6 +122,43 @@ pub fn recap_levels(seed: i32) -> Vec<i32> {
         .collect()
 }
 
+/// Cells on a side of the field of a quest gift tile, on a pitch of 6 units.
+pub const GIFT_CELLS: usize = 9;
+
+/// The key of a quest gift: one for each step and crew, with no time in it,
+/// so a gift opens once on a device.
+pub fn quest_key(step: &str, crew_id: &str) -> String {
+    format!("quest:{step}:{crew_id}")
+}
+
+/// The seed of a quest gift. The same in every slot and every day.
+pub fn quest_seed(step: &str, crew_id: &str) -> i32 {
+    (fnv(&[b"quest", step.as_bytes(), crew_id.as_bytes()]) % 9973) as i32
+}
+
+/// The field of a quest gift tile as two paths, bright and dim, in a box of
+/// 52 by 52 units: the sparse field of the sealed recap on a 9 by 9 grid,
+/// 4 units square on a pitch of 6. `lit`: the gift is ready, with bright and
+/// dim cells. Not lit: the gift is locked, a few dim cells only. `keyed`: the
+/// centre 3 by 3 stays clear for the red key.
+pub fn gift_field(seed: i32, lit: bool, keyed: bool) -> (String, String) {
+    let (mut bright, mut dim) = (String::new(), String::new());
+    for i in 0..GIFT_CELLS * GIFT_CELLS {
+        let (c, r) = (i % GIFT_CELLS, i / GIFT_CELLS);
+        if keyed && (3..=5).contains(&c) && (3..=5).contains(&r) {
+            continue;
+        }
+        let v = hash(i as f64 * 1.37 + f64::from(seed) * 57.1 + 0.31);
+        let cell = format!("M{} {}h4v4h-4z", c * 6, r * 6);
+        if lit && v > 0.80 {
+            bright.push_str(&cell);
+        } else if (lit && v > 0.55) || (!lit && v > 0.72) {
+            dim.push_str(&cell);
+        }
+    }
+    (bright, dim)
+}
+
 /// The field of the sealed recap as two paths, in a box of 160 by 248 units:
 /// the bright cells and the dim cells.
 pub fn recap_field(levels: &[i32]) -> (String, String) {
@@ -395,6 +432,46 @@ pub fn recap_seal(week_start_ms: i64, week_end_ms: i64, seal: &Seal) -> RecapSea
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_gift_fixtures_are_what_gift_field_builds() {
+        // The previews draw these strings (sealed_fixtures.slint); a change to
+        // gift_field must show in the previews too.
+        let fixtures = include_str!("../ui/previews/sealed_fixtures.slint");
+        let prop = |name: &str| -> String {
+            let at = fixtures
+                .find(&format!("<string> {name}: \""))
+                .unwrap_or_else(|| panic!("no fixture {name}"));
+            let rest = &fixtures[at..];
+            let start = rest.find('"').expect("quote") + 1;
+            let end = rest[start..].find('"').expect("quote") + start;
+            rest[start..end].to_string()
+        };
+        for (name, seed, lit, keyed) in [
+            ("gift-ready", 29, true, true),
+            ("gift-member", 37, true, false),
+            ("gift-locked", 43, false, false),
+            ("gift-locked-big", 59, false, false),
+        ] {
+            let (bright, dim) = gift_field(seed, lit, keyed);
+            assert_eq!(prop(&format!("{name}-bright")), bright, "{name} bright");
+            assert_eq!(prop(&format!("{name}-dim")), dim, "{name} dim");
+        }
+    }
+
+    #[test]
+    fn a_keyed_gift_keeps_the_centre_clear() {
+        let (bright, dim) = gift_field(29, true, true);
+        for cell in ["M18 18h", "M24 24h", "M30 30h", "M18 30h", "M30 18h"] {
+            assert!(
+                !bright.contains(cell) && !dim.contains(cell),
+                "{cell} is under the key"
+            );
+        }
+        let (bright, _) = gift_field(29, false, false);
+        assert!(bright.is_empty(), "a locked gift has no bright cells");
+    }
+
     use super::*;
     use serde_json::json;
 

@@ -27,6 +27,65 @@ const VOICE_PEOPLE: usize = 5;
 /// Locked teasers in a week row before "+N".
 const TEASERS: usize = 2;
 
+/// The quest card of the active crew, or `None` when it goes
+/// (`quests::build`). Reads the client state the card needs.
+fn quest_card(
+    ctx: &AppContext,
+    q: &mello_core::crew_events::ZoneQuests,
+) -> Option<super::quests::Card> {
+    let crew = ctx.app.get_active_crew_id().to_string();
+    let settings = ctx.settings.borrow();
+    let opened = crate::sealed::opened_keys(&settings, &crew);
+    let is_open = |k: &str| opened.contains(k);
+    let clip_key = crate::callbacks::settings::game_clip_key_label(&settings);
+    let activity_on = settings.share_game_activity;
+    drop(settings);
+    let (viewer, members) = super::clip::h2h_roster(ctx);
+    let person = |id: &str| -> Option<H2hPerson> {
+        std::iter::once(&viewer)
+            .chain(members.iter())
+            .find(|p| p.id == id)
+            .map(|p| super::clip::live_person(ctx, p))
+    };
+    // A banner of game art draws from the art cache; an uploaded one is a
+    // media image.
+    let banner_art = if q.gifts.banner_game_id.is_empty() {
+        super::quests::media_image(ctx, &q.gifts.banner_url)
+    } else {
+        crate::game_icons::resolve_art_worker(
+            ctx,
+            std::slice::from_ref(&q.gifts.banner_game_id),
+            mello_core::art::ArtSlot::Hero,
+        )
+    };
+    let crew_name = ctx.app.get_active_crew_name().to_string();
+    super::quests::build(
+        q,
+        &super::quests::Input {
+            crew_id: &crew,
+            crew_name: &crew_name,
+            viewer_id: viewer.id.as_str(),
+            opened: &is_open,
+            clip_key: &clip_key,
+            activity_on,
+            person: &person,
+            banner_art,
+            emoji_art: super::quests::media_image(ctx, &q.gifts.first_emoji_url),
+            game_art: &|id: &str| {
+                (!id.is_empty())
+                    .then(|| {
+                        crate::game_icons::resolve_art_worker(
+                            ctx,
+                            &[id.to_string()],
+                            mello_core::art::ArtSlot::Header,
+                        )
+                    })
+                    .flatten()
+            },
+        },
+    )
+}
+
 /// Build the zones again from the last feed of the active crew and the client
 /// state now. A poster that is on screen stays on its card (`keep_posters`).
 pub(crate) fn refresh(ctx: &AppContext) {
@@ -230,10 +289,34 @@ fn build_from_zones(ctx: &AppContext, zs: &mello_core::crew_events::FeedZones) -
         None => (None, None),
     };
 
-    // ── Stage. A live stream comes first; it is client state.
+    // The viewer's own chips (a crew of one), for the Stage or, while the
+    // quest card holds the Stage, the solo Board.
+    let own_chips = || -> Vec<crate::TitleHeld> {
+        h2h_data
+            .as_ref()
+            .map(|d| rows(&d.chips))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|t| !t.belt.key.is_empty())
+            .take(4)
+            .collect()
+    };
+    let quest = zs.quests.as_ref().and_then(|q| quest_card(ctx, q));
+
+    // ── Stage. A live stream comes first; it is client state. Then the
+    // quest card of a new crew, which the server sends beside its Stage.
     let mut stage_id = String::new();
     if live {
         z.stage = "live".into();
+    } else if let Some(card) = quest {
+        z.stage = "quests".into();
+        z.quest_count = card.count.into();
+        z.quest_fill = card.fill;
+        z.quest_gifts = model(card.gifts);
+        z.quest_rows = model(card.rows);
+        if zs.stage.kind == "own_belts" {
+            z.own_chips = model(own_chips());
+        }
     } else {
         match zs.stage.kind.as_str() {
             "game_clip" | "stream_replay" => {
@@ -263,14 +346,7 @@ fn build_from_zones(ctx: &AppContext, zs: &mello_core::crew_events::FeedZones) -
                 }
             }
             "own_belts" => {
-                let chips: Vec<crate::TitleHeld> = h2h_data
-                    .as_ref()
-                    .map(|d| rows(&d.chips))
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|t| !t.belt.key.is_empty())
-                    .take(4)
-                    .collect();
+                let chips = own_chips();
                 if !chips.is_empty() {
                     z.stage = "own".into();
                     z.own_chips = model(chips);

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -37,6 +38,32 @@ type VoiceRoom struct {
 	// because SFU instances do not relay between regions. It goes away with
 	// the room when the last member leaves.
 	SFURegion string `json:"sfu_region,omitempty"`
+}
+
+// questCall is the first call quest step of a join that puts a second person
+// in the room: everyone in the room now, guests as a count. It reports false
+// while the room has fewer than two. Call it with voiceRoomsMu held, after the
+// member is added.
+func (r *VoiceRoom) questCall(nowMs int64, channelName string) (QuestCall, bool) {
+	if len(r.Members) < 2 {
+		return QuestCall{}, false
+	}
+	call := QuestCall{DoneMs: nowMs, ChannelID: r.ChannelID, ChannelName: channelName}
+	ids := make([]string, 0, len(r.Members))
+	for id := range r.Members {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		m := r.Members[id]
+		if m.IsGuest {
+			call.Guests++
+			continue
+		}
+		call.UserIDs = append(call.UserIDs, id)
+		call.Names = append(call.Names, m.Username)
+	}
+	return call, true
 }
 
 // VoiceSnapshot is a read-only view returned to callers.
@@ -274,6 +301,11 @@ func joinVoiceRoom(ctx context.Context, logger runtime.Logger, nk runtime.Nakama
 	sameChannelRejoin := voiceUserChannel[p.UserID] == p.ChannelID
 	voiceUserChannelMu.RUnlock()
 
+	// The first call quest step: this join puts a second person in the room.
+	// A re-join adds nobody, so only a first join or a switch counts.
+	var call QuestCall
+	together := false
+
 	if sameChannelRejoin {
 		// Ensure the member entry exists, preserve JoinedAt, refresh username.
 		upsertVoiceMember(p.ChannelID, p.CrewID, p.UserID, p.Username, p.IsGuest)
@@ -298,6 +330,7 @@ func joinVoiceRoom(ctx context.Context, logger runtime.Logger, nk runtime.Nakama
 			JoinedAt: time.Now().UnixMilli(),
 			IsGuest:  p.IsGuest,
 		}
+		call, together = room.questCall(time.Now().UnixMilli(), p.ChannelName)
 		voiceRoomsMu.Unlock()
 
 		voiceUserChannelMu.Lock()
@@ -348,6 +381,10 @@ func joinVoiceRoom(ctx context.Context, logger runtime.Logger, nk runtime.Nakama
 		PushVoiceUpdate(ctx, logger, nk, p.CrewID)
 		// Refresh Live Now for the crew's sidebar (non-active) subscribers.
 		QueueSidebarVoiceDelta(logger, nk, p.CrewID)
+	}
+
+	if together {
+		questsMarkCall(ctx, logger, nk, p.CrewID, call)
 	}
 
 	return GetVoiceChannelSnapshot(p.ChannelID), nil

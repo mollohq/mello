@@ -1,5 +1,7 @@
-// FEED-03: a user alone in a new crew sees the solo feed: the Stage with the
-// viewer's own chips, the solo board with the games of this PC, and the
+// FEED-03: a user alone in a new crew sees the solo feed: the quest card on
+// the Stage, the solo board with the games of this PC and, under them, the
+// viewer's own chips (plans/crew-quests.md: the own chips move to the solo
+// board while the quest card holds the Stage), and the
 // People zone with the first five: the viewer and four open seats with the
 // red invite. Spec features/CREW-FEED-ZONES.md.
 //
@@ -30,12 +32,12 @@ export default journey({
       await bob.waitFor("the app, logged in", (s) => s.screen === "app" && s.logged_in, 20_000);
     });
 
-    await step("the Stage has the own chips, the board is solo, four seats are open", async () => {
+    await step("the Stage has the quest card, the solo board has the own chips, four seats are open", async () => {
       // The feed shows before the library report returns the own values and
       // the games, so wait for them.
       const s = await bob.waitFor(
         "the own chips and the solo games",
-        (st) => st.feed_zones.stage === "own" && st.feed_zones.own_chips.length > 0 && st.feed_zones.solo_games.length > 0,
+        (st) => st.feed_zones.stage === "quests" && st.feed_zones.own_chips.length > 0 && st.feed_zones.solo_games.length > 0,
         15_000,
       );
       const z = s.feed_zones;

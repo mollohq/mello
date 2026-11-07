@@ -1,9 +1,11 @@
 import { Theme } from "../theme.slint";
-import { CutButtonShape } from "../components/cut.slint";
+import { CutButtonShape, CutShape } from "../components/cut.slint";
 import { UserAvatar } from "../components/avatar.slint";
 import { H2hHue } from "../components/head2head.slint";
 import { StatValue } from "../components/stat.slint";
-import { BeltReveal } from "../types.slint";
+import { BeltReveal, QuestReveal } from "../types.slint";
+import { CutMask } from "../components/cut.slint";
+import { ZoneButton, Kicker } from "../components/feed_board.slint";
 import { Clock, Ease, SealedUi, SealedFmt, SealedRecap } from "../components/sealed.slint";
 
 // ============================================================
@@ -310,6 +312,243 @@ component BigBeltFace inherits Rectangle {
     }
 }
 
+// ---- Crew quests: a sealed gift in the centre ----------------------------
+// The card is 320 by 540, one corner cut (bottom left), as the recap face of
+// the mockup (mello-backlog/mockups/feed-quests.html, frames 3 to 7).
+
+global QuestCard {
+    out property <length> w: 320px;
+    out property <length> h: 540px;
+    /// Where the actions sit on the face, from the left of the card.
+    out property <length> actions-x: 26px;
+
+    // The block of the gift (the kicker, the gift, its name, its line, the
+    // actions) stands in the middle between the moment (to 118) and the foot
+    // (from 482), as the mockup centres it.
+    public pure function gift-h(r: QuestReveal) -> length {
+        return r.content == "art" ? 125px : r.content == "link" ? 84px : r.content == "emoji" ? 48px : 150px;
+    }
+    public pure function top(r: QuestReveal) -> length {
+        let block = 24px + gift-h(r) + 18px + 36px + line-h(r) + (r.action1 != "" ? 46px : 0px);
+        return 118px + (364px - block) / 2;
+    }
+    /// The line under the name: one row, or two for a long one.
+    public pure function line-h(r: QuestReveal) -> length {
+        return r.gift-line == "" ? 0px : r.gift-line.character-count > 38 ? 44px : 26px;
+    }
+    public pure function name-y(r: QuestReveal) -> length {
+        return top(r) + 24px + gift-h(r) + 18px;
+    }
+    public pure function actions-y(r: QuestReveal) -> length {
+        return name-y(r) + 36px + line-h(r) + 10px;
+    }
+}
+
+/// The back of a sealed gift: the field of its tile, grown to the card, and
+/// the red key. The field fades from the key while the card charges.
+component QuestBack inherits Rectangle {
+    in property <QuestReveal> reveal;
+    in property <float> clear: 0;
+
+    CutButtonShape { width: parent.width; height: parent.height; n: 24px; fill: Theme.graphic-med; }
+    CutButtonShape { width: parent.width; height: parent.height; n: 24px; inset: 2px; fill: Theme.surface; }
+
+    Path {
+        x: 30px; y: (parent.height - parent.width + 60px) / 2;
+        width: parent.width - 60px; height: parent.width - 60px;
+        viewbox-width: 52; viewbox-height: 52;
+        commands: root.reveal.dim;
+        fill: Theme.card-border;
+        opacity: 1 - root.clear;
+    }
+    Path {
+        x: 30px; y: (parent.height - parent.width + 60px) / 2;
+        width: parent.width - 60px; height: parent.width - 60px;
+        viewbox-width: 52; viewbox-height: 52;
+        commands: root.reveal.bright;
+        fill: Theme.action-quiet;
+        opacity: 1 - root.clear;
+    }
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 44px; height: 44px;
+        background: Theme.live;
+        transform-scale: 1 + 0.35 * root.clear;
+    }
+}
+
+/// The face of a gift: the label, the moment of the step, "UNLOCKED", the
+/// gift, its name, a line, the count. The actions are drawn over it by the
+/// centre view at rest, where the card stands still.
+component QuestFace inherits Rectangle {
+    in property <QuestReveal> reveal;
+
+    property <color> hue: H2hHue.of(root.reveal.hue-index);
+    property <bool> wide: root.reveal.content == "art" || root.reveal.content == "link";
+    // The week and m3llo+ are a square gift: it stands in the middle, with
+    // its name and line under it.
+    property <bool> square: root.reveal.content == "week" || root.reveal.content == "plus";
+
+    CutShape { width: parent.width; height: parent.height; n: 24px; corner: "bl"; fill: root.hue; }
+    CutShape { width: parent.width; height: parent.height; n: 24px; corner: "bl"; inset: 2px; fill: Theme.card-bg; }
+
+    // Label.
+    Label { x: 26px; y: 26px; text: root.reveal.label; }
+
+    // The moment.
+    HorizontalLayout {
+        x: 26px; y: 52px;
+        width: parent.width - 52px; height: 52px;
+        spacing: 12px;
+        cross-axis-alignment: center;
+        if root.reveal.moment-has-person: UserAvatar {
+            size: 40px;
+            initials: root.reveal.moment-person.initials;
+            avatar: root.reveal.moment-person.avatar;
+            has-avatar: root.reveal.moment-person.has-avatar;
+            color-index: root.reveal.moment-person.hue-index;
+            bg-color: Theme.card-bg;
+        }
+        if root.reveal.moment-has-art: Rectangle {
+            width: 64px; height: 30px;
+            clip: true;
+            background: Theme.raised;
+            Image { source: root.reveal.moment-art; width: parent.width; height: parent.height; image-fit: cover; }
+            CutMask { width: parent.width; height: parent.height; n: 6px; corner: "tl"; fill: Theme.card-bg; }
+            CutMask { width: parent.width; height: parent.height; n: 6px; corner: "br"; fill: Theme.card-bg; }
+        }
+        if root.reveal.moment-value != "": StatValue {
+            value: root.reveal.moment-value;
+            unit: root.reveal.moment-unit;
+            value-size: 34px; unit-size: 17px;
+            value-weight: Theme.weight-display-bold;
+            hue: Theme.text-primary;
+            unit-color: Theme.text-secondary;
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            if root.reveal.moment-title != "": Text {
+                text: root.reveal.moment-title;
+                font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 17px;
+                color: Theme.text-primary; overflow: elide;
+            }
+            Text {
+                text: root.reveal.moment-sub;
+                font-family: Theme.font-body; font-weight: Theme.weight-sentence; font-size: 13px;
+                color: Theme.text-dim; overflow: elide;
+            }
+        }
+    }
+    Rectangle { x: 26px; y: 118px; width: parent.width - 52px; height: 1px; background: Theme.card-border; }
+
+    Kicker {
+        x: 26px; y: QuestCard.top(root.reveal);
+        width: parent.width - 52px;
+        horizontal-alignment: root.square ? center : left;
+        text: "UNLOCKED"; color: Theme.text-body;
+    }
+
+    // The gift, in a frame of the hue.
+    Rectangle {
+        x: root.square ? (parent.width - 150px) / 2 : 26px;
+        y: QuestCard.top(root.reveal) + 24px;
+        width: root.wide ? parent.width - 52px : 150px;
+        height: QuestCard.gift-h(root.reveal);
+
+        if root.reveal.content != "emoji": CutButtonShape { width: parent.width; height: parent.height; n: 14px; fill: root.hue; }
+        if root.reveal.content != "emoji": CutButtonShape { width: parent.width; height: parent.height; n: 14px; inset: 1px; fill: Theme.surface; }
+
+        if root.reveal.content == "art" && root.reveal.gift-has-art: Rectangle {
+            x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
+            clip: true;
+            Image { source: root.reveal.gift-art; width: parent.width; height: parent.height; image-fit: cover; }
+            CutMask { width: parent.width; height: parent.height; n: 13px; corner: "tl"; fill: root.hue; }
+            CutMask { width: parent.width; height: parent.height; n: 13px; corner: "br"; fill: root.hue; }
+        }
+        if root.reveal.content == "art" && !root.reveal.gift-has-art: Kicker {
+            width: parent.width; height: parent.height;
+            horizontal-alignment: center; vertical-alignment: center;
+            text: "BANNER"; color: Theme.text-tertiary;
+        }
+        if root.reveal.content == "link": VerticalLayout {
+            padding-left: 18px;
+            alignment: center;
+            spacing: 2px;
+            Text { text: "m3llo.app/join/"; font-family: Theme.font-body; font-weight: Theme.weight-sentence; font-size: 13px; color: Theme.text-dim; }
+            Text { text: root.reveal.gift-text; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 26px; color: Theme.text-primary; overflow: elide; }
+        }
+        if root.reveal.content == "emoji": HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            for i in 5: Rectangle {
+                width: 44px; height: 44px;
+                border-width: 1px;
+                border-color: Theme.graphic-med;
+                if i == 0: Text {
+                    text: "+"; font-family: Theme.font-display; font-size: 18px; color: Theme.text-dim;
+                    horizontal-alignment: center; vertical-alignment: center;
+                    width: parent.width; height: parent.height;
+                }
+            }
+        }
+        if root.reveal.content == "week": Text {
+            width: parent.width; height: parent.height;
+            horizontal-alignment: center; vertical-alignment: center;
+            text: root.reveal.gift-text;
+            font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 52px;
+            color: Theme.text-primary;
+        }
+        if root.reveal.content == "plus": VerticalLayout {
+            alignment: center;
+            spacing: 6px;
+            HorizontalLayout {
+                alignment: center;
+                Text { text: "m"; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 40px; color: Theme.text-primary; }
+                Text { text: "3"; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 40px; color: Theme.live; }
+                Text { text: "llo+"; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 40px; color: Theme.text-primary; }
+            }
+            // The days stand out in red, as the 3 of the mark.
+            Text {
+                text: root.reveal.gift-text;
+                horizontal-alignment: center;
+                font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 18px;
+                letter-spacing: 1px;
+                color: Theme.live;
+            }
+        }
+    }
+
+    // Name and line.
+    Text {
+        x: 26px; y: QuestCard.name-y(root.reveal); width: parent.width - 52px;
+        horizontal-alignment: root.square ? center : left;
+        text: root.reveal.name;
+        font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 30px;
+        color: Theme.text-primary; overflow: elide;
+    }
+    Text {
+        x: 26px; y: QuestCard.name-y(root.reveal) + 38px; width: parent.width - 52px;
+        horizontal-alignment: root.square ? center : left;
+        text: root.reveal.gift-line;
+        font-family: Theme.font-body; font-weight: Theme.weight-sentence; font-size: 14px;
+        color: Theme.text-body;
+        wrap: word-wrap;
+    }
+
+    // Foot.
+    Rectangle { x: 26px; y: 482px; width: parent.width - 52px; height: 1px; background: Theme.card-border; }
+    Kicker { x: 26px; y: 500px; text: "QUESTS"; }
+    Text {
+        x: parent.width - 26px - self.width; y: 496px;
+        text: root.reveal.count;
+        font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 15px;
+        color: Theme.text-primary;
+    }
+}
+
 /// The box of the card at rest. It draws nothing and is no control.
 component SealedCardBounds inherits Rectangle {
     background: transparent;
@@ -327,7 +566,10 @@ export component SealedStage inherits Rectangle {
     out property <float> count: Ease.out-cubic(Ease.span(root.t, 1150ms, 2050ms));
 
     property <bool> is-recap: SealedUi.active-kind == "recap";
-    property <color> hue: root.is-recap ? Theme.action : H2hHue.of(SealedUi.belt.hue-index);
+    property <bool> is-quest: SealedUi.active-kind == "quest";
+    property <color> hue: root.is-recap ? Theme.action
+        : root.is-quest ? H2hHue.of(SealedUi.quest.hue-index)
+        : H2hHue.of(SealedUi.belt.hue-index);
     property <duration> t: Clock.now - SealedUi.t0;
     property <duration> tc: SealedUi.closing ? Clock.now - SealedUi.t1 : -1ms;
     property <bool> done: SealedUi.close-done;
@@ -342,8 +584,8 @@ export component SealedStage inherits Rectangle {
     property <float> fly: Ease.in-out-cubic(Ease.span(root.t, 0ms, 520ms));
     property <float> back: SealedUi.closing ? Ease.in-out-cubic(Ease.span(root.tc, 0ms, 460ms)) : 0;
     property <float> k: root.fly * (1 - root.back);
-    property <length> bw: root.is-recap ? SealedUi.from.w : 800px;
-    property <length> bh: root.is-recap ? SealedUi.from.h : 400px;
+    property <length> bw: root.is-recap ? SealedUi.from.w : root.is-quest ? QuestCard.w : 800px;
+    property <length> bh: root.is-recap ? SealedUi.from.h : root.is-quest ? QuestCard.h : 400px;
     property <float> s0: SealedUi.from.h / root.bh;
     // At rest the card keeps 40 px of the panel on every side. It shrinks to
     // fit the panel in height and in width, and never grows past its own size:
@@ -501,13 +743,24 @@ export component SealedStage inherits Rectangle {
             drop-shadow-color: root.hue.with-alpha(0.8);
         }
 
-        if !root.face && !root.is-recap: BigBeltBack {
+        if !root.face && root.is-quest: QuestBack {
+            width: parent.width;
+            height: parent.height;
+            reveal: SealedUi.quest;
+            clear: root.antic;
+        }
+        if root.face && root.is-quest: QuestFace {
+            width: parent.width;
+            height: parent.height;
+            reveal: SealedUi.quest;
+        }
+        if !root.face && !root.is-recap && !root.is-quest: BigBeltBack {
             width: parent.width;
             height: parent.height;
             belt: SealedUi.belt;
             clear: root.antic;
         }
-        if root.face && !root.is-recap: BigBeltFace {
+        if root.face && !root.is-recap && !root.is-quest: BigBeltFace {
             width: parent.width;
             height: parent.height;
             belt: SealedUi.belt;
@@ -571,8 +824,37 @@ export component SealedStage inherits Rectangle {
         opacity: 1 - self.u * self.u;
     }
 
+    // The actions of a quest gift, over the face at rest: the card stands
+    // still then, so the buttons sit where the face leaves room for them. A
+    // click closes the view and asks Rust to open what the action sets up.
+    if root.is-quest && root.resting && !SealedUi.closing && SealedUi.quest.action1 != "": HorizontalLayout {
+        x: root.cx - root.bw * root.scale / 2 + QuestCard.actions-x * root.scale;
+        y: root.cy - root.bh * root.scale / 2 + QuestCard.actions-y(SealedUi.quest) * root.scale;
+        spacing: 10px;
+        alignment: start;
+        opacity: Ease.span(root.t, 1500ms, 1800ms);
+        ZoneButton {
+            label: SealedUi.quest.action1-label.to-uppercase();
+            a11y-label: SealedUi.quest.action1-label;
+            tone: "line";
+            clicked => {
+                SealedUi.close();
+                SealedUi.quest-action(SealedUi.quest.action1);
+            }
+        }
+        if SealedUi.quest.action2 != "": ZoneButton {
+            label: SealedUi.quest.action2-label.to-uppercase();
+            a11y-label: SealedUi.quest.action2-label;
+            tone: "line";
+            clicked => {
+                SealedUi.close();
+                SealedUi.quest-action(SealedUi.quest.action2);
+            }
+        }
+    }
+
     // Embers on the big belt at rest. A gradient glow, no shadows.
-    for i in (root.is-recap ? 0 : 80): Particle {
+    for i in (root.is-recap || root.is-quest ? 0 : 80): Particle {
         property <float> W: 800;
         property <float> H: 400;
         property <float> C: 36;

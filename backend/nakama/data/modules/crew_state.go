@@ -107,6 +107,10 @@ type CrewState struct {
 	Open           bool                     `json:"open"`
 	InvitePolicy   string                   `json:"invite_policy,omitempty"` // "admins" or "everyone" (default: "everyone")
 	SFUEnabled     bool                     `json:"sfu_enabled,omitempty"`
+	// Banner, InviteName and Emoji are the crew quests gifts 1 to 3.
+	Banner     *CrewBanner `json:"banner,omitempty"`
+	InviteName string      `json:"invite_name,omitempty"`
+	Emoji      []CrewEmoji `json:"emoji,omitempty"`
 }
 
 // CrewSidebarState is a lighter view for the sidebar.
@@ -315,6 +319,12 @@ func ComputeCrewState(ctx context.Context, logger runtime.Logger, nk runtime.Nak
 		Open:           group.GetOpen().GetValue(),
 		InvitePolicy:   invitePolicy,
 		SFUEnabled:     sfuEnabledForCrew(ctx, nk, crewID),
+	}
+	profile, _ := readCrewProfile(ctx, nk, crewID)
+	state.Banner = profile.Banner
+	state.InviteName = profile.InviteName
+	if emoji, _ := readCrewEmoji(ctx, nk, crewID); len(emoji.Emoji) > 0 {
+		state.Emoji = emoji.Emoji
 	}
 
 	// Cache it (without members to keep cache light)

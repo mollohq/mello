@@ -172,6 +172,9 @@ func CreateCrewRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 	}
 	logger.Info("Created crew group_id=%s name=%q", group.Id, group.Name)
 
+	// The quest record of the new crew: crew made is its first step.
+	questsCreate(ctx, logger, nk, group.Id, userID)
+
 	// Store avatar in Nakama storage and set avatar_url on the group
 	if req.Avatar != "" {
 		avatarValue, _ := json.Marshal(map[string]string{"data": req.Avatar})
@@ -568,6 +571,12 @@ func recordMemberJoined(ctx context.Context, logger runtime.Logger, nk runtime.N
 	if err := AppendCrewEvent(ctx, nk, crewID, event); err != nil {
 		logger.Warn("Failed to write member_joined event for crew %s: %v", crewID, err)
 	}
+	questsMarkFriend(ctx, logger, nk, crewID, QuestFriend{
+		UserID:        userID,
+		Name:          displayName,
+		InvitedBy:     data.InvitedBy,
+		InvitedByName: data.InvitedByName,
+	})
 }
 
 func AfterLeaveCrew(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, in *api.LeaveGroupRequest) error {
