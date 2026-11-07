@@ -179,12 +179,46 @@ fn opening_a_gift_runs_the_reveal_and_opens_only_that_gift() {
     );
     // A new feed load keeps it open.
     h.emit(Event::FeedLoaded {
-        response: quests_feed("user-1", steps, serde_json::json!({})),
+        response: quests_feed("user-1", steps.clone(), serde_json::json!({})),
     });
     assert_eq!(
         gift_states(&h),
         ["open", "ready", "locked", "locked", "locked"]
     );
+    // So does a restart: the key is in the settings.
+    let mut next = h.restart();
+    on_crew(&mut next);
+    next.emit(Event::FeedLoaded {
+        response: quests_feed("user-1", steps, serde_json::json!({})),
+    });
+    assert_eq!(
+        gift_states(&next),
+        ["open", "ready", "locked", "locked", "locked"]
+    );
+}
+
+/// At `ends_ms` the server stops sending `quests`. The card goes and the
+/// server's Stage is back, with its clip out of Clips, gifts opened or not.
+#[test]
+fn the_card_goes_when_the_server_stops_sending_quests() {
+    let mut h = Harness::new();
+    on_crew(&mut h);
+    h.emit(Event::FeedLoaded {
+        response: quests_feed("user-1", serde_json::json!({}), serde_json::json!({})),
+    });
+    assert_eq!(h.app().get_feed_zones().stage.as_str(), "quests");
+    let mut after = quests_feed("user-1", serde_json::json!({}), serde_json::json!({}));
+    after.zones.quests = None;
+    h.emit(Event::FeedLoaded { response: after });
+    let z = h.app().get_feed_zones();
+    assert_eq!(z.stage.as_str(), "card");
+    assert_eq!(
+        z.quest_gifts.row_count(),
+        0,
+        "no gift track without the card"
+    );
+    assert_eq!(z.clips.row_count(), 1);
+    assert!(h.controls_labelled("Sealed gift, open it").is_empty());
 }
 
 /// An action on the face closes the view and asks for its screen.
@@ -930,4 +964,26 @@ fn an_emoji_image_is_a_square_png_and_names_follow_the_server() {
     use crate::callbacks::emoji_name_ok_for_test as ok;
     assert!(ok("gg") && ok("ida_rage") && ok("w45"));
     assert!(!ok("g") && !ok("Ida") && !ok("ida-rage") && !ok(&"a".repeat(25)));
+}
+
+/// A member's emoji slots open with the feed that has the first call done.
+/// Crew state loaded before it, so only the feed load can open them (seen in
+/// the quest journey, 2026-11-07).
+#[test]
+fn the_emoji_slots_open_with_the_feed_of_the_first_call() {
+    let mut h = Harness::new();
+    on_crew(&mut h);
+    h.emit(Event::FeedLoaded {
+        response: quests_feed("u-ida", serde_json::json!({}), serde_json::json!({})),
+    });
+    let enabled = |h: &Harness| h.app().global::<crate::CrewEmojiUi>().get_enabled();
+    assert!(!enabled(&h), "no slots before the first call");
+    h.emit(Event::FeedLoaded {
+        response: quests_feed(
+            "u-ida",
+            serde_json::json!({"call": {"user_ids": ["u-ida", "user-1"]}}),
+            serde_json::json!({}),
+        ),
+    });
+    assert!(enabled(&h), "the feed of the first call opens the slots");
 }

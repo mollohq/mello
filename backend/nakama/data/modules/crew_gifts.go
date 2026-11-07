@@ -326,6 +326,7 @@ func storeBanner(ctx context.Context, logger runtime.Logger, nk runtime.NakamaMo
 		}
 	}
 	InvalidateCrewState(crewID)
+	pushCrewGiftsChanged(ctx, logger, nk, crewID, "banner")
 	data, _ := json.Marshal(map[string]interface{}{"banner": p.Banner})
 	return string(data), nil
 }
@@ -467,6 +468,7 @@ func SetInviteNameRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 		holdInviteName(ctx, logger, nk, req.CrewID, old, nowMs+inviteNameHoldMs)
 	}
 	InvalidateCrewState(req.CrewID)
+	pushCrewGiftsChanged(ctx, logger, nk, req.CrewID, "link")
 	logger.Info("crew %s invite name %q (was %q)", req.CrewID, name, old)
 	data, _ := json.Marshal(map[string]string{"invite_name": name})
 	return string(data), nil
@@ -677,6 +679,7 @@ func CrewEmojiAddRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 		return "", runtime.NewError("failed to add emoji", 13)
 	}
 	InvalidateCrewState(req.CrewID)
+	pushCrewGiftsChanged(ctx, logger, nk, req.CrewID, "emoji")
 	data, _ := json.Marshal(map[string]interface{}{"emoji": d.Emoji})
 	return string(data), nil
 }
@@ -724,6 +727,7 @@ func CrewEmojiRemoveRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, 
 		}
 	}
 	InvalidateCrewState(req.CrewID)
+	pushCrewGiftsChanged(ctx, logger, nk, req.CrewID, "emoji")
 	data, _ := json.Marshal(map[string]interface{}{"emoji": d.Emoji})
 	return string(data), nil
 }
@@ -785,6 +789,29 @@ func questsGrantPlus(ctx context.Context, logger runtime.Logger, nk runtime.Naka
 	logger.Info("quests m3llo+: crew %s granted %d members", crewID, len(granted))
 }
 
+// pushCrewGiftsChanged tells the members who have the crew open that a gift
+// changed: the banner, the invite name or the crew emoji. It is a crew event
+// (code 111), which makes the client load crew state and the feed again. Only
+// the members with the crew open get it: the gifts draw in the open crew, and
+// a sidebar crew has nothing to load again.
+func pushCrewGiftsChanged(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID, gift string) {
+	content := map[string]interface{}{
+		"type":    "crew_event",
+		"crew_id": crewID,
+		"event":   "crew_gifts",
+		"data":    map[string]interface{}{"gift": gift},
+	}
+	seen := map[string]bool{}
+	for _, sub := range getActiveSubscribersForCrew(crewID) {
+		if seen[sub.UserID] {
+			continue
+		}
+		seen[sub.UserID] = true
+		pushNotification(ctx, nk, sub.UserID, NotifyCrewEvent, content)
+	}
+	logger.Debug("crew gifts: %s changed for crew %s, %d open", gift, crewID, len(seen))
+}
+
 // ---------------------------------------------------------------------------
 // Reports and the invite copied mark
 // ---------------------------------------------------------------------------
@@ -800,6 +827,12 @@ type MediaReport struct {
 	URL        string `json:"url"`
 	ReporterID string `json:"reporter_id,omitempty"`
 	Ts         int64  `json:"ts"`
+	// Set by the admin takedown or dismiss (admin_media_reports.go). An
+	// open report has no Status.
+	Status string `json:"status,omitempty"` // taken_down | dismissed
+	Reason string `json:"reason,omitempty"`
+	Actor  string `json:"actor,omitempty"`
+	DoneMs int64  `json:"done_ms,omitempty"`
 }
 
 // ReportCrewMediaRPC records a report. A signed-in user, or the join page

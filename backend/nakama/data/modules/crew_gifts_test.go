@@ -604,3 +604,40 @@ func TestCrewStateAndInviteCarryTheGifts(t *testing.T) {
 func (f *fakeQuestsNk) ChannelMessagesList(_ context.Context, _ string, _ int, _ bool, _ string) ([]*api.ChannelMessage, string, string, error) {
 	return nil, "", "", nil
 }
+
+// A member adds an emoji. The owner has the crew open and gets a crew event,
+// so the client loads crew state with the new emoji (seen in a local journey,
+// 2026-11-07). A member with the crew only in the sidebar gets none: the
+// gifts draw only in the open crew.
+func TestAGiftChangeTellsTheOpenCrewOnly(t *testing.T) {
+	nk := giftsCrew(t)
+	markStep(t, nk, "gc", func(q *CrewQuests) { q.Steps.Call = &QuestCall{DoneMs: 1} })
+	openCrew("own", "gc")
+	getOrCreateSubscription("side") // a client with gc in its sidebar only
+	addCrewSubscriber("gc", "side")
+	t.Cleanup(func() { removeCrewSubscriber("gc", "own"); removeCrewSubscriber("gc", "side") })
+	feedNotesMu.Lock()
+	feedNotes = nil
+	feedNotesMu.Unlock()
+	if _, err := addEmoji(t, nk, "ida", "gg"); err != nil {
+		t.Fatal(err)
+	}
+	events := func(user string) []sentNote {
+		feedNotesMu.Lock()
+		defer feedNotesMu.Unlock()
+		var out []sentNote
+		for _, n := range feedNotes {
+			if n.userID == user && n.code == NotifyCrewEvent {
+				out = append(out, n)
+			}
+		}
+		return out
+	}
+	got := events("own")
+	if len(got) != 1 || got[0].content["event"] != "crew_gifts" || got[0].content["crew_id"] != "gc" {
+		t.Fatalf("crew events to the owner = %+v, want one crew_gifts", got)
+	}
+	if n := len(events("side")); n != 0 {
+		t.Fatalf("a sidebar subscriber got %d crew events", n)
+	}
+}

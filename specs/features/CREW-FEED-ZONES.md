@@ -3,7 +3,8 @@
 > **Component:** Crew Feed (server `crew_feed`, client `CrewFeed`)
 > **Status:** built (protocol 2)
 > **Related:** `CLIPS.md` (clip cards, game clips), `HEAD2HEAD.md` (belts),
-> `SEALED-REVEAL.md` (sealed belts and recap), `19-FEED-CURATION-PERSONAL-STATS.md`
+> `SEALED-REVEAL.md` (sealed belts and recap), `CREW-QUESTS.md` (the quest card),
+> `19-FEED-CURATION-PERSONAL-STATS.md`
 > (notability, recaps, the You strip), `22-GAME-UI-SURFACES.md` (game cards)
 
 The crew feed is five fixed zones and Crew history. The server picks what
@@ -15,7 +16,7 @@ no other layout rule.
 
 | Zone | Holds | Shows when |
 |---|---|---|
-| Stage | One thing to watch: a live stream, a game clip, a stream replay, the belt hero, or the own chips of a crew of one | One of them exists |
+| Stage | One thing to watch: a live stream, the quest card of a new crew, a game clip, a stream replay, the belt hero, or the own chips of a crew of one | One of them exists |
 | Board | The crew in numbers: the sealed weekly recap, or Today and Week with the belts | Always, for a crew with data |
 | Clips | Every clip of the free window, game and voice mixed, in one carousel | A clip exists |
 | People | The first five, the joins of the last 24 hours, voice | An open seat, a join, or voice to show |
@@ -35,13 +36,18 @@ The Stage holds one card. The first of these that exists wins:
 1. A live stream. It is client state (`crew_state`), so the client puts it on
    the Stage ahead of the payload. While you watch it, the Stage is at least
    as high as the watched card (spec 12 §7.9).
-2. The newest game clip with a poster in the free window (`game_clip`).
-3. The best stream replay in the free window (`stream_replay`).
-4. The belt hero (`belt`): a move that involves the viewer, at most 14 days
+2. The quest card (`quests`), in a crew's first 14 days, until every step is
+   done and every gift opened (`CREW-QUESTS.md`). It is beside the server's
+   `stage` in the payload, so the client puts it ahead. While it shows, the
+   server keeps the Stage entry in Clips too, and the own chips of a crew of
+   one stand on the solo Board.
+3. The newest game clip with a poster in the free window (`game_clip`).
+4. The best stream replay in the free window (`stream_replay`).
+5. The belt hero (`belt`): a move that involves the viewer, at most 14 days
    old, in a crew of two or more. The client shows it only once the belt is
    open: a belt that is sealed on the board keeps its new holder hidden
    (`SEALED-REVEAL.md`).
-5. The own chips (`own_belts`): a crew of one. Up to four chips of the
+6. The own chips (`own_belts`): a crew of one. Up to four chips of the
    viewer's own values (`HEAD2HEAD.md`, "Solo card"), sealed on a new crew.
    An opened chip shows its title and value.
 
@@ -125,6 +131,9 @@ Everything older is Crew history, which is m3llo+.
   no media, poster or snapshot URL for a locked week.
 - A viewer with m3llo+ gets the week open: its numbers and its clips and
   streams.
+- The founding week of a crew is open for every member once its quest step 4
+  is done: the weeks that overlap the first 7 days of the crew
+  (`CREW-QUESTS.md` section 3.4). Such a week carries `founding: true`.
 - Without m3llo+ an m3llo+ strip stands above the weeks. Every m3llo+ action
   opens a "coming soon" modal until a purchase flow exists.
 - History pages by week. Near the end of the feed the client asks for the
@@ -149,6 +158,7 @@ other feed RPC.
 | `installed` | The most installed games, on a quiet week with no session |
 | `history` | One page of past weeks |
 | `history_next` | The `history_before` of the next page. Zero at the end |
+| `quests` | The quest card of a new crew (`CREW-QUESTS.md` section 4). Absent for a crew with no quest record and after its 14 days |
 
 An entry is `{id, type, ts, data}`. `type` is `clip`, `recap`, `daily-recap`,
 `session-preview` or `session`. The client skips a type it does not know. A

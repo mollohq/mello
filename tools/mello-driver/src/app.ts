@@ -70,6 +70,22 @@ export type AppState = {
   active_crew_id: string;
   active_crew_name: string;
   crews: string[];
+  /** The quest gifts of the active crew (plans/crew-quests.md section 4). */
+  crew_gifts: {
+    /** The art Worker id of a game art banner. "" for none or an upload. */
+    banner_game: string;
+    banner_upload: boolean;
+    /** The crew header draws the banner image. */
+    banner_shown: boolean;
+    /** The custom invite name. "" when the crew has none. */
+    invite_name: string;
+    /** The crew emoji names, oldest first. */
+    emoji: string[];
+    /** The crew emoji whose image is loaded. */
+    emoji_loaded: string[];
+    /** The emoji gift is open for this crew: the picker offers free slots. */
+    emoji_open: boolean;
+  };
   members: string[];
   in_voice: boolean;
   join_crew_modal_open: boolean;
@@ -262,6 +278,12 @@ export type ChatMessage = {
   gif: boolean;
   /** The message mentions this user (the row is marked). */
   mentions_me: boolean;
+  /** How many distinct reactions the message has. */
+  reactions: number;
+  /** How many of those reactions draw a crew emoji image. */
+  image_reactions: number;
+  /** The message is only crew emoji, drawn as big images: how many. */
+  crew_emoji: number;
 };
 
 /** A crew card on onboarding step 1 or in Discover. Full when max_members > 0 and member_count >= max_members. */
@@ -468,6 +490,17 @@ export class App {
     return join(this.dir, "session.token");
   }
 
+  /** The file the image pickers return in an e2e build (MELLO_E2E_PICK_FILE). */
+  get pickFile(): string {
+    return join(this.dir, "pick.png");
+  }
+
+  /** Put `bytes` where the next image pick reads them. The app may run. */
+  setPickFile(bytes: Uint8Array): void {
+    mkdirSync(this.dir, { recursive: true });
+    writeFileSync(this.pickFile, bytes);
+  }
+
   /**
    * The single-instance name. The lock is global on the machine, so it
    * carries the MCP port: two runs with different port bases can both have
@@ -539,6 +572,9 @@ export class App {
       // The machine's clipboard: one file per run, shared by every user and
       // the browser (client/src/onboarding_invite.rs).
       MELLO_E2E_CLIPBOARD_FILE: clipboardFile(this.opts.runDir),
+      // The image pickers read this file instead of a dialog
+      // (client/src/callbacks/quests.rs). Set it with setPickFile.
+      MELLO_E2E_PICK_FILE: this.pickFile,
       // The art Worker rung (mello-core/src/art.rs). Always local, so a run
       // never asks art.m3llo.app. scripts/e2e-art-worker.sh serves it; with
       // nothing there the rung gets a refused connection and the monogram.
@@ -823,10 +859,21 @@ export class App {
     const [win] = await this.ui.props([await this.ui.window()]);
     const bar = 81 + 8;
     const clear = win?.size ? win.size.height - bar : Number.POSITIVE_INFINITY;
+    // The You strip ("YOUR STATS") is pinned above the feed. A control under
+    // it is not clickable either: a click lands on the strip. Each step
+    // scrolls only as far as the control needs, so it does not overshoot.
     for (let i = 0; i < maxSteps; i++) {
-      const c = (await this.ui.controls()).find((c) => c.label === label);
-      if (c && c.y + c.height <= clear) return;
-      await this.ui.scrollAt(x, y, -300);
+      const all = await this.ui.controls();
+      const c = all.find((c) => c.label === label);
+      const strip = all.find((c) => c.label === "YOUR STATS");
+      const top = strip ? strip.y + strip.height : 0;
+      if (c && c.y >= top && c.y + c.height <= clear) return;
+      if (c && c.y < top) {
+        await this.ui.scrollAt(x, y, Math.min(300, Math.ceil(top - c.y) + 24));
+      } else {
+        const need = c ? Math.ceil(c.y + c.height - clear) + 24 : 300;
+        await this.ui.scrollAt(x, y, -Math.min(300, need));
+      }
       await sleep(200);
     }
   }

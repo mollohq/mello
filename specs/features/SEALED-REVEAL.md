@@ -24,7 +24,8 @@ Sealed cards are:
 - the chip of a belt that moved, in its row on the Board and in the belts moved
   of the weekly recap;
 - the weekly recap, which takes the Board while it is sealed;
-- the own chips on the Stage of a new crew (section 9).
+- the own chips on the Stage of a new crew (section 9);
+- the gifts of the quest card of a new crew (section 10).
 
 The belt hero of the Stage shows only an open belt: while the belt is sealed on
 the board, the Stage does not show it. The belt push keeps its copy.
@@ -139,7 +140,7 @@ State port, `sealed`:
 | `belts` | Number of different sealed belt keys in the feed. Own chips are not in it |
 | `own` | Number of different sealed own chips (section 9) |
 | `recap` | The weekly recap is sealed |
-| `open_center` | `belt`, `recap` or `none` |
+| `open_center` | `belt`, `recap`, `quest` or `none` |
 
 ## 5. Performance rules
 
@@ -251,3 +252,17 @@ those chips arrive sealed.
 - State port: `sealed.own`.
 - Harness tests: a new crew seals all own chips, opening one opens only that one, a reopened crew keeps opened chips open when the value changes, and a crew older than 7 days has them open (`flow_tests/sealed.rs`).
 - Journey: `feed-solo-head2head` opens one own chip, checkpoints the face and closes it.
+
+## 10. Quest gifts
+
+The quest card of a new crew (`CREW-QUESTS.md`) holds five gifts. A ready gift
+opens in the centre view as kind `quest`, with the same opening and return as
+a belt.
+
+- The key is `quest:{step}:{crew_id}`, in `sealed_opened`. It has no 7-day
+  limit: a ready gift stays sealed until the owner opens it.
+- Only the owner opens a gift. A member has no key and never sees a seal.
+- The back shows the gift's step. The face shows the moment of the step on
+  top, the gift under `UNLOCKED`, the count, and the gift's actions at rest.
+- Faces 4 and 5 centre the gift. Face 5 shows `30 DAYS` in red.
+- An action closes the view and opens its screen.

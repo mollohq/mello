@@ -21,7 +21,7 @@ as the Nakama message `content` field. No DMs in beta.
 | Message format | Structured JSON envelope with `v` field | Forward-compatible, typed, extensible |
 | Formatting | Markdown-lite (Discord-style syntax) | Users already know it, fast to implement |
 | GIF provider | Giphy API v1, client-side | Tenor's API closed 30 June 2026. Giphy's rules require client-side calls and forbid a proxy or a cache. |
-| Emoji | Unicode, Twemoji bundled, full set in the picker | One look on every OS; the bundled COLRv0 font keeps the system emoji font out of memory. No custom emoji. |
+| Emoji | Unicode, Twemoji bundled, full set in the picker | One look on every OS; the bundled COLRv0 font keeps the system emoji font out of memory. Each crew also has up to five crew emoji (8.1). |
 | Images | Up to four per message, resized to 1600px, on the `mello-media` bucket | See 2.3 |
 | Reactions | Server-side storage object per message | See 2.4 |
 | Replies | Quote-reply with `reply_to` field | Simple, no threads |
@@ -140,7 +140,9 @@ emoji to the user ids that reacted, in order. `chat_react` (crew, message,
 emoji, add or remove) updates it and notifies every crew member (code 117)
 with the message's reactions; the client replaces what it holds for that
 message. On a load, `chat_reactions` returns the objects of the loaded window
-in one call. At most 20 distinct emoji per message; text is refused.
+in one call. At most 20 distinct emoji per message; text is refused, except
+a crew emoji of the crew as `:name:` (8.1). `chat_react` checks that the crew
+emoji exists on add, not on remove.
 
 Client: a reaction row under the message with emoji and count, the user's own
 chip with the white outline, and a plus that opens the picker for one more.
@@ -595,6 +597,20 @@ Opens above the composer, 320px tall.
   In reaction mode (opened from React, 5.5) the pick is a reaction instead.
 - Escape, the Emoji button, or a pick closes it.
 - Emoji-only messages of three or fewer render at 32px (`Theme.font-xxl`).
+
+### 8.1 Crew emoji
+
+A crew has up to five crew emoji, a gift of crew quests (`CREW-QUESTS.md`
+section 3.3). Any member adds one; the adder and the owner remove it.
+
+- The picker shows the crew's emoji in a row above the Twemoji set, with the
+  crew name. A free slot opens the add screen while the gift is open.
+- A pick writes `:name:` into the field, or reacts with it in reaction mode.
+- A reaction chip draws the crew emoji image in place of the text.
+- A message whose body is only crew emoji tokens, three or fewer, draws them
+  as 48 px images. The body stays the raw tokens.
+- Inside a sentence a crew emoji shows as `:name:` text.
+- A removed emoji leaves its reactions and messages as `:name:` text.
 
 ## 9. Unread Tracking
 

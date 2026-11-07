@@ -134,6 +134,8 @@ struct Snapshot {
     active_crew_id: String,
     active_crew_name: String,
     crews: Vec<String>,
+    /// The quest gifts of the active crew (crew quests).
+    crew_gifts: CrewGiftsSnap,
     members: Vec<String>,
     in_voice: bool,
     join_crew_modal_open: bool,
@@ -736,8 +738,32 @@ struct MessageSnap {
     images: usize,
     /// How many distinct reaction emoji the message has.
     reactions: usize,
+    /// How many of those reactions draw a crew emoji image.
+    image_reactions: usize,
+    /// The message is only crew emoji, drawn as big images: how many.
+    crew_emoji: usize,
     /// The message mentions this user (the row is marked).
     mentions_me: bool,
+}
+
+/// The quest gifts of the active crew: the banner, the custom invite name
+/// and the crew emoji.
+#[derive(Serialize)]
+struct CrewGiftsSnap {
+    /// The art Worker id of a game art banner. Empty for none or an upload.
+    banner_game: String,
+    /// The crew has an uploaded banner.
+    banner_upload: bool,
+    /// The crew header draws the banner image.
+    banner_shown: bool,
+    /// The custom invite name. Empty when the crew has none.
+    invite_name: String,
+    /// The crew emoji names, oldest first.
+    emoji: Vec<String>,
+    /// The crew emoji whose image is loaded, oldest first.
+    emoji_loaded: Vec<String>,
+    /// The emoji gift is open for this crew: the picker offers free slots.
+    emoji_open: bool,
 }
 
 #[derive(Serialize)]
@@ -1161,6 +1187,25 @@ fn read(app: &MainWindow) -> Snapshot {
         active_crew_id: app.get_active_crew_id().into(),
         active_crew_name: app.get_active_crew_name().into(),
         crews: crews.iter().map(|c| c.name.to_string()).collect(),
+        crew_gifts: {
+            let active = app.get_active_crew_id();
+            let c = crews.iter().find(|c| c.id == active).unwrap_or_default();
+            let eu = app.global::<crate::CrewEmojiUi>();
+            let emoji = eu.get_emoji();
+            CrewGiftsSnap {
+                banner_game: c.banner_game.to_string(),
+                banner_upload: c.banner_game.is_empty() && !c.banner_url.is_empty(),
+                banner_shown: c.has_banner,
+                invite_name: c.invite_name.to_string(),
+                emoji: emoji.iter().map(|e| e.name.to_string()).collect(),
+                emoji_loaded: emoji
+                    .iter()
+                    .filter(|e| e.has_image)
+                    .map(|e| e.name.to_string())
+                    .collect(),
+                emoji_open: eu.get_enabled(),
+            }
+        },
         members: members.iter().map(|m| m.name.to_string()).collect(),
         in_voice: app.get_in_voice(),
         join_crew_modal_open: app.get_join_crew_modal_open(),
@@ -1182,6 +1227,15 @@ fn read(app: &MainWindow) -> Snapshot {
             ("source_menu", app.get_source_menu_open()),
             ("riot_link", app.get_riot_dialog_open()),
             ("discover", app.get_show_discover()),
+            (
+                "banner_picker",
+                app.global::<crate::BannerPicker>().get_open(),
+            ),
+            (
+                "invite_name",
+                app.global::<crate::InviteNamePicker>().get_open(),
+            ),
+            ("crew_emoji", app.global::<crate::CrewEmojiUi>().get_open()),
         ]
         .into_iter()
         .filter_map(|(name, open)| open.then_some(name))
@@ -1203,6 +1257,8 @@ fn read(app: &MainWindow) -> Snapshot {
                     gif: m.is_gif,
                     images: m.images.row_count(),
                     reactions: m.reactions.row_count(),
+                    image_reactions: m.reactions.iter().filter(|r| r.has_image).count(),
+                    crew_emoji: m.crew_emoji.row_count(),
                     mentions_me: m.mentions_self,
                 })
                 .collect();

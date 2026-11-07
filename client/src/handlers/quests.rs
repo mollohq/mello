@@ -112,6 +112,15 @@ pub(crate) fn refresh_crew_emoji(ctx: &crate::app_context::AppContext) {
     super::chat::refresh_chat_ui(ctx);
 }
 
+/// Turn the add-emoji slots on or off from the newest feed. A feed load can
+/// open the gift (the first call is done) with no crew state load after it.
+pub(crate) fn refresh_emoji_gift(ctx: &crate::app_context::AppContext) {
+    use slint::ComponentHandle as _;
+    ctx.app
+        .global::<crate::CrewEmojiUi>()
+        .set_enabled(emoji_gift_open(ctx));
+}
+
 /// Five crew emoji for every crew (crew_gifts.go).
 const EMOJI_SLOTS: i32 = 5;
 
