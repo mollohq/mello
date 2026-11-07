@@ -621,11 +621,17 @@ func crewFeedZones(ctx context.Context, logger runtime.Logger, nk runtime.Nakama
 	recapsDoc, _ := readRecapsDoc(ctx, nk, req.CrewID)
 	stampRecapWeeks(ctx, nk, req.CrewID, recapsDoc.Recaps)
 	quests, _ := readCrewQuests(ctx, nk, req.CrewID)
+	var profile *CrewProfile
+	var emoji *CrewEmojiDoc
+	if quests != nil && nowMs < quests.EndsMs {
+		profile, _ = readCrewProfile(ctx, nk, req.CrewID)
+		emoji, _ = readCrewEmoji(ctx, nk, req.CrewID)
+	}
 	return buildFeedZones(zonesInput{
 		ViewerID:      userID,
 		NowMs:         nowMs,
 		FreeDays:      cfg.FreeDays,
-		Plus:          IsUserPremium(userID),
+		Plus:          IsUserPremium(ctx, nk, userID),
 		HistoryBefore: req.HistoryBefore,
 		Cards:         dropEmptyCards(mergedToCards(timeline)),
 		Clips:         clipsDoc.Clips,
@@ -636,6 +642,8 @@ func crewFeedZones(ctx context.Context, logger runtime.Logger, nk runtime.Nakama
 		Joins:         joins,
 		Belts:         crewBeltsMovedSince(ctx, nk, req.CrewID, nowMs-int64(feedDailyRecapDays)*dayMs),
 		Quests:        quests,
+		Profile:       profile,
+		Emoji:         emoji,
 	})
 }
 

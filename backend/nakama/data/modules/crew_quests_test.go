@@ -18,6 +18,7 @@ import (
 type fakeQuestsNk struct {
 	*fakeGuestNk
 	versions map[string]int
+	roles    map[string]int // crew/user -> group_edge state, 2 when unset
 }
 
 func newFakeQuestsNk() *fakeQuestsNk {

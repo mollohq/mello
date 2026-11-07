@@ -305,6 +305,10 @@ type ResolveCrewInviteResponse struct {
 	InviterAvatarSeed  string                `json:"inviter_avatar_seed,omitempty"`
 	RecentClips        []InviteClipPreview   `json:"recent_clips,omitempty"`
 	SessionSnapshots   []string              `json:"session_snapshots,omitempty"`
+	// BannerURL is the crew banner for the join page and the link card;
+	// BannerVersion changes on every save, for their cache keys.
+	BannerURL     string `json:"banner_url,omitempty"`
+	BannerVersion int64  `json:"banner_version,omitempty"`
 }
 
 // ResolveCrewInviteRPC returns public crew info for a given invite code.
@@ -424,6 +428,10 @@ func ResolveCrewInviteRPC(ctx context.Context, logger runtime.Logger, db *sql.DB
 		resp.SessionSnapshots = snapshots
 	}
 
+	if p, _ := readCrewProfile(ctx, nk, data.CrewID); p.Banner != nil {
+		resp.BannerURL = p.Banner.URL
+		resp.BannerVersion = p.Banner.Version
+	}
 	respJSON, _ := json.Marshal(resp)
 	return string(respJSON), nil
 }

@@ -95,9 +95,12 @@ type ZonePeople struct {
 // ZoneHistoryWeek is one past week of Crew history. Locked: the viewer has no
 // m3llo+, so the week has counts and teasers only.
 type ZoneHistoryWeek struct {
-	WeekStart   int64        `json:"week_start"`
-	WeekNumber  int          `json:"week_number,omitempty"`
-	Locked      bool         `json:"locked"`
+	WeekStart  int64 `json:"week_start"`
+	WeekNumber int   `json:"week_number,omitempty"`
+	Locked     bool  `json:"locked"`
+	// Founding marks a week of the crew's first 7 days after the first clip
+	// quest step: it is open for every member (crew quests gift 4).
+	Founding    bool         `json:"founding,omitempty"`
 	ClipCount   int          `json:"clip_count"`
 	StreamCount int          `json:"stream_count"`
 	Recap       *FeedEntry   `json:"recap,omitempty"`
@@ -136,6 +139,10 @@ type zonesInput struct {
 	Belts   []RecapBeltMoved
 	// Quests is the quest record of the crew, nil when it has none.
 	Quests *CrewQuests
+	// Profile and Emoji fill the gifts of the quest card. Nil when the card
+	// does not show.
+	Profile *CrewProfile
+	Emoji   *CrewEmojiDoc
 }
 
 func (in zonesInput) windowStart() int64 {
@@ -200,7 +207,7 @@ func buildFeedZones(in zonesInput) FeedZones {
 		History:   []ZoneHistoryWeek{},
 	}
 	z.Stage = zoneStage(in, start)
-	z.Quests = zoneQuests(in.Quests, in.NowMs)
+	z.Quests = zoneQuests(in.Quests, in.NowMs, zoneQuestGifts(in.Quests, in.Profile, in.Emoji))
 	stageID := ""
 	if z.Stage.Entry != nil && z.Quests == nil {
 		stageID = z.Stage.Entry.ID
@@ -489,21 +496,27 @@ func zoneHistory(in zonesInput, start, boardWeek int64) ([]ZoneHistoryWeek, int6
 		next = starts[len(starts)-1]
 	}
 
+	founding := map[int64]bool{}
+	for _, ws := range foundingWeeks(in.Quests) {
+		founding[ws] = true
+	}
 	out := make([]ZoneHistoryWeek, 0, len(starts))
 	for _, ws := range starts {
+		open := in.Plus || founding[ws]
 		w := weeks[ws]
 		rankClips(w.clips)
 		sort.SliceStable(w.streams, func(i, j int) bool { return w.streams[i].Ts > w.streams[j].Ts })
 		h := ZoneHistoryWeek{
 			WeekStart:   ws,
-			Locked:      !in.Plus,
+			Locked:      !open,
+			Founding:    founding[ws],
 			ClipCount:   len(w.clips),
 			StreamCount: len(w.streams),
 		}
 		if w.recap != nil {
 			h.WeekNumber = w.recap.WeekNumber
 		}
-		if in.Plus {
+		if open {
 			if w.recap != nil {
 				h.Recap = &FeedEntry{ID: recapEntryID(w.recap.WeekStart), Type: "recap", Ts: w.recap.GeneratedAt, Data: *w.recap}
 			}

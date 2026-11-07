@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
-	"math/big"
 	"time"
 
 	"github.com/heroiclabs/nakama-common/runtime"
@@ -41,6 +39,10 @@ type CrewQuests struct {
 	MadeMs  int64           `json:"made_ms"`
 	EndsMs  int64           `json:"ends_ms"`
 	Steps   CrewQuestsSteps `json:"steps"`
+	// PlusGranted lists the members who got m3llo+ from this crew's step 5.
+	PlusGranted []string `json:"plus_granted,omitempty"`
+	// InviteCopiedMs is the first copy of an invite link, for the funnel.
+	InviteCopiedMs int64 `json:"invite_copied_ms,omitempty"`
 }
 
 // CrewQuestsSteps holds the four steps after crew made. A nil step is not done.
@@ -102,15 +104,16 @@ type ZoneQuests struct {
 	MadeMs  int64           `json:"made_ms"`
 	EndsMs  int64           `json:"ends_ms"`
 	Steps   CrewQuestsSteps `json:"steps"`
+	Gifts   ZoneQuestGifts  `json:"gifts"`
 }
 
 // zoneQuests is the payload for a record, or nil when the crew has no record
 // or the window of the card has passed.
-func zoneQuests(q *CrewQuests, nowMs int64) *ZoneQuests {
+func zoneQuests(q *CrewQuests, nowMs int64, gifts ZoneQuestGifts) *ZoneQuests {
 	if q == nil || nowMs >= q.EndsMs {
 		return nil
 	}
-	return &ZoneQuests{OwnerID: q.OwnerID, MadeMs: q.MadeMs, EndsMs: q.EndsMs, Steps: q.Steps}
+	return &ZoneQuests{OwnerID: q.OwnerID, MadeMs: q.MadeMs, EndsMs: q.EndsMs, Steps: q.Steps, Gifts: gifts}
 }
 
 // ---------------------------------------------------------------------------
@@ -175,22 +178,23 @@ func questsCreate(ctx context.Context, logger runtime.Logger, nk runtime.NakamaM
 
 // questsMark sets one step when the crew has a record and the step is not
 // done. set returns false when it has nothing to write (the step is done).
-// It retries on a version conflict, as the ledger does.
-func questsMark(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID, step string, set func(*CrewQuests) bool) {
+// It retries on a version conflict, as the ledger does. It reports whether
+// it wrote.
+func questsMark(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID, step string, set func(*CrewQuests) bool) bool {
 	for attempt := 0; attempt < 3; attempt++ {
 		q, version := readCrewQuests(ctx, nk, crewID)
 		if q == nil || !set(q) {
-			return
+			return false
 		}
 		err := writeCrewQuests(ctx, nk, q, version)
 		if err == nil {
-			logger.Info("crew_quests step %s done for crew %s", step, crewID)
-			return
+			logger.Info("crew_quests %s written for crew %s", step, crewID)
+			return true
 		}
-		jitter, _ := rand.Int(rand.Reader, big.NewInt(50))
-		time.Sleep(time.Duration(50*(attempt+1)+int(jitter.Int64())) * time.Millisecond)
+		retryWait(attempt)
 	}
-	logger.Warn("crew_quests step %s write failed after 3 retries for crew %s", step, crewID)
+	logger.Warn("crew_quests %s write failed after 3 retries for crew %s", step, crewID)
+	return false
 }
 
 // ---------------------------------------------------------------------------
@@ -306,7 +310,10 @@ func questsMarkSession(ctx context.Context, logger runtime.Logger, nk runtime.Na
 		UserIDs:    ids,
 		Names:      names,
 	}
-	questsMark(ctx, logger, nk, crewID, questStepSession, func(q *CrewQuests) bool {
+	if questsMark(ctx, logger, nk, crewID, questStepSession, func(q *CrewQuests) bool {
 		return setQuestSession(&q.Steps, gs)
-	})
+	}) {
+		// Gift 5: m3llo+ for every member at this moment.
+		questsGrantPlus(ctx, logger, nk, crewID)
+	}
 }

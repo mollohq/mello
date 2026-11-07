@@ -169,11 +169,21 @@ func ChatReactRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 	if req.Op != "add" && req.Op != "remove" {
 		return "", runtime.NewError("op must be add or remove", 3)
 	}
-	if !validReactionEmoji(req.Emoji) {
+	// A crew emoji is a `:name:` token (crew quests gift 3). Any other text
+	// is refused.
+	crewEmoji := crewEmojiToken(req.Emoji)
+	if crewEmoji == "" && !validReactionEmoji(req.Emoji) {
 		return "", runtime.NewError("not an emoji", 3)
 	}
 	if !isCrewMember(ctx, nk, req.CrewID, userID) {
 		return "", runtime.NewError("not a crew member", 7)
+	}
+	// A new reaction needs the emoji in the crew. Removing one does not: the
+	// emoji may be gone, and its reaction stays as text until removed.
+	if crewEmoji != "" && req.Op == "add" {
+		if d, _ := readCrewEmoji(ctx, nk, req.CrewID); !d.has(crewEmoji) {
+			return "", runtime.NewError("no such crew emoji", 5)
+		}
 	}
 
 	var doc *ReactionsDoc
