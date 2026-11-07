@@ -609,6 +609,13 @@ pub(super) fn refresh_live_session_cards(ctx: &AppContext) {
     super::zones::refresh(ctx);
 }
 
+/// A game session without a match record: the feed draws it as the played
+/// card (header art under the washes), not as the card with the record.
+fn is_played_card(backend_type: &str, data: &serde_json::Value) -> bool {
+    let n = |k: &str| data.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
+    backend_type == "game_session" && n("wins") + n("losses") + n("draws") == 0
+}
+
 /// The art slot that the game frame of a card draws. The recap cards draw a
 /// header frame (460:215); every other card draws a square, the icon slot.
 fn card_art_slot(card_type: &str) -> mello_core::art::ArtSlot {
@@ -1253,11 +1260,22 @@ pub(super) fn extract_recent_game_tiles(
     tiles
 }
 
+/// The minutes a game session card shows, and if they are the active time.
+/// The card uses the active time when the wall time is inflated (the game
+/// ran overnight). GAME-SURFACING §4.
+fn game_session_display_min(duration_min: i64, active_min: i64) -> (i64, bool) {
+    let use_active = active_min > 0 && active_min * 3 < duration_min;
+    if use_active {
+        (active_min, true)
+    } else {
+        (duration_min, false)
+    }
+}
+
 /// Wall-time duration for game sessions; uses active time when wall time is
 /// inflated (left running overnight). GAME-SURFACING §4.
 fn game_session_duration_display(duration_min: i64, active_min: i64) -> String {
-    let use_active = active_min > 0 && active_min * 3 < duration_min;
-    let display_min = if use_active { active_min } else { duration_min };
+    let (display_min, use_active) = game_session_display_min(duration_min, active_min);
     let body = humanize_duration_min(display_min);
     if body.is_empty() {
         return body;
@@ -1266,6 +1284,27 @@ fn game_session_duration_display(duration_min: i64, active_min: i64) -> String {
         format!("~{body}")
     } else {
         body
+    }
+}
+
+/// The duration of a game session as the parts of a `StatValue`: the value,
+/// the unit and the tail. "2" "m" for 2 minutes; "2" "h" "05" for 125
+/// minutes; "1" "h" "" for a full hour. "~" leads the value of an active
+/// time. All empty for no duration.
+fn game_session_duration_stat(duration_min: i64, active_min: i64) -> (String, String, String) {
+    let (min, approx) = game_session_display_min(duration_min, active_min);
+    if min <= 0 {
+        return (String::new(), String::new(), String::new());
+    }
+    let lead = if approx { "~" } else { "" };
+    if min < 60 {
+        (format!("{lead}{min}"), "m".into(), String::new())
+    } else {
+        let tail = match min % 60 {
+            0 => String::new(),
+            m => format!("{m:02}"),
+        };
+        (format!("{lead}{}", min / 60), "h".into(), tail)
     }
 }
 
@@ -1467,14 +1506,17 @@ pub(super) fn build_feed_card(
     // Runtime icon (exe-extracted / crew-shared) for games without bundled
     // art; a cache miss requests the crew copy once per run.
     // One art form per frame shape: the recap cards draw a header frame, every
-    // other card a square (icon slot).
-    let art = crate::game_icons::resolve_tile_art_slot(
-        ctx,
-        &wire_game_id,
-        &game_id,
-        &game,
-        card_art_slot(feed_type),
-    );
+    // other card a square (icon slot). A game session without a match record
+    // is the played card: the header art fills it. The ids are the ones the
+    // live card uses, so both find the same art.
+    let played_card = is_played_card(backend_type, &data);
+    let art_slot = if played_card {
+        mello_core::art::ArtSlot::Header
+    } else {
+        card_art_slot(feed_type)
+    };
+    let art =
+        crate::game_icons::resolve_tile_art_slot(ctx, &wire_game_id, &game_id, &game, art_slot);
     let (game_icon, game_has_icon) = (art.icon, art.has_icon);
     let (game_capsule, game_has_capsule) = (art.capsule, art.has_capsule);
     let game_monogram = crate::recent_games::monogram(&game);
@@ -1649,11 +1691,16 @@ pub(super) fn build_feed_card(
     } else {
         ""
     };
+    let active_min = data.get("active_min").and_then(|v| v.as_i64()).unwrap_or(0);
     let duration_human = if is_game_session {
-        let active_min = data.get("active_min").and_then(|v| v.as_i64()).unwrap_or(0);
         game_session_duration_display(duration_min as i64, active_min)
     } else {
         humanize_duration(duration_secs)
+    };
+    let (duration_value, duration_unit, duration_tail) = if is_game_session {
+        game_session_duration_stat(duration_min as i64, active_min)
+    } else {
+        Default::default()
     };
     let peak_count = data
         .get("peak_viewers")
@@ -1849,6 +1896,9 @@ pub(super) fn build_feed_card(
         game_hue_index,
         session_kind: session_kind.into(),
         duration_human: duration_human.into(),
+        duration_value: duration_value.into(),
+        duration_unit: duration_unit.into(),
+        duration_tail: duration_tail.into(),
         peak_count,
         channel_name: channel_name.into(),
         participants_line: participants_line.into(),
@@ -2181,5 +2231,19 @@ mod tests {
     fn game_session_duration_keeps_wall_when_active_not_under_third() {
         // active * 3 must be strictly less than wall time.
         assert_eq!(game_session_duration_display(60, 20), "1h 0m");
+    }
+
+    /// The played card shows the duration with StatValue: a middle unit
+    /// goes in the tail, with two digits.
+    #[test]
+    fn game_session_duration_splits_into_stat_parts() {
+        let parts = game_session_duration_stat;
+        let s = |v: &str, u: &str, t: &str| (v.to_string(), u.to_string(), t.to_string());
+        assert_eq!(parts(2, 0), s("2", "m", ""));
+        assert_eq!(parts(90, 0), s("1", "h", "30"));
+        assert_eq!(parts(125, 0), s("2", "h", "05"));
+        assert_eq!(parts(120, 0), s("2", "h", ""));
+        assert_eq!(parts(252, 65), s("~1", "h", "05"));
+        assert_eq!(parts(0, 0), s("", "", ""));
     }
 }

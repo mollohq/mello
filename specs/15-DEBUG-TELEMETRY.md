@@ -232,7 +232,7 @@ pub struct HostStats {
 #[derive(Debug, Clone)]
 pub struct ViewerStats {
     // Decoder
-    pub decoder_name:      String,      // "NVDEC", "AMF-Decode", "OpenH264", "VideoToolbox"
+    pub decoder_name:      String,      // "NVDEC", "AMF-Decode", "MediaFoundation", "OpenH264", "VideoToolbox"
     pub codec:             String,
     pub resolution:        (u32, u32),
     pub fps_actual:        f32,

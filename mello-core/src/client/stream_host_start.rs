@@ -428,6 +428,9 @@ impl super::Client {
         config.capture_desc = target.describe();
         let configured_bitrate_kbps = config.bitrate_kbps;
 
+        // The backend keeps this id for the crew's stream cards, so it is
+        // logged for every capture mode, not only for the hook policy.
+        log::info!("start_stream identity: exe={:?} igdb_id={}", exe, igdb_id);
         let mut payload = match serde_json::to_value(crate::stream::host::StartStreamRequest {
             crew_id: crew_id.to_string(),
             title: title.to_string(),

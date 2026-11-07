@@ -164,6 +164,7 @@ fn dispatch(ctx: &AppContext, event: Event) {
         | Event::StreamViewerTimeline { .. }
         | Event::StreamHostPacingStats { .. }
         | Event::StreamError { .. }
+        | Event::StreamPictureLoaded { .. }
         // stage 6 (streaming-quality)
         | Event::StreamStarting { .. }
         | Event::StreamReconnecting { .. }

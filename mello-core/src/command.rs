@@ -397,6 +397,14 @@ pub enum Command {
         height: u32,
     },
     StopWatching,
+    /// Fetch the newest SFU picture of a live stream, for the card before
+    /// you watch. Replies with `Event::StreamPictureLoaded`.
+    FetchStreamPicture {
+        #[serde(default)]
+        crew_id: String,
+        #[serde(default)]
+        session_id: String,
+    },
     // --- stage 9 (streaming-quality): the stream card's controls ---
     /// The volume of the watched stream's game audio, for this user only:
     /// 0.0 silent (the card's mute), 1.0 unity, up to 2.0. libmello keeps

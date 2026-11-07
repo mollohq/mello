@@ -214,6 +214,11 @@ pub struct StreamState {
     pub width: u32,
     #[serde(default)]
     pub height: u32,
+    /// The catalogue id of the game the host captures, from the host's
+    /// start_stream. 0 when the host streams a display or a window that is
+    /// not a catalogue game. The viewer's card draws the game from it.
+    #[serde(default)]
+    pub igdb_id: u32,
 }
 
 // ---------------------------------------------------------------------------

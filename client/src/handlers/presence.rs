@@ -389,6 +389,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                             ctx.app.set_active_stream_width(stream.width as i32);
                             ctx.app.set_active_stream_height(stream.height as i32);
                             ctx.app.set_active_stream_viewer_count(viewer_count);
+                            ctx.app.set_active_stream_igdb_id(stream.igdb_id as i32);
                         } else {
                             ctx.app.set_active_streamer_id("".into());
                             ctx.app.set_active_streamer_name("".into());
@@ -397,6 +398,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                             ctx.app.set_active_stream_width(0);
                             ctx.app.set_active_stream_height(0);
                             ctx.app.set_active_stream_viewer_count(viewer_count);
+                            ctx.app.set_active_stream_igdb_id(0);
+                            ctx.app.set_active_stream_thumbnail_url("".into());
                         }
                     } else {
                         ctx.app.set_active_streamer_id("".into());
@@ -406,6 +409,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         ctx.app.set_active_stream_width(0);
                         ctx.app.set_active_stream_height(0);
                         ctx.app.set_active_stream_viewer_count(0);
+                        ctx.app.set_active_stream_igdb_id(0);
+                        ctx.app.set_active_stream_thumbnail_url("".into());
                     }
                 } else {
                     ctx.app.set_active_streamer_id("".into());
@@ -415,6 +420,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     ctx.app.set_active_stream_width(0);
                     ctx.app.set_active_stream_height(0);
                     ctx.app.set_active_stream_viewer_count(0);
+                    ctx.app.set_active_stream_igdb_id(0);
+                    ctx.app.set_active_stream_thumbnail_url("".into());
                 }
                 sync_active_stream_cards(ctx);
             }
@@ -788,6 +795,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                                 ctx.app.set_active_stream_width(stream.width as i32);
                                 ctx.app.set_active_stream_height(stream.height as i32);
                                 ctx.app.set_active_stream_viewer_count(viewer_count);
+                                ctx.app.set_active_stream_igdb_id(stream.igdb_id as i32);
                             } else {
                                 ctx.app.set_active_streamer_id("".into());
                                 ctx.app.set_active_streamer_name("".into());
@@ -796,6 +804,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                                 ctx.app.set_active_stream_width(0);
                                 ctx.app.set_active_stream_height(0);
                                 ctx.app.set_active_stream_viewer_count(viewer_count);
+                                ctx.app.set_active_stream_igdb_id(0);
+                                ctx.app.set_active_stream_thumbnail_url("".into());
                             }
                         } else {
                             ctx.app.set_active_streamer_id("".into());
@@ -805,6 +815,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                             ctx.app.set_active_stream_width(0);
                             ctx.app.set_active_stream_height(0);
                             ctx.app.set_active_stream_viewer_count(0);
+                            ctx.app.set_active_stream_igdb_id(0);
+                            ctx.app.set_active_stream_thumbnail_url("".into());
                         }
                     } else {
                         ctx.app.set_active_streamer_id("".into());
@@ -814,6 +826,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         ctx.app.set_active_stream_width(0);
                         ctx.app.set_active_stream_height(0);
                         ctx.app.set_active_stream_viewer_count(0);
+                        ctx.app.set_active_stream_igdb_id(0);
+                        ctx.app.set_active_stream_thumbnail_url("".into());
                     }
                     sync_active_stream_cards(ctx);
                 }

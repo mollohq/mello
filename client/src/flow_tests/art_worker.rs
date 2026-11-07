@@ -463,8 +463,60 @@ fn the_recap_games_strip_asks_for_header_art() {
     );
 }
 
-/// The session card tile is a 40 px square: it asks for the icon slot, not
-/// the header, and draws the Worker icon uncropped from a header.
+/// The played card (a game session without a match record) is filled by the
+/// header art of a catalogue game. Until the art lands it carries the game id
+/// and the monogram; the GameArtLoaded event of the header slot puts the art
+/// on the card, cut to the header frame.
+#[test]
+fn the_played_card_takes_the_header_art() {
+    let fake = FakeArt::start();
+    let ids = crate::game_icons::worker_ids("rocket-league", "rocket-league", "Rocket League", &[]);
+    assert!(!ids.is_empty(), "the catalogue names the game");
+    fake.put(&ids[0], "header", jpeg(1280, 720));
+    fake.put(&ids[0], "icon", jpeg(90, 90));
+    let mut h = Harness::with_art_server(&fake.base);
+    app_with_crew_of(&mut h, 1);
+    let mut feed = zero_telemetry_game_session_feed();
+    feed.zones.sessions[0].data["game_name"] = serde_json::json!("Rocket League");
+    feed.zones.sessions[0].data["game_id"] = serde_json::json!("rocket-league");
+    h.emit(Event::FeedLoaded { response: feed });
+
+    let card = first_card(&h);
+    assert_eq!(card.card_type.as_str(), "game-session");
+    assert_eq!(card.game_matches, 0, "no record: the played card");
+    assert_eq!(card.game_id.as_str(), "rocket-league");
+    assert_eq!(
+        card.game_monogram.as_str(),
+        crate::recent_games::monogram("Rocket League"),
+        "the monogram until the art lands"
+    );
+    assert!(!card.game_has_capsule && !card.game_has_icon);
+
+    let asks = art_requests(&mut h);
+    assert!(
+        asks.iter().all(|(_, s)| *s == ArtSlot::Header),
+        "the played card asks for the header slot only: {asks:?}"
+    );
+    let (hids, slot) = asks
+        .into_iter()
+        .find(|(i, _)| i.contains(&ids[0]))
+        .expect("the card asked for the game's header");
+    serve(&mut h, &hids, slot);
+
+    let card = first_card(&h);
+    assert!(card.game_has_capsule, "the header art is on the card");
+    assert!(!card.game_has_icon, "an art frame never takes an icon");
+    let size = card.game_capsule.size();
+    assert_eq!(
+        (size.width, size.height),
+        (460, 215),
+        "cut to the header frame"
+    );
+}
+
+/// The tile of the card with the record is a 40 px square: it asks for the
+/// icon slot, not the header, and draws the Worker icon uncropped from a
+/// header.
 #[test]
 fn the_session_card_tile_takes_the_icon_slot() {
     let fake = FakeArt::start();
@@ -475,6 +527,8 @@ fn the_session_card_tile_takes_the_icon_slot() {
     let mut feed = zero_telemetry_game_session_feed();
     feed.zones.sessions[0].data["game_name"] = serde_json::json!("Night Stones");
     feed.zones.sessions[0].data["game_id"] = serde_json::json!("steam-2300340");
+    feed.zones.sessions[0].data["wins"] = serde_json::json!(2);
+    feed.zones.sessions[0].data["losses"] = serde_json::json!(1);
     h.emit(Event::FeedLoaded { response: feed });
     let card = first_card(&h);
     assert!(!card.game_has_icon && !card.game_has_capsule);

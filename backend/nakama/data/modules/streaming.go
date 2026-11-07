@@ -25,9 +25,11 @@ type StartStreamRequest struct {
 	// Exe is the game executable name (e.g. "Heaven.exe"), for logging and
 	// policy-mismatch diagnostics only.
 	Exe string `json:"exe,omitempty"`
-	// IgdbID is the catalogue identity of the captured process, for logging
-	// only. The client supplies it and the server cannot verify it. The
-	// client matches it against the capture block lists.
+	// IgdbID is the catalogue identity of the captured process. The client
+	// supplies it and the server cannot verify it. It goes to the stream
+	// records, the stream_started push and the crew state, so a viewer's
+	// card knows the game. The client matches it against the capture block
+	// lists.
 	IgdbID uint32 `json:"igdb_id,omitempty"`
 	// PreferredRegion is optional: an SFU region from sfu_routing.go for the
 	// host's session. Viewers join the host's region (watch_stream). An empty
@@ -165,6 +167,7 @@ type ActiveStream struct {
 	Height      uint32 `json:"height,omitempty"`
 	BitrateKbps uint32 `json:"bitrate_kbps,omitempty"`
 	Fps         uint32 `json:"fps,omitempty"`
+	IgdbID      uint32 `json:"igdb_id,omitempty"`
 }
 
 // StreamMeta is the extended metadata stored in stream_meta/{crew_id}.
@@ -189,6 +192,8 @@ type StreamMeta struct {
 	Height      uint32 `json:"height,omitempty"`
 	BitrateKbps uint32 `json:"bitrate_kbps,omitempty"`
 	Fps         uint32 `json:"fps,omitempty"`
+	// IgdbID is the catalogue id of the captured game, from start_stream.
+	IgdbID uint32 `json:"igdb_id,omitempty"`
 }
 
 // peakViewers is the largest number of viewers at one time.
@@ -383,6 +388,7 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		Height:      req.Height,
 		BitrateKbps: req.BitrateKbps,
 		Fps:         req.Fps,
+		IgdbID:      req.IgdbID,
 	}
 	response := map[string]interface{}{
 		"stream_id":    streamID,
@@ -429,6 +435,10 @@ type streamAdvert struct {
 	Height      uint32 `json:"height,omitempty"`
 	BitrateKbps uint32 `json:"bitrate_kbps,omitempty"`
 	Fps         uint32 `json:"fps,omitempty"`
+	// IgdbID is the catalogue id of the captured game, 0 for a display or a
+	// window that is not a catalogue game. The viewer's card draws the game
+	// from it.
+	IgdbID uint32 `json:"igdb_id,omitempty"`
 }
 
 // streamStartedPayload is the data of the stream_started push. It carries
@@ -444,6 +454,7 @@ func streamStartedPayload(a streamAdvert) map[string]interface{} {
 		"width":             a.Width,
 		"height":            a.Height,
 		"fps":               a.Fps,
+		"igdb_id":           a.IgdbID,
 	}
 }
 
@@ -459,6 +470,7 @@ func advertiseStream(ctx context.Context, logger runtime.Logger, nk runtime.Naka
 		Height:      a.Height,
 		BitrateKbps: a.BitrateKbps,
 		Fps:         a.Fps,
+		IgdbID:      a.IgdbID,
 	})
 	if _, err := nk.StorageWrite(ctx, []*runtime.StorageWrite{
 		{
@@ -484,6 +496,7 @@ func advertiseStream(ctx context.Context, logger runtime.Logger, nk runtime.Naka
 		Height:           a.Height,
 		BitrateKbps:      a.BitrateKbps,
 		Fps:              a.Fps,
+		IgdbID:           a.IgdbID,
 	})
 	nk.StorageWrite(ctx, []*runtime.StorageWrite{
 		{
@@ -577,6 +590,55 @@ func StreamLiveRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 	logger.Info("stream_live: stream %s of %s advertised in crew %s (%dx%d at %d fps)",
 		req.SessionID, userID, req.CrewID, advert.Width, advert.Height, advert.Fps)
 	return `{"advertised":true}`, nil
+}
+
+// StreamPictureRequest is the request of stream_picture.
+type StreamPictureRequest struct {
+	CrewID    string `json:"crew_id"`
+	SessionID string `json:"session_id"`
+}
+
+// StreamPictureRPC gives the newest SFU snapshot of a live stream as a public
+// URL. The stream card of a viewer that has not joined the stream shows this
+// picture. The client polls this RPC every 15 s while a crew member streams.
+// Only a crew member can call it. When the stream ended, or the SFU writes no
+// snapshots, the URL is empty.
+func StreamPictureRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+	if !ok || userID == "" {
+		return "", runtime.NewError("authentication required", 16)
+	}
+	var req StreamPictureRequest
+	if err := json.Unmarshal([]byte(payload), &req); err != nil {
+		return "", runtime.NewError("invalid request", 3)
+	}
+	if req.CrewID == "" || req.SessionID == "" {
+		return "", runtime.NewError("crew_id and session_id required", 3)
+	}
+	if !isCrewMember(ctx, nk, req.CrewID, userID) {
+		return "", runtime.NewError("not a crew member", 7)
+	}
+	const noPicture = `{"url":""}`
+	live := readStreamMeta(ctx, nk, req.CrewID)
+	if live == nil || live.StreamID != req.SessionID {
+		return noPicture, nil
+	}
+	urls, err := ListSnapshotURLs(req.CrewID, req.SessionID)
+	if err != nil {
+		logger.Debug("stream_picture: no snapshots for stream %s in crew %s: %v", req.SessionID, req.CrewID, err)
+		return noPicture, nil
+	}
+	if len(urls) == 0 {
+		return noPicture, nil
+	}
+	out, err := json.Marshal(struct {
+		URL   string `json:"url"`
+		Count int    `json:"count"`
+	}{URL: urls[len(urls)-1], Count: len(urls)})
+	if err != nil {
+		return "", runtime.NewError("failed to encode response", 13)
+	}
+	return string(out), nil
 }
 
 // RefreshStreamTokenRPC signs a new SFU token for a stream session: a host
@@ -1372,6 +1434,7 @@ func resumeStream(ctx context.Context, logger runtime.Logger, nk runtime.NakamaM
 		Width:     rec.Meta.Width,
 		Height:    rec.Meta.Height,
 		Fps:       rec.Meta.Fps,
+		IgdbID:    rec.Meta.IgdbID,
 	}))
 	logger.Info("start_stream resume: stream %s of %s advertised again in crew %s", sessionID, userID, req.CrewID)
 	return resumeStreamResponse(userID, displayName, sessionID, req.CrewID, rec.Session)

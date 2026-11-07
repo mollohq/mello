@@ -57,6 +57,7 @@ mod snapshot_loader;
 #[cfg(test)]
 mod stat_value_tests;
 mod stream_frame_timer;
+mod stream_picture;
 // stage 9 (streaming-quality): the watched stream in its own window
 mod stream_popout;
 #[cfg(any(test, feature = "testkit"))]
@@ -625,6 +626,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         avatar_shuffle_timer: Rc::new(RefCell::new(None)),
         diag_autostop_timer: Rc::new(RefCell::new(None)),
         post_game_timer: Rc::new(RefCell::new(None)),
+        stream_picture_timer: Rc::new(RefCell::new(None)),
         riot_cta_pending: Rc::new(Cell::new(false)),
         session_recovery: Rc::new(Cell::new(false)),
         games_integrations: Rc::new(RefCell::new(Vec::new())),

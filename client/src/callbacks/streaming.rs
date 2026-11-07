@@ -160,6 +160,9 @@ pub fn wire(ctx: &AppContext) {
                     })
                     .unwrap_or_default();
 
+                if let Some(app) = app_weak.upgrade() {
+                    app.set_stream_igdb_id(igdb_id as i32);
+                }
                 let _ = cmd.send(Command::StopThumbnailRefresh);
                 let _ = cmd.send(Command::StartStream {
                     crew_id,

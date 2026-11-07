@@ -17,7 +17,7 @@ The per-surface table is in spec 22 section 6.1.
 |---|---|---|
 | `icon` | Square, any size | Lists, pills, strips, small cards |
 | `header` | Wide, 460:215 | Tiles in recap cards and the top game of the board |
-| `hero` | Poster | A live session card wide enough for the poster |
+| `hero` | Poster | A live session card wide enough for the poster; the stream card before its first SFU picture |
 | `capsule` | None | Not used in any frame |
 
 `GameArt` enforces the rule. A frame with `art-width` set draws the `header` art and never the

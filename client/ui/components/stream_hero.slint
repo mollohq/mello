@@ -15,9 +15,15 @@ export component MediaChip inherits Rectangle {
     in property <length> n: 4px;
     in property <length> pad-x: 10px;
     in property <length> pad-y: 4px;
+    /// The space under the row. The top pad by default; a chip whose row
+    /// ends in a deep descender box gives back a little.
+    in property <length> pad-bottom: root.pad-y;
+    /// How the row's items meet on the cross axis. A chip that mixes two
+    /// type sizes sets `end` and lifts the smaller one to the baseline.
+    in property <CrossAxisAlignment> row-align: center;
 
     width: chip-row.preferred-width + 2 * root.pad-x;
-    height: chip-row.preferred-height + 2 * root.pad-y;
+    height: chip-row.preferred-height + root.pad-y + root.pad-bottom;
     background: transparent;
 
     CutButtonShape {
@@ -29,13 +35,23 @@ export component MediaChip inherits Rectangle {
     chip-row := HorizontalLayout {
         x: root.pad-x;
         y: root.pad-y;
+        // The row is its content, not the chip: a row that fills the chip
+        // centres its items on a box that is `pad-y` too tall.
+        width: self.preferred-width;
+        height: self.preferred-height;
         spacing: 8px;
-        cross-axis-alignment: center;
+        cross-axis-alignment: root.row-align;
         @children
     }
 }
 
 /// "STREAM" with a white dot, or "LIVE" with a red dot and "2 STREAMING".
+///
+/// Two type sizes share the chip: the 9 px label and the 12 px Oxanium
+/// number. Box-aligned they sit on two baselines (the bigger face has the
+/// deeper box). The row aligns at the bottom and lifts the label by the
+/// difference of the two descents, the StatValue rule, so LIVE, the number
+/// and its word stand on one baseline. The dot rides the label's x-height.
 export component StreamTag inherits MediaChip {
     in property <string> label: "STREAM";
     in property <bool> live: false;
@@ -44,28 +60,55 @@ export component StreamTag inherits MediaChip {
     in property <string> count: "";
     in property <string> count-label: "STREAMING";
 
-    Rectangle {
-        width: 6px;
-        height: 6px;
-        border-radius: 3px;
-        background: root.live ? Theme.live : Theme.text-primary;
+    property <length> label-size: 9px;
+    property <length> number-size: 12px;
+    /// The lift of the 9 px label to the baseline of the 12 px number.
+    /// Nothing to lift on a chip with the label alone.
+    property <length> lift: root.count == "" ? 0px : max(0px,
+        root.number-size * Theme.descent(Theme.font-display)
+        - root.label-size * Theme.descent(Theme.font-label));
+
+    row-align: root.count == "" ? CrossAxisAlignment.center : CrossAxisAlignment.end;
+    // The number's box keeps its descent under the baseline: the chip gives
+    // two pixels back below, so the text stands in its middle.
+    pad-bottom: root.count == "" ? root.pad-y : root.pad-y - 2px;
+
+    VerticalLayout {
+        // The dot sits on the middle of the label's x-height: above the
+        // baseline (the label's descent) by half an x-height, less half
+        // the dot.
+        padding-bottom: root.lift + (root.count == "" ? 0px : 1px);
+        Rectangle {
+            width: 6px;
+            height: 6px;
+            border-radius: 3px;
+            background: root.live ? Theme.live : Theme.text-primary;
+        }
     }
-    Text {
-        text: root.label;
-        font-family: Theme.font-label;
-        font-weight: Theme.weight-label;
-        font-size: 9px;
-        letter-spacing: 1.4px;
-        color: root.live ? Theme.live : Theme.text-primary;
+    VerticalLayout {
+        padding-bottom: root.lift;
+        Text {
+            text: root.label;
+            font-family: Theme.font-label;
+            font-weight: Theme.weight-label;
+            font-size: root.label-size;
+            letter-spacing: 1.4px;
+            color: root.live ? Theme.live : Theme.text-primary;
+        }
     }
-    if root.count != "": Rectangle {
-        width: 1px;
-        height: 12px;
-        background: #FFFFFF47;
+    if root.count != "": VerticalLayout {
+        // The keyline stands on the number's box, one pixel up from its
+        // bottom, so it is centred on the number's height.
+        padding-bottom: 1px;
+        Rectangle {
+            width: 1px;
+            height: 12px;
+            background: #FFFFFF47;
+        }
     }
     if root.count != "": StatValue {
         value: root.count; unit: root.count-label;
-        value-size: 12px; unit-size: 9px;
+        value-size: root.number-size; unit-size: root.label-size;
         value-weight: Theme.weight-display-bold;
         unit-font: Theme.font-label;
         unit-weight: Theme.weight-label;

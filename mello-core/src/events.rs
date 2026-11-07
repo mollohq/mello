@@ -594,6 +594,15 @@ pub enum Event {
     StreamError {
         message: String,
     },
+    /// The reply to `Command::FetchStreamPicture`. `url` is the newest
+    /// public SFU picture of the live session `session_id`. It is empty
+    /// when the SFU keeps no pictures, the stream ended or the fetch failed.
+    StreamPictureLoaded {
+        #[serde(default)]
+        session_id: String,
+        #[serde(default)]
+        url: String,
+    },
 
     // --- Presence & crew state ---
     /// Full crew state loaded for the active crew.

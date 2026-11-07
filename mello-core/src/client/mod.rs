@@ -1451,6 +1451,35 @@ impl Client {
                     Err(e) => log::debug!("[game-icon] fetch for {game_id}: {e}"),
                 }
             }
+            Command::FetchStreamPicture {
+                crew_id,
+                session_id,
+            } => {
+                // A slow backend must not hold the command loop: the RPC
+                // runs on its own task.
+                let tx = self.event_tx.clone();
+                match self.nakama.stream_picture(&crew_id, &session_id) {
+                    Ok(request) => {
+                        tokio::spawn(async move {
+                            let url = match request.await {
+                                Ok(url) => url,
+                                Err(e) => {
+                                    log::debug!("[stream-picture] fetch for {session_id}: {e}");
+                                    String::new()
+                                }
+                            };
+                            let _ = tx.send(Event::StreamPictureLoaded { session_id, url });
+                        });
+                    }
+                    Err(e) => {
+                        log::debug!("[stream-picture] fetch for {session_id}: {e}");
+                        let _ = tx.send(Event::StreamPictureLoaded {
+                            session_id,
+                            url: String::new(),
+                        });
+                    }
+                }
+            }
             Command::GetUserGameStats => {
                 self.refresh_user_game_stats().await;
             }
