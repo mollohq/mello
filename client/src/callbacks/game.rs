@@ -100,7 +100,14 @@ pub fn wire(ctx: &AppContext) {
                 return;
             }
 
-            let pid = fg_monitor.borrow().game_pid();
+            let (pid, detected_game_id, detected_exe) = {
+                let fg = fg_monitor.borrow();
+                (
+                    fg.game_pid(),
+                    fg.game_id().to_string(),
+                    fg.game_exe().to_string(),
+                )
+            };
             let Some(game_pid) = pid else {
                 log::warn!("[ui] stream requested, but no detected game PID is available");
                 return;
@@ -126,8 +133,21 @@ pub fn wire(ctx: &AppContext) {
             // The hook policy identity and the exe come from the one
             // `stream_games` row of this pid, in the same loop iteration, so
             // the backend decision applies to the process that is captured.
-            // 0 means the core denies the hook, which is the safe default.
-            let (exe, igdb_id) = stream_game_identity(&app.get_stream_games(), game_pid);
+            // The picker fills `stream_games`; a quick start without the
+            // picker has no row, so the identity then comes from the
+            // detected game of the same pid. 0 means the core denies the
+            // hook, which is the safe default.
+            let (exe, igdb_id) = stream_game_identity(&app.get_stream_games(), game_pid)
+                .unwrap_or_else(|| detected_game_identity(&detected_game_id, &detected_exe));
+            log::info!(
+                "[ui] quick stream identity: game_id={:?} exe={:?} igdb_id={}",
+                detected_game_id,
+                exe,
+                igdb_id
+            );
+            // The host's own card draws the game from this property, as on
+            // the picker path.
+            app.set_stream_igdb_id(igdb_id as i32);
             let _ = cmd.send(Command::StartStream {
                 crew_id,
                 title,
@@ -145,19 +165,29 @@ pub fn wire(ctx: &AppContext) {
 
 /// The exe and the catalogue identity of the `stream_games` row for `pid`.
 /// Both come from one row, so they describe the same process. A pid with no
-/// row gives `("", 0)`.
+/// row gives `None`.
 fn stream_game_identity(
     games: &slint::ModelRc<crate::CaptureSourceData>,
     pid: u32,
-) -> (String, u32) {
+) -> Option<(String, u32)> {
     for row in 0..games.row_count() {
         if let Some(entry) = games.row_data(row) {
             if entry.pid == pid as i32 {
-                return (entry.exe.to_string(), entry.igdb_id.max(0) as u32);
+                return Some((entry.exe.to_string(), entry.igdb_id.max(0) as u32));
             }
         }
     }
-    (String::new(), 0)
+    None
+}
+
+/// The exe and the catalogue identity of the detected game. The sensor's
+/// game id of a catalogue game is the catalogue `game_id`; a discovered game
+/// (`steam-…`, `local-…`) is not in the catalogue and gives 0.
+fn detected_game_identity(game_id: &str, exe: &str) -> (String, u32) {
+    let igdb_id = mello_core::catalogue::Head::bundled()
+        .and_then(|head| head.by_game_id(game_id).map(|e| e.igdb_id))
+        .unwrap_or(0);
+    (exe.to_string(), igdb_id)
 }
 
 fn start_confirmed_timer(app_weak: slint::Weak<MainWindow>) {

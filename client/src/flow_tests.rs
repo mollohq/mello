@@ -6929,6 +6929,44 @@ fn the_quick_stream_path_sends_the_identity_of_the_captured_pid() {
     );
 }
 
+/// The quick start from the NOW PLAYING card does not open the picker, so
+/// `stream_games` has no rows. The identity then comes from the detected
+/// game of the same pid. Without it the start sent `igdb_id` 0, and no
+/// stream card could draw the game (2026-11-06, Hearthstone).
+#[test]
+fn the_quick_stream_path_without_the_picker_sends_the_detected_game() {
+    let mut h = Harness::new();
+    h.app().set_logged_in(true);
+    h.app().set_active_crew_id("crew-1".into());
+    h.app().set_game_name("Hearthstone".into());
+    h.ctx().fg_monitor.borrow_mut().set_detected_game(
+        5150,
+        "hearthstone",
+        r"C:\Program Files (x86)\Hearthstone\Hearthstone.exe",
+    );
+    h.pump();
+    h.app().invoke_stream_requested();
+    h.pump();
+
+    let cmds = h.commands();
+    let sent = cmds.iter().find_map(|c| match c {
+        Command::StartStream {
+            pid, exe, igdb_id, ..
+        } => Some((*pid, exe.clone(), *igdb_id)),
+        _ => None,
+    });
+    assert_eq!(
+        sent,
+        Some((Some(5150), "Hearthstone.exe".to_string(), 1279)),
+        "the quick start must carry the detected game's identity, got {cmds:?}"
+    );
+    assert_eq!(
+        h.app().get_stream_igdb_id(),
+        1279,
+        "the host's own card draws the game from this property"
+    );
+}
+
 /// The picker path carries the identity of the picked row from the UI
 /// callback to the emitted command, and an unknown process sends 0.
 #[test]
@@ -8710,6 +8748,30 @@ fn stream_cards(h: &Harness) -> Vec<(String, String, String)> {
             )
         })
         .collect()
+}
+
+/// The stream cards resolve their game icon and hero poster when they are
+/// built. The art Worker delivers the art later, so its arrival must build
+/// the cards again, or the card keeps the graphite ground (2026-11-06).
+#[test]
+fn art_that_arrives_late_rebuilds_the_stream_cards() {
+    let mut h = Harness::new();
+    h.app().set_user_name("b0bben".into());
+    h.app().set_is_hosting(true);
+    h.app().set_stream_igdb_id(1279);
+    h.pump();
+    assert!(stream_cards(&h).is_empty(), "no card is built yet");
+
+    h.emit(Event::GameArtLoaded {
+        game_id: "hearthstone".into(),
+        slot: mello_core::art::ArtSlot::Hero,
+    });
+    h.pump();
+
+    let cards = h.app().get_active_stream_cards();
+    assert_eq!(cards.row_count(), 1, "the art arrival builds the host card");
+    let card = cards.row_data(0).expect("the host card");
+    assert_eq!(card.game_name.as_str(), "Hearthstone");
 }
 
 /// The host card follows the stream session: STARTING until the track is

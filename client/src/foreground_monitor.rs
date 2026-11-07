@@ -8,6 +8,11 @@ pub struct ForegroundMonitor {
     hud_enabled: bool,
     /// Tracked game PID — used by the streaming feature, not by HUD mode logic.
     game_pid: Option<u32>,
+    /// The sensor's game id and exe basename of `game_pid`. They come from
+    /// the same `GameDetected` event as the pid, so the quick stream start
+    /// can send the identity of the process that it captures.
+    game_id: String,
+    game_exe: String,
 }
 
 struct ForegroundInfo {
@@ -21,15 +26,37 @@ impl ForegroundMonitor {
             in_voice: false,
             hud_enabled,
             game_pid: None,
+            game_id: String::new(),
+            game_exe: String::new(),
         }
     }
 
     pub fn set_game_active(&mut self, active: bool, pid: Option<u32>) {
         self.game_pid = if active { pid } else { None };
+        self.game_id.clear();
+        self.game_exe.clear();
+    }
+
+    /// Track the detected game: its pid, the sensor's game id and the exe
+    /// basename, all from one `GameDetected` event.
+    pub fn set_detected_game(&mut self, pid: u32, game_id: &str, exe_path: &str) {
+        self.game_pid = Some(pid);
+        self.game_id = game_id.to_string();
+        self.game_exe = exe_basename(exe_path).to_string();
     }
 
     pub fn game_pid(&self) -> Option<u32> {
         self.game_pid
+    }
+
+    /// The sensor's game id of the tracked game. Empty when none is tracked.
+    pub fn game_id(&self) -> &str {
+        &self.game_id
+    }
+
+    /// The exe basename of the tracked game. Empty when it is not known.
+    pub fn game_exe(&self) -> &str {
+        &self.game_exe
     }
 
     pub fn set_in_voice(&mut self, in_voice: bool) {
@@ -74,6 +101,12 @@ impl ForegroundMonitor {
 
         HudMode::Overlay
     }
+}
+
+/// The file name of an exe path. The sensor reports Windows paths, so both
+/// separators count on every platform.
+fn exe_basename(exe_path: &str) -> &str {
+    exe_path.rsplit(['\\', '/']).next().unwrap_or(exe_path)
 }
 
 fn query_foreground(app: &crate::MainWindow) -> ForegroundInfo {
@@ -163,5 +196,25 @@ mod tests {
         m.set_in_voice(true);
         assert_eq!(m.evaluate_with(false), Some(HudMode::Overlay));
         assert_eq!(m.evaluate_with(false), None);
+    }
+
+    // --- detected game ---
+
+    #[test]
+    fn detected_game_keeps_the_exe_basename_and_game_id() {
+        let mut m = fm();
+        m.set_detected_game(
+            4242,
+            "hearthstone",
+            r"C:\Program Files (x86)\Hearthstone\Hearthstone.exe",
+        );
+        assert_eq!(m.game_pid(), Some(4242));
+        assert_eq!(m.game_id(), "hearthstone");
+        assert_eq!(m.game_exe(), "Hearthstone.exe");
+
+        m.set_game_active(false, None);
+        assert_eq!(m.game_pid(), None);
+        assert_eq!(m.game_id(), "");
+        assert_eq!(m.game_exe(), "");
     }
 }

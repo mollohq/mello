@@ -127,6 +127,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 {
                     let img = crate::avatar::rgba_to_image(&rgba, w, h);
                     ctx.game_icon_cache.borrow_mut().insert(game_id, img);
+                    refresh_stream_cards(ctx);
                 }
             }
         }
@@ -138,6 +139,10 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 super::games::on_icon_art_loaded(ctx, &game_id);
             }
             super::clip::refresh_game_art(ctx);
+            // The stream cards resolve their icon and hero poster at build
+            // time. The first build starts the fetch and gets nothing, so
+            // the cards are built again when the art lands.
+            refresh_stream_cards(ctx);
         }
         Event::SessionSummary {
             wins,
@@ -158,6 +163,15 @@ pub fn handle(ctx: &AppContext, event: Event) {
             }
         }
         _ => {}
+    }
+}
+
+/// Build the stream cards again when there is a stream card that can show
+/// game art. Without a hosted or a watchable stream nothing changes, so the
+/// rebuild (and its zone refresh) is skipped.
+fn refresh_stream_cards(ctx: &AppContext) {
+    if ctx.app.get_is_hosting() || !ctx.app.get_active_streamer_id().is_empty() {
+        super::stream_cards::sync_active_stream_cards(ctx);
     }
 }
 

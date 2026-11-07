@@ -583,6 +583,30 @@ mod tests {
     }
 
     #[test]
+    fn game_id_round_trips_through_the_igdb_id() {
+        // The stream card sends the igdb id of the sensor's game and the
+        // viewer finds it with `get`. Both lookups must agree.
+        let h = head();
+        for game_id in [
+            "hearthstone",
+            "counter-strike-2",
+            "league-of-legends",
+            "minecraft",
+            "world-of-warcraft",
+            "valorant",
+        ] {
+            let entry = h
+                .by_game_id(game_id)
+                .unwrap_or_else(|| panic!("{game_id} is not in the catalogue"));
+            let back = h
+                .get(entry.igdb_id)
+                .unwrap_or_else(|| panic!("{game_id}: get({}) misses", entry.igdb_id));
+            assert_eq!(back.game_id, game_id);
+        }
+        assert_eq!(h.by_game_id("hearthstone").map(|e| e.igdb_id), Some(1279));
+    }
+
+    #[test]
     fn discovered_game_ids_are_not_in_the_catalogue() {
         // steam-/epic-/local- ids are real sessions the catalogue has never
         // heard of. Callers must derive a badge rather than render a blank —
