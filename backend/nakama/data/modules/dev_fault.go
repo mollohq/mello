@@ -33,6 +33,12 @@ import (
 //     Requires user_id and count.
 //   - generate_recap: generate the weekly recap of crew_id now, as the Monday
 //     job does. Requires crew_id.
+//   - quests_reset: write a new quest record for crew_id, made now, with the
+//     user_id as the owner and no step done. Requires crew_id and user_id.
+//   - quests_clear: delete the quest record of crew_id, so the crew is like
+//     one made before quests shipped. Requires crew_id.
+//   - quests_expire: move the quest window of crew_id into the past, so the
+//     card is gone. Requires crew_id.
 func DevFaultRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
 	if os.Getenv("MELLO_ENABLE_DEV_FAULT") != "1" {
 		return "", runtime.NewError("dev_fault disabled (set MELLO_ENABLE_DEV_FAULT=1)", 9)
@@ -126,6 +132,45 @@ func DevFaultRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 		}
 		logger.Warn("dev_fault: backdated voice join of user=%s by %d min", req.UserID, req.Count)
 
+	case "quests_reset":
+		if req.CrewID == "" || req.UserID == "" {
+			return "", runtime.NewError("quests_reset requires crew_id and user_id", 3)
+		}
+		q := newCrewQuests(req.CrewID, req.UserID, time.Now().UnixMilli())
+		if _, version := readCrewQuests(ctx, nk, req.CrewID); version != "" {
+			if err := writeCrewQuests(ctx, nk, q, version); err != nil {
+				return "", runtime.NewError("quests_reset write failed: "+err.Error(), 13)
+			}
+		} else if err := writeCrewQuests(ctx, nk, q, "*"); err != nil {
+			return "", runtime.NewError("quests_reset write failed: "+err.Error(), 13)
+		}
+		logger.Warn("dev_fault: reset the quests of crew=%s owner=%s", req.CrewID, req.UserID)
+
+	case "quests_clear":
+		if req.CrewID == "" {
+			return "", runtime.NewError("quests_clear requires crew_id", 3)
+		}
+		if err := nk.StorageDelete(ctx, []*runtime.StorageDelete{
+			{Collection: CrewQuestsCollection, Key: req.CrewID, UserID: SystemUserID},
+		}); err != nil {
+			return "", runtime.NewError("quests_clear failed: "+err.Error(), 13)
+		}
+		logger.Warn("dev_fault: cleared the quests of crew=%s", req.CrewID)
+
+	case "quests_expire":
+		if req.CrewID == "" {
+			return "", runtime.NewError("quests_expire requires crew_id", 3)
+		}
+		q, version := readCrewQuests(ctx, nk, req.CrewID)
+		if q == nil {
+			return "", runtime.NewError("crew has no quests", 5)
+		}
+		q.EndsMs = time.Now().UnixMilli() - 1
+		if err := writeCrewQuests(ctx, nk, q, version); err != nil {
+			return "", runtime.NewError("quests_expire write failed: "+err.Error(), 13)
+		}
+		logger.Warn("dev_fault: expired the quests of crew=%s", req.CrewID)
+
 	case "generate_recap":
 		if req.CrewID == "" {
 			return "", runtime.NewError("generate_recap requires crew_id", 3)
@@ -149,6 +194,10 @@ func backdateVoiceJoin(userID string, d time.Duration) bool {
 	for _, room := range voiceRooms {
 		if m, ok := room.Members[userID]; ok {
 			m.JoinedAt -= d.Milliseconds()
+			// The together span of the first call quest step moves with it.
+			if room.together != nil {
+				room.together.sinceMs -= d.Milliseconds()
+			}
 			return true
 		}
 	}

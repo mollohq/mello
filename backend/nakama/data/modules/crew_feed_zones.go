@@ -53,6 +53,11 @@ type FeedZones struct {
 	History   []ZoneHistoryWeek `json:"history"`
 	// HistoryNext is the history_before of the next page. Zero at the end.
 	HistoryNext int64 `json:"history_next,omitempty"`
+	// Quests is the quest card of a new crew, while its window runs. The
+	// client shows it ahead of Stage, as it does a live stream, and puts
+	// Stage back when the card goes. While it is here, the Stage entry also
+	// stays in Clips or Sessions, so it is not lost under the card.
+	Quests *ZoneQuests `json:"quests,omitempty"`
 }
 
 // ZoneStage is the one thing to watch. Kind is game_clip, stream_replay,
@@ -129,6 +134,8 @@ type zonesInput struct {
 	Libs    map[string]*LibraryDoc
 	Joins   []FeedJoin
 	Belts   []RecapBeltMoved
+	// Quests is the quest record of the crew, nil when it has none.
+	Quests *CrewQuests
 }
 
 func (in zonesInput) windowStart() int64 {
@@ -193,8 +200,9 @@ func buildFeedZones(in zonesInput) FeedZones {
 		History:   []ZoneHistoryWeek{},
 	}
 	z.Stage = zoneStage(in, start)
+	z.Quests = zoneQuests(in.Quests, in.NowMs)
 	stageID := ""
-	if z.Stage.Entry != nil {
+	if z.Stage.Entry != nil && z.Quests == nil {
 		stageID = z.Stage.Entry.ID
 	}
 	z.Clips = zoneClips(in, start, stageID)

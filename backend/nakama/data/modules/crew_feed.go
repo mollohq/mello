@@ -620,6 +620,7 @@ func crewFeedZones(ctx context.Context, logger runtime.Logger, nk runtime.Nakama
 	streamDoc, _ := readStreamSessionsDoc(ctx, nk, req.CrewID)
 	recapsDoc, _ := readRecapsDoc(ctx, nk, req.CrewID)
 	stampRecapWeeks(ctx, nk, req.CrewID, recapsDoc.Recaps)
+	quests, _ := readCrewQuests(ctx, nk, req.CrewID)
 	return buildFeedZones(zonesInput{
 		ViewerID:      userID,
 		NowMs:         nowMs,
@@ -634,6 +635,7 @@ func crewFeedZones(ctx context.Context, logger runtime.Logger, nk runtime.Nakama
 		Libs:          crewLibraryDocs(ctx, nk, req.CrewID),
 		Joins:         joins,
 		Belts:         crewBeltsMovedSince(ctx, nk, req.CrewID, nowMs-int64(feedDailyRecapDays)*dayMs),
+		Quests:        quests,
 	})
 }
 
