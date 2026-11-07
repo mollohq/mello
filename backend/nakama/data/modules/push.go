@@ -38,6 +38,8 @@ var PriorityEvents = map[string]bool{
 	"channel_created": true,
 	"channel_renamed": true,
 	"channel_deleted": true,
+	"clip_posted":     true,
+	"member_joined":   true,
 }
 
 // ---------------------------------------------------------------------------

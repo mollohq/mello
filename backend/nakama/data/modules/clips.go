@@ -233,6 +233,16 @@ type PostClipRequest struct {
 
 // postClipResponse is the post_clip answer, the same for a new clip and a
 // retry.
+// clipPostedPayload is the data of the clip_posted crew event (code 111). The
+// desktop client plays the crew clip sound on it. Ids only.
+func clipPostedPayload(clipID, clipperID, clipType string) map[string]interface{} {
+	return map[string]interface{}{
+		"clip_id":    clipID,
+		"clipper_id": clipperID,
+		"clip_type":  clipType,
+	}
+}
+
 func postClipResponse(eventID, clipID string) string {
 	resp, _ := json.Marshal(map[string]interface{}{
 		"success":  true,
@@ -344,6 +354,7 @@ func PostClipRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 	recordClipActivity(ctx, logger, nk, userID)
 	recomputeHead2headForUser(ctx, logger, nk, userID, head2headTriggerSession)
 	PushFeedChanged(ctx, logger, nk, req.CrewID, "clip")
+	PushCrewEvent(ctx, logger, nk, req.CrewID, "clip_posted", clipPostedPayload(req.ClipID, userID, req.ClipType))
 
 	return postClipResponse(eventID, req.ClipID), nil
 }

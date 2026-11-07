@@ -568,6 +568,13 @@ func recordMemberJoined(ctx context.Context, logger runtime.Logger, nk runtime.N
 	if err := AppendCrewEvent(ctx, nk, crewID, event); err != nil {
 		logger.Warn("Failed to write member_joined event for crew %s: %v", crewID, err)
 	}
+	PushCrewEvent(ctx, logger, nk, crewID, "member_joined", memberJoinedPayload(userID))
+}
+
+// memberJoinedPayload is the data of the member_joined crew event (code 111).
+// The desktop client plays the new member sound on it. Ids only.
+func memberJoinedPayload(userID string) map[string]interface{} {
+	return map[string]interface{}{"user_id": userID}
 }
 
 func AfterLeaveCrew(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, in *api.LeaveGroupRequest) error {
