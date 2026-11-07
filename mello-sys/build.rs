@@ -10,6 +10,10 @@ fn main() {
     println!("cargo:rerun-if-changed=../libmello/cmake/");
     println!("cargo:rerun-if-changed=../libmello/vcpkg-overlays/");
     println!("cargo:rerun-if-env-changed=LIBCLANG_PATH");
+    // libmello/CMakeLists.txt reads MELLO_DEPS_DIR: the folder of the
+    // downloaded rnnoise model tarball. The cmake crate passes the process
+    // environment to CMake.
+    println!("cargo:rerun-if-env-changed=MELLO_DEPS_DIR");
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();

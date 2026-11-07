@@ -12,6 +12,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# mello_fetch_verified(): a SHA512-pinned download with fallback URLs.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/mello-fetch-verified.cmake)
+
 if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "Minimum macOS version")
 endif()
@@ -138,17 +141,28 @@ endif() # IOS vs desktop (ONNX Runtime)
 # Build rnnoise from source (vcpkg port uses autotools, unsupported on Windows)
 set(RNNOISE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/rnnoise)
 
-# Download model data (rnnoise_data.c/.h) if missing — same source as vcpkg portfile
+# Download model data (rnnoise_data.c/.h) if missing. The tarball is the one
+# of the vcpkg portfile, pinned by SHA512. The sources, in order:
+# 1. The deps-mirror pre-release of mollohq/m3llo (a copy of the same file).
+# 2. media.xiph.org, the upstream source.
+# MELLO_DEPS_DIR (environment) is the folder for the tarball, so that a CI
+# cache or a developer can keep it between builds. Without it, the tarball
+# goes into the build folder.
 set(RNNOISE_MODEL_TAR "rnnoise_data-0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37.tar.gz")
+set(RNNOISE_MODEL_SHA512 "b327d2fc5095be9ed66c5246a86b1a1ce180e9de875c4e5e8778f975560d1f035da40a8686dc1c3fd91c8e709be65d2638eccaa9f866b6f3d85f8d0d16bd2184")
 if(NOT EXISTS "${RNNOISE_DIR}/src/rnnoise_data.h")
-    set(RNNOISE_MODEL_URL "https://media.xiph.org/rnnoise/models/${RNNOISE_MODEL_TAR}")
-    set(RNNOISE_MODEL_DL "${CMAKE_CURRENT_BINARY_DIR}/${RNNOISE_MODEL_TAR}")
-    if(NOT EXISTS "${RNNOISE_MODEL_DL}")
-        message(STATUS "[mello] Downloading rnnoise model data...")
-        file(DOWNLOAD "${RNNOISE_MODEL_URL}" "${RNNOISE_MODEL_DL}"
-             EXPECTED_HASH SHA512=b327d2fc5095be9ed66c5246a86b1a1ce180e9de875c4e5e8778f975560d1f035da40a8686dc1c3fd91c8e709be65d2638eccaa9f866b6f3d85f8d0d16bd2184
-             SHOW_PROGRESS)
+    if(NOT "$ENV{MELLO_DEPS_DIR}" STREQUAL "")
+        file(TO_CMAKE_PATH "$ENV{MELLO_DEPS_DIR}" MELLO_DEPS_DIR)
+        get_filename_component(MELLO_DEPS_DIR "${MELLO_DEPS_DIR}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_BINARY_DIR}")
+    else()
+        set(MELLO_DEPS_DIR "${CMAKE_CURRENT_BINARY_DIR}")
     endif()
+    set(RNNOISE_MODEL_DL "${MELLO_DEPS_DIR}/${RNNOISE_MODEL_TAR}")
+    mello_fetch_verified("${RNNOISE_MODEL_DL}" "${RNNOISE_MODEL_SHA512}"
+        "https://github.com/mollohq/m3llo/releases/download/deps-mirror/${RNNOISE_MODEL_TAR}"
+        "https://media.xiph.org/rnnoise/models/${RNNOISE_MODEL_TAR}")
+    # A clean folder: no file of an earlier extract stays.
+    file(REMOVE_RECURSE "${CMAKE_CURRENT_BINARY_DIR}/rnnoise_model")
     file(ARCHIVE_EXTRACT INPUT "${RNNOISE_MODEL_DL}" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/rnnoise_model")
     file(COPY "${CMAKE_CURRENT_BINARY_DIR}/rnnoise_model/src/rnnoise_data.c" DESTINATION "${RNNOISE_DIR}/src/")
     file(COPY "${CMAKE_CURRENT_BINARY_DIR}/rnnoise_model/src/rnnoise_data.h" DESTINATION "${RNNOISE_DIR}/src/")

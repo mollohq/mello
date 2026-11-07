@@ -463,6 +463,8 @@ jobs:
       CARGO_INCREMENTAL: "0"
       RUST_VERSION: "1.94.0"
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-cache
+      # See the test job of linux-build-test.yml.
+      MELLO_DEPS_DIR: ${{ github.workspace }}/.mello-deps
 
     steps:
       - name: Checkout repository
@@ -518,6 +520,13 @@ jobs:
 
       - name: Prepare the vcpkg cache folder
         run: mkdir -p .vcpkg-cache
+
+      - name: Cache libmello downloads
+        uses: actions/cache@v6
+        with:
+          path: .mello-deps
+          key: mello-deps-${{ runner.os }}-${{ hashFiles('libmello/CMakeLists.txt') }}
+          restore-keys: mello-deps-${{ runner.os }}-
 
       - name: Set version
         run: |

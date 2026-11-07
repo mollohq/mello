@@ -100,3 +100,5 @@ benchmarks/clips/
 dist-linux/
 # vcpkg binary cache of the Linux build container
 external/vcpkg-cache/
+# Downloads of the libmello CMake build when MELLO_DEPS_DIR points here (CI cache)
+.mello-deps/
