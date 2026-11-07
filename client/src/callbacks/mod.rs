@@ -3,12 +3,12 @@ pub(crate) mod chat;
 mod clip;
 pub(crate) mod crew;
 mod crew_settings;
-mod game;
+pub(crate) mod game;
 mod games;
 pub(crate) mod onboarding;
 mod sealed;
 pub(crate) mod settings;
-mod streaming;
+pub(crate) mod streaming;
 mod voice;
 mod window;
 

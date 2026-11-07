@@ -5170,11 +5170,12 @@ fn keybinds_refuses_the_push_to_talk_key() {
 fn reset_to_defaults_gives_the_clip_key_back_to_f7() {
     let mut h = Harness::new();
     logged_in_app(&mut h);
-    // F9 as Slint reports it. F8 is the game clip key on Windows.
+    // F10 as Slint reports it. F8 is the game clip key on Windows, F9 the
+    // stream key.
     h.app()
-        .invoke_settings_clip_key_captured("\u{F70C}".into(), false, false, false, false);
+        .invoke_settings_clip_key_captured("\u{F70D}".into(), false, false, false, false);
     h.pump();
-    assert_eq!(h.app().get_clip_key_label().as_str(), "F9");
+    assert_eq!(h.app().get_clip_key_label().as_str(), "F10");
 
     h.app().invoke_settings_reset_defaults();
     h.pump();
@@ -5199,14 +5200,14 @@ fn keybinds_rebinds_the_game_clip_key() {
         "the field listens"
     );
 
-    // F9 as Slint reports it.
+    // F10 as Slint reports it. F9 is the stream key.
     h.app()
-        .invoke_settings_game_clip_key_captured("\u{F70C}".into(), false, false, false, false);
+        .invoke_settings_game_clip_key_captured("\u{F70D}".into(), false, false, false, false);
     h.pump();
 
     assert!(!h.app().get_settings_game_clip_binding());
-    assert_eq!(h.settings().borrow().game_clip_key.as_deref(), Some("F9"));
-    assert_eq!(h.app().get_game_clip_key_label().as_str(), "F9");
+    assert_eq!(h.settings().borrow().game_clip_key.as_deref(), Some("F10"));
+    assert_eq!(h.app().get_game_clip_key_label().as_str(), "F10");
     assert!(h.app().get_settings_game_clip_key_warning().is_empty());
 }
 
@@ -5246,6 +5247,130 @@ fn keybinds_keeps_the_voice_and_game_clip_keys_apart() {
         h.app().get_settings_clip_key_warning().as_str(),
         "Game clip uses F8. Pick another key."
     );
+}
+
+/// The stream key is bound in Settings, Keybinds, in the STREAMING section.
+/// The new key is saved, shown and given to the hotkey manager.
+#[test]
+fn keybinds_rebinds_the_stream_key() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    h.app().set_settings_open(true);
+    h.pump();
+    h.click_label("KEYBINDS");
+    assert_eq!(h.app().get_stream_key_label().as_str(), "F9");
+    h.click_label("Stream key");
+    assert!(h.app().get_settings_stream_binding(), "the field listens");
+
+    // F10 as Slint reports it.
+    h.app()
+        .invoke_settings_stream_key_captured("\u{F70D}".into(), false, false, false, false);
+    h.pump();
+
+    assert!(!h.app().get_settings_stream_binding());
+    assert_eq!(h.settings().borrow().stream_key.as_deref(), Some("F10"));
+    assert_eq!(h.app().get_stream_key_label().as_str(), "F10");
+    assert!(h.app().get_settings_stream_key_warning().is_empty());
+}
+
+/// One key, one binding: the stream key refuses the push-to-talk key and the
+/// voice clip key. The field keeps F9.
+#[test]
+fn keybinds_the_stream_key_refuses_the_ptt_and_voice_clip_keys() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    h.settings().borrow_mut().ptt_key = Some("KeyV".into());
+
+    h.app()
+        .invoke_settings_stream_key_captured("v".into(), false, false, false, false);
+    h.pump();
+    assert_eq!(h.settings().borrow().stream_key.as_deref(), Some("F9"));
+    assert_eq!(
+        h.app().get_settings_stream_key_warning().as_str(),
+        "Push-to-talk uses V. Pick another key."
+    );
+
+    // F7 as Slint reports it.
+    h.app()
+        .invoke_settings_stream_key_captured("\u{F70A}".into(), false, false, false, false);
+    h.pump();
+    assert_eq!(h.settings().borrow().stream_key.as_deref(), Some("F9"));
+    assert_eq!(
+        h.app().get_settings_stream_key_warning().as_str(),
+        "Voice clip uses F7. Pick another key."
+    );
+}
+
+/// The stream key refuses the game clip key, where the client binds it.
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn keybinds_the_stream_key_refuses_the_game_clip_key() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+
+    // F8 as Slint reports it.
+    h.app()
+        .invoke_settings_stream_key_captured("\u{F70B}".into(), false, false, false, false);
+    h.pump();
+    assert_eq!(h.settings().borrow().stream_key.as_deref(), Some("F9"));
+    assert_eq!(h.app().get_stream_key_label().as_str(), "F9");
+    assert_eq!(
+        h.app().get_settings_stream_key_warning().as_str(),
+        "Game clip uses F8. Pick another key."
+    );
+}
+
+/// The voice clip key refuses the stream key. Each field keeps its key.
+#[test]
+fn keybinds_the_voice_clip_key_refuses_the_stream_key() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+
+    // F9 as Slint reports it.
+    h.app()
+        .invoke_settings_clip_key_captured("\u{F70C}".into(), false, false, false, false);
+    h.pump();
+    assert_eq!(h.settings().borrow().clip_key.as_deref(), Some("F7"));
+    assert_eq!(
+        h.app().get_settings_clip_key_warning().as_str(),
+        "Stream key uses F9. Pick another key."
+    );
+}
+
+/// The game clip key refuses the stream key. Each field keeps its key.
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn keybinds_the_game_clip_key_refuses_the_stream_key() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+
+    // F9 as Slint reports it.
+    h.app()
+        .invoke_settings_game_clip_key_captured("\u{F70C}".into(), false, false, false, false);
+    h.pump();
+    assert_eq!(h.settings().borrow().game_clip_key.as_deref(), Some("F8"));
+    assert_eq!(
+        h.app().get_settings_game_clip_key_warning().as_str(),
+        "Stream key uses F9. Pick another key."
+    );
+}
+
+/// Reset to defaults gives the stream key back to F9.
+#[test]
+fn reset_to_defaults_gives_the_stream_key_back_to_f9() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    // F10 as Slint reports it.
+    h.app()
+        .invoke_settings_stream_key_captured("\u{F70D}".into(), false, false, false, false);
+    h.pump();
+    assert_eq!(h.app().get_stream_key_label().as_str(), "F10");
+
+    h.app().invoke_settings_reset_defaults();
+    h.pump();
+    assert_eq!(h.app().get_stream_key_label().as_str(), "F9");
+    assert_eq!(h.settings().borrow().stream_key.as_deref(), Some("F9"));
+    assert!(h.app().get_settings_stream_key_warning().is_empty());
 }
 
 #[cfg(any(windows, target_os = "macos"))]
@@ -6965,6 +7090,238 @@ fn the_quick_stream_path_without_the_picker_sends_the_detected_game() {
         1279,
         "the host's own card draws the game from this property"
     );
+}
+
+// --- The stream key (specs/12-STREAMING.md section 11, "Stream key") ---
+
+/// Records the stream key notifications in place of the OS.
+fn record_stream_key_notices(h: &Harness) -> std::rc::Rc<std::cell::RefCell<Vec<String>>> {
+    let notices = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let sink = notices.clone();
+    *h.ctx().stream_key_notice.borrow_mut() = Some(Box::new(move |text: &str| {
+        sink.borrow_mut().push(text.to_string());
+    }));
+    notices
+}
+
+/// Hearthstone is detected, crew-1 is active. Not in voice, and the
+/// harness has the HUD off.
+fn stream_key_ready(h: &mut Harness) {
+    h.app().set_logged_in(true);
+    h.app().set_active_crew_id("crew-1".into());
+    h.app().set_game_name("Hearthstone".into());
+    h.app().set_stream_preset(1);
+    h.ctx().fg_monitor.borrow_mut().set_detected_game(
+        5150,
+        "hearthstone",
+        r"C:\Program Files (x86)\Hearthstone\Hearthstone.exe",
+    );
+    h.pump();
+}
+
+fn start_streams(cmds: &[Command]) -> Vec<String> {
+    cmds.iter()
+        .filter(|c| matches!(c, Command::StartStream { .. }))
+        .map(|c| format!("{c:?}"))
+        .collect()
+}
+
+/// The stream key starts the stream that the STREAM button starts: the
+/// same crew, pid, exe, igdb_id, title and preset. It needs no voice and
+/// no HUD.
+#[test]
+fn the_stream_key_sends_the_start_of_the_stream_button() {
+    let mut button = Harness::new();
+    stream_key_ready(&mut button);
+    button.app().invoke_stream_requested();
+    button.pump();
+    let from_button = start_streams(&button.commands());
+
+    let mut key = Harness::new();
+    stream_key_ready(&mut key);
+    assert!(!key.app().get_in_voice());
+    assert!(!key.ctx().hud_manager.is_enabled());
+    crate::stream_key::stream_key_pressed(key.ctx());
+    key.pump();
+    let from_key = start_streams(&key.commands());
+
+    assert_eq!(
+        from_button.len(),
+        1,
+        "the button starts once: {from_button:?}"
+    );
+    assert_eq!(from_key, from_button);
+    assert_eq!(key.app().get_stream_igdb_id(), 1279);
+    assert_eq!(key.app().get_stream_label().as_str(), "Hearthstone");
+}
+
+/// The stream key ends a live stream through the end-stream path, and the
+/// OS says so when core confirms. The source of the stream does not count:
+/// this one is a monitor from the picker.
+#[test]
+fn the_stream_key_ends_a_live_stream() {
+    let mut h = Harness::new();
+    stream_key_ready(&mut h);
+    let notices = record_stream_key_notices(&h);
+    h.emit(Event::StreamStarting {
+        crew_id: "crew-1".into(),
+    });
+    h.emit(Event::StreamStarted {
+        crew_id: "crew-1".into(),
+        session_id: "s1".into(),
+        mode: "monitor".into(),
+    });
+    let _ = h.commands();
+
+    crate::stream_key::stream_key_pressed(h.ctx());
+    h.pump();
+
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::StopStream)),
+        "the key must end the stream, got {cmds:?}"
+    );
+    assert!(start_streams(&cmds).is_empty(), "no new start: {cmds:?}");
+    assert!(!h.app().get_is_hosting(), "the card ends at once");
+    assert!(
+        notices.borrow().is_empty(),
+        "no notice before core confirms"
+    );
+
+    h.emit(Event::StreamEnded {
+        crew_id: "crew-1".into(),
+        role: mello_core::events::StreamRole::Host,
+        reason: "stopped".into(),
+    });
+    assert_eq!(*notices.borrow(), vec!["Stream ended".to_string()]);
+}
+
+/// A start in flight (the card shows "starting") ignores the key: no
+/// second start and no stop.
+#[test]
+fn the_stream_key_does_nothing_while_a_start_is_in_flight() {
+    let mut h = Harness::new();
+    stream_key_ready(&mut h);
+    let notices = record_stream_key_notices(&h);
+    h.emit(Event::StreamStarting {
+        crew_id: "crew-1".into(),
+    });
+    let _ = h.commands();
+
+    crate::stream_key::stream_key_pressed(h.ctx());
+    h.pump();
+
+    let cmds = h.commands();
+    assert!(
+        cmds.is_empty(),
+        "a press while starting sends nothing, got {cmds:?}"
+    );
+    assert!(h.app().get_is_hosting(), "the start goes on");
+    assert_eq!(h.app().get_stream_host_state().as_str(), "starting");
+    assert!(notices.borrow().is_empty());
+}
+
+/// No detected game: no start, no monitor in its place, and the OS says why.
+#[test]
+fn the_stream_key_without_a_game_does_not_start() {
+    let mut h = Harness::new();
+    h.app().set_logged_in(true);
+    h.app().set_active_crew_id("crew-1".into());
+    h.pump();
+    let notices = record_stream_key_notices(&h);
+
+    crate::stream_key::stream_key_pressed(h.ctx());
+    h.pump();
+
+    let cmds = h.commands();
+    assert!(start_streams(&cmds).is_empty(), "no start: {cmds:?}");
+    assert_eq!(*notices.borrow(), vec!["No game to stream".to_string()]);
+}
+
+/// No active crew: no start, and the OS says why.
+#[test]
+fn the_stream_key_without_a_crew_does_not_start() {
+    let mut h = Harness::new();
+    stream_key_ready(&mut h);
+    h.app().set_active_crew_id("".into());
+    h.pump();
+    let notices = record_stream_key_notices(&h);
+
+    crate::stream_key::stream_key_pressed(h.ctx());
+    h.pump();
+
+    let cmds = h.commands();
+    assert!(start_streams(&cmds).is_empty(), "no start: {cmds:?}");
+    assert_eq!(
+        *notices.borrow(),
+        vec!["Pick a crew to stream to".to_string()]
+    );
+}
+
+/// A start of the stream key tells the OS when it is live, or when it
+/// failed. Each start gives one notification.
+#[test]
+fn the_stream_key_start_is_told_when_live_or_failed() {
+    let mut h = Harness::new();
+    stream_key_ready(&mut h);
+    let notices = record_stream_key_notices(&h);
+
+    crate::stream_key::stream_key_pressed(h.ctx());
+    h.emit(Event::StreamStarting {
+        crew_id: "crew-1".into(),
+    });
+    h.emit(Event::StreamStarted {
+        crew_id: "crew-1".into(),
+        session_id: "s1".into(),
+        mode: "process".into(),
+    });
+    assert_eq!(*notices.borrow(), vec!["You are live".to_string()]);
+    // The stream ends from the app UI later: no notification.
+    h.app().invoke_stop_stream();
+    h.emit(Event::StreamEnded {
+        crew_id: "crew-1".into(),
+        role: mello_core::events::StreamRole::Host,
+        reason: "stopped".into(),
+    });
+    assert_eq!(notices.borrow().len(), 1, "{:?}", notices.borrow());
+
+    crate::stream_key::stream_key_pressed(h.ctx());
+    h.emit(Event::StreamStarting {
+        crew_id: "crew-1".into(),
+    });
+    h.emit(Event::StreamFailed {
+        role: mello_core::events::StreamRole::Host,
+        reason: "no encoder".into(),
+    });
+    assert_eq!(
+        *notices.borrow(),
+        vec!["You are live".to_string(), "Stream failed".to_string()]
+    );
+}
+
+/// A start and a stop from the app UI send no stream key notification.
+#[test]
+fn the_stream_button_sends_no_stream_key_notification() {
+    let mut h = Harness::new();
+    stream_key_ready(&mut h);
+    let notices = record_stream_key_notices(&h);
+
+    h.app().invoke_stream_requested();
+    h.emit(Event::StreamStarting {
+        crew_id: "crew-1".into(),
+    });
+    h.emit(Event::StreamStarted {
+        crew_id: "crew-1".into(),
+        session_id: "s1".into(),
+        mode: "process".into(),
+    });
+    h.app().invoke_stop_stream();
+    h.emit(Event::StreamEnded {
+        crew_id: "crew-1".into(),
+        role: mello_core::events::StreamRole::Host,
+        reason: "stopped".into(),
+    });
+    assert!(notices.borrow().is_empty(), "{:?}", notices.borrow());
 }
 
 /// The picker path carries the identity of the picked row from the UI

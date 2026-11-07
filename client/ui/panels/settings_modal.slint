@@ -2796,6 +2796,9 @@ component AboutTab inherits VerticalLayout {
 component KeybindRow inherits Rectangle {
     in property <string> title;
     in property <string> description;
+    /// The label of the key field. A row whose title does not name the key
+    /// sets its own.
+    in property <string> control-label: root.title + " key";
     /// "F7", "Ctrl+F7", or "" when no key is bound.
     in property <string> key-label;
     /// The state under the field, for a key that another binding takes.
@@ -2910,7 +2913,7 @@ component KeybindRow inherits Rectangle {
 
                 bind-ta := TouchArea {
                     accessible-role: button;
-                    accessible-label: root.title + " key";
+                    accessible-label: root.control-label;
                     mouse-cursor: pointer;
                     clicked => {
                         if !root.binding {
@@ -2948,6 +2951,10 @@ component KeybindsTab inherits VerticalLayout {
     in property <string> game-clip-key-warning: "";
     in-out property <bool> game-clip-binding: false;
     callback game-clip-key-captured(string, bool, bool, bool, bool);
+    in property <string> stream-key-label: "F9";
+    in property <string> stream-key-warning: "";
+    in-out property <bool> stream-binding: false;
+    callback stream-key-captured(string, bool, bool, bool, bool);
 
     VerticalLayout {
         spacing: 24px;
@@ -2970,6 +2977,22 @@ component KeybindsTab inherits VerticalLayout {
             warning: root.game-clip-key-warning;
             binding <=> root.game-clip-binding;
             key-captured(k, c, a, s, m) => { root.game-clip-key-captured(k, c, a, s, m); }
+        }
+    }
+
+    VerticalLayout {
+        spacing: 24px;
+
+        SectionHeader { title: "STREAMING"; }
+
+        KeybindRow {
+            title: "Start / end stream";
+            control-label: "Stream key";
+            description: "Starts a stream of the game you play, or ends your stream. Some games use F9 to load a save.";
+            key-label: root.stream-key-label;
+            warning: root.stream-key-warning;
+            binding <=> root.stream-binding;
+            key-captured(k, c, a, s, m) => { root.stream-key-captured(k, c, a, s, m); }
         }
     }
 }
@@ -3086,6 +3109,10 @@ export component SettingsModal inherits Rectangle {
     in property <string> game-clip-key-warning: "";
     in-out property <bool> game-clip-binding: false;
     callback game-clip-key-captured(string, bool, bool, bool, bool);
+    in property <string> stream-key-label: "F9";
+    in property <string> stream-key-warning: "";
+    in-out property <bool> stream-binding: false;
+    callback stream-key-captured(string, bool, bool, bool, bool);
     callback setting-changed-game-clips(bool);
     callback setting-changed-game-clip-quality(string);
 
@@ -3799,6 +3826,10 @@ export component SettingsModal inherits Rectangle {
                             game-clip-key-warning: root.game-clip-key-warning;
                             game-clip-binding <=> root.game-clip-binding;
                             game-clip-key-captured(k, c, a, s, m) => { root.game-clip-key-captured(k, c, a, s, m); }
+                            stream-key-label: root.stream-key-label;
+                            stream-key-warning: root.stream-key-warning;
+                            stream-binding <=> root.stream-binding;
+                            stream-key-captured(k, c, a, s, m) => { root.stream-key-captured(k, c, a, s, m); }
                         }
 
                         about-tab := AboutTab {
@@ -3937,6 +3968,7 @@ component SettingsPreview inherits Rectangle {
     in property <bool> clip-listening: false;
     in property <string> game-clip-warning: "";
     in property <bool> game-clips-permission: false;
+    in property <string> stream-warning: "";
 
     width: 1000px;
     height: 780px;
@@ -3956,6 +3988,8 @@ component SettingsPreview inherits Rectangle {
         game-clips-need-permission: root.game-clips-permission;
         game-clip-key-label: "F8";
         game-clip-key-warning: root.game-clip-warning;
+        stream-key-label: "F9";
+        stream-key-warning: root.stream-warning;
         game-clip-qualities: [
             { id: "1080p60", name: "1080p, 60 fps", is-default: false },
             { id: "720p60", name: "720p, 60 fps", is-default: true },
@@ -4022,3 +4056,4 @@ export component PreviewKeybinds inherits SettingsPreview { tab: 5; }
 export component PreviewKeybindsListening inherits SettingsPreview { tab: 5; clip-listening: true; }
 export component PreviewKeybindsTaken inherits SettingsPreview { tab: 5; clip-key: "F7"; clip-warning: "Push-to-talk uses V. Pick another key."; }
 export component PreviewKeybindsGameClipTaken inherits SettingsPreview { tab: 5; game-clip-warning: "Voice clip uses F7. Pick another key."; }
+export component PreviewKeybindsStreamTaken inherits SettingsPreview { tab: 5; stream-warning: "Game clip uses F8. Pick another key."; }

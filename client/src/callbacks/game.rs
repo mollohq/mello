@@ -1,7 +1,11 @@
+use std::cell::RefCell;
+
 use mello_core::Command;
 use slint::{ComponentHandle, Model};
+use tokio::sync::mpsc::UnboundedSender;
 
 use crate::app_context::AppContext;
+use crate::foreground_monitor::ForegroundMonitor;
 use crate::MainWindow;
 
 pub fn wire(ctx: &AppContext) {
@@ -86,81 +90,110 @@ pub fn wire(ctx: &AppContext) {
         let cmd = ctx.cmd_tx.clone();
         let app_weak = ctx.app.as_weak();
         let fg_monitor = ctx.fg_monitor.clone();
+        let stream_key_action = ctx.stream_key_action.clone();
         ctx.app.on_stream_requested(move || {
             let Some(app) = app_weak.upgrade() else {
                 return;
             };
-            if app.get_is_hosting() {
-                return;
+            if quick_start_stream(&app, &cmd, &fg_monitor) == QuickStart::Sent {
+                // The app UI made this start: no stream key notification.
+                stream_key_action.set(None);
             }
-
-            let crew_id = app.get_active_crew_id().to_string();
-            if crew_id.is_empty() {
-                log::warn!("[ui] stream requested, but no active crew selected");
-                return;
-            }
-
-            let (pid, detected_game_id, detected_exe) = {
-                let fg = fg_monitor.borrow();
-                (
-                    fg.game_pid(),
-                    fg.game_id().to_string(),
-                    fg.game_exe().to_string(),
-                )
-            };
-            let Some(game_pid) = pid else {
-                log::warn!("[ui] stream requested, but no detected game PID is available");
-                return;
-            };
-
-            let mut title = app.get_game_name().to_string();
-            if title.trim().is_empty() {
-                title = "STREAMING".to_string();
-            }
-            app.set_stream_label(title.clone().into());
-
-            log::info!(
-                "[ui] quick stream start: crew={} game_pid={} title={}",
-                crew_id,
-                game_pid,
-                title
-            );
-            // The quality pills in the STREAM menu and the window picker
-            // write the same property, so the quick path has to read it.
-            // A hardcoded preset here made the pills a lie on the one path
-            // most people take.
-            let preset = app.get_stream_preset().max(0) as u32;
-            // The hook policy identity and the exe come from the one
-            // `stream_games` row of this pid, in the same loop iteration, so
-            // the backend decision applies to the process that is captured.
-            // The picker fills `stream_games`; a quick start without the
-            // picker has no row, so the identity then comes from the
-            // detected game of the same pid. 0 means the core denies the
-            // hook, which is the safe default.
-            let (exe, igdb_id) = stream_game_identity(&app.get_stream_games(), game_pid)
-                .unwrap_or_else(|| detected_game_identity(&detected_game_id, &detected_exe));
-            log::info!(
-                "[ui] quick stream identity: game_id={:?} exe={:?} igdb_id={}",
-                detected_game_id,
-                exe,
-                igdb_id
-            );
-            // The host's own card draws the game from this property, as on
-            // the picker path.
-            app.set_stream_igdb_id(igdb_id as i32);
-            let _ = cmd.send(Command::StartStream {
-                crew_id,
-                title,
-                capture_mode: "process".to_string(),
-                monitor_index: None,
-                hwnd: None,
-                pid: Some(game_pid),
-                preset,
-                exe,
-                igdb_id,
-            });
         });
     }
+}
+
+/// The result of [`quick_start_stream`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum QuickStart {
+    /// `StartStream` went to core.
+    Sent,
+    /// The user hosts a stream already. Nothing went to core.
+    AlreadyHosting,
+    /// No active crew. Nothing went to core.
+    NoCrew,
+    /// No detected game. Nothing went to core.
+    NoGame,
+}
+
+/// The quick start: a stream of the detected game to the active crew, with
+/// no picker. The STREAM button of the NOW PLAYING card and the stream key
+/// (`stream_key.rs`) both start a stream through this function.
+pub(crate) fn quick_start_stream(
+    app: &MainWindow,
+    cmd: &UnboundedSender<Command>,
+    fg_monitor: &RefCell<ForegroundMonitor>,
+) -> QuickStart {
+    if app.get_is_hosting() {
+        return QuickStart::AlreadyHosting;
+    }
+
+    let crew_id = app.get_active_crew_id().to_string();
+    if crew_id.is_empty() {
+        log::warn!("[ui] stream requested, but no active crew selected");
+        return QuickStart::NoCrew;
+    }
+
+    let (pid, detected_game_id, detected_exe) = {
+        let fg = fg_monitor.borrow();
+        (
+            fg.game_pid(),
+            fg.game_id().to_string(),
+            fg.game_exe().to_string(),
+        )
+    };
+    let Some(game_pid) = pid else {
+        log::warn!("[ui] stream requested, but no detected game PID is available");
+        return QuickStart::NoGame;
+    };
+
+    let mut title = app.get_game_name().to_string();
+    if title.trim().is_empty() {
+        title = "STREAMING".to_string();
+    }
+    app.set_stream_label(title.clone().into());
+
+    log::info!(
+        "[ui] quick stream start: crew={} game_pid={} title={}",
+        crew_id,
+        game_pid,
+        title
+    );
+    // The quality pills in the STREAM menu and the window picker
+    // write the same property, so the quick path has to read it.
+    // A hardcoded preset here made the pills a lie on the one path
+    // most people take.
+    let preset = app.get_stream_preset().max(0) as u32;
+    // The hook policy identity and the exe come from the one
+    // `stream_games` row of this pid, in the same loop iteration, so
+    // the backend decision applies to the process that is captured.
+    // The picker fills `stream_games`; a quick start without the
+    // picker has no row, so the identity then comes from the
+    // detected game of the same pid. 0 means the core denies the
+    // hook, which is the safe default.
+    let (exe, igdb_id) = stream_game_identity(&app.get_stream_games(), game_pid)
+        .unwrap_or_else(|| detected_game_identity(&detected_game_id, &detected_exe));
+    log::info!(
+        "[ui] quick stream identity: game_id={:?} exe={:?} igdb_id={}",
+        detected_game_id,
+        exe,
+        igdb_id
+    );
+    // The host's own card draws the game from this property, as on
+    // the picker path.
+    app.set_stream_igdb_id(igdb_id as i32);
+    let _ = cmd.send(Command::StartStream {
+        crew_id,
+        title,
+        capture_mode: "process".to_string(),
+        monitor_index: None,
+        hwnd: None,
+        pid: Some(game_pid),
+        preset,
+        exe,
+        igdb_id,
+    });
+    QuickStart::Sent
 }
 
 /// The exe and the catalogue identity of the `stream_games` row for `pid`.

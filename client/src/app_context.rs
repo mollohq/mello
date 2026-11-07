@@ -143,6 +143,13 @@ pub struct AppContext {
     // --- end stage 9 ---
     /// The game clip replay as core last reported it (F8, game_clip.rs).
     pub game_clip: Rc<RefCell<crate::game_clip::GameClipUi>>,
+    /// The stream start or stop in flight that the stream key made
+    /// (stream_key.rs). Only these get an OS notification. `None` when the
+    /// app UI made it, or when nothing is in flight.
+    pub stream_key_action: Rc<Cell<Option<crate::stream_key::StreamKeyAction>>>,
+    /// Posts a stream key notification with this text. `None` posts
+    /// nothing.
+    pub stream_key_notice: Rc<RefCell<Option<crate::notifications::ShowText>>>,
 }
 
 #[cfg(any(test, feature = "testkit"))]
@@ -257,6 +264,9 @@ impl AppContext {
             stream_card: Rc::new(RefCell::new(Default::default())),
             stream_popout: Rc::new(RefCell::new(Default::default())),
             game_clip: Rc::new(RefCell::new(Default::default())),
+            stream_key_action: Rc::new(Cell::new(None)),
+            // Never a real OS notification in a test.
+            stream_key_notice: Rc::new(RefCell::new(None)),
         }
     }
 }
@@ -330,6 +340,8 @@ impl Clone for AppContext {
             stream_card: self.stream_card.clone(),
             stream_popout: self.stream_popout.clone(),
             game_clip: self.game_clip.clone(),
+            stream_key_action: self.stream_key_action.clone(),
+            stream_key_notice: self.stream_key_notice.clone(),
         }
     }
 }

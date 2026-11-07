@@ -57,6 +57,7 @@ mod snapshot_loader;
 #[cfg(test)]
 mod stat_value_tests;
 mod stream_frame_timer;
+mod stream_key;
 mod stream_picture;
 // stage 9 (streaming-quality): the watched stream in its own window
 mod stream_popout;
@@ -540,6 +541,10 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
                 .borrow()
                 .register_game_clip(callbacks::settings::game_clip_binding(&s));
         }
+        // The stream key (spec 12 section 11): Windows, macOS and X11.
+        hotkey_mgr
+            .borrow()
+            .register_stream(callbacks::settings::stream_binding(&s));
         let ptt_active = s.input_mode == "push_to_talk";
         hotkey_mgr.borrow().set_active(ptt_active);
         let _ = cmd_tx.send(Command::SetPushToTalk {
@@ -673,6 +678,10 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         stream_card: Rc::new(RefCell::new(Default::default())),
         stream_popout: Rc::new(RefCell::new(Default::default())),
         game_clip: Rc::new(RefCell::new(Default::default())),
+        stream_key_action: Rc::new(Cell::new(None)),
+        stream_key_notice: Rc::new(RefCell::new(Some(Box::new(
+            notifications::notify_stream_key,
+        )))),
     };
 
     // --- Wire all callbacks ---
