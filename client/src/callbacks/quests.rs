@@ -224,19 +224,38 @@ pub(crate) fn banner_jpeg(bytes: &[u8]) -> Option<(Vec<u8>, Vec<u8>, u32, u32)> 
     None
 }
 
+/// An `e2e` build reads the image pickers' file from here, without a
+/// dialog: a journey has no file dialog to drive. The driver sets it for
+/// every app (tools/mello-driver/src/app.ts).
+#[cfg(feature = "e2e")]
+pub const E2E_PICK_FILE_ENV: &str = "MELLO_E2E_PICK_FILE";
+
+/// Pick one image file: its name and bytes. None when the user cancels.
+async fn pick_image(exts: &[&str]) -> Option<(String, Vec<u8>)> {
+    #[cfg(feature = "e2e")]
+    if let Some(path) = std::env::var_os(E2E_PICK_FILE_ENV) {
+        let path = std::path::PathBuf::from(path);
+        log::info!("[e2e] the picked file is {}", path.display());
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        return std::fs::read(&path).ok().map(|b| (name, b));
+    }
+    let file = rfd::AsyncFileDialog::new()
+        .add_filter("Images", exts)
+        .pick_file()
+        .await?;
+    Some((file.file_name(), file.read().await))
+}
+
 fn choose_banner_image(ctx: &AppContext, pending: &PendingJpeg) {
     let app_weak = ctx.app.as_weak();
     let pending = pending.clone();
     ctx.rt.spawn(async move {
-        let Some(file) = rfd::AsyncFileDialog::new()
-            .add_filter("Images", &["jpg", "jpeg", "png"])
-            .pick_file()
-            .await
-        else {
+        let Some((name, bytes)) = pick_image(&["jpg", "jpeg", "png"]).await else {
             return;
         };
-        let name = file.file_name();
-        let bytes = file.read().await;
         let made = if bytes.len() > 20 << 20 {
             None
         } else {
@@ -503,14 +522,9 @@ fn choose_emoji_image(ctx: &AppContext, pending: &PendingJpeg) {
     let app_weak = ctx.app.as_weak();
     let pending = pending.clone();
     ctx.rt.spawn(async move {
-        let Some(file) = rfd::AsyncFileDialog::new()
-            .add_filter("Images", &["png", "jpg", "jpeg", "gif"])
-            .pick_file()
-            .await
-        else {
+        let Some((_, bytes)) = pick_image(&["png", "jpg", "jpeg", "gif"]).await else {
             return;
         };
-        let bytes = file.read().await;
         let made = if bytes.len() > 20 << 20 {
             None
         } else {

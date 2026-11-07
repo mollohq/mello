@@ -558,6 +558,15 @@ flows:
     protocol: []
     issues: []
 
+  - id: FEED-13
+    title: "Crew quests: a new crew's quest card, the owner opens the gifts, sets the banner and the custom link, a call unlocks crew emoji, a member adds one and the crew reacts with it"
+    priority: P1
+    users: 3
+    harness: [a_new_crew_shows_the_quest_card_ahead_of_the_stage, opening_a_gift_runs_the_reveal_and_opens_only_that_gift, a_member_never_gets_a_key, the_card_goes_when_every_step_is_done_and_every_gift_opened, the_card_goes_when_the_server_stops_sending_quests, game_art_opens_the_picker_with_the_crews_games_and_save_sets_it, set_the_link_checks_the_suggested_name_and_saves_a_free_one, a_crew_emoji_draws_in_reactions_and_alone_in_a_message]
+    journeys: [qa/journeys/feed-quests.ts]
+    protocol: []
+    issues: []
+
   # ── Settings ──────────────────────────────────────────────────
   - id: SET-01
     title: Change the profile avatar
