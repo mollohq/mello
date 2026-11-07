@@ -1,0 +1,36 @@
+// Crew emoji (crew quests gift 3, plans/crew-quests.md 4.3): the emoji of the
+// active crew for the chat picker and the add screen. Driven from Rust
+// (handlers/quests.rs, callbacks/quests.rs).
+
+export struct CrewEmojiData {
+    name: string,
+    image: image,
+    has-image: bool,
+    added-by: string,
+    /// The viewer added it, or owns the crew.
+    can-remove: bool,
+}
+
+export global CrewEmojiUi {
+    /// The crew's emoji, oldest first.
+    in-out property <[CrewEmojiData]> emoji;
+    /// Free slots of the five. The picker shows a "+" for each.
+    in-out property <int> free: 0;
+    /// The gift is open for this crew: emoji can be added.
+    in-out property <bool> enabled: false;
+    /// The name of the crew, for the picker's section.
+    in-out property <string> crew-name;
+
+    // The add screen.
+    in-out property <bool> open: false;
+    in-out property <string> name;
+    in-out property <image> image;
+    in-out property <bool> has-image;
+    in-out property <bool> busy;
+    in-out property <string> error;
+
+    callback add-requested();
+    callback choose-image();
+    callback save();
+    callback remove(string);
+}

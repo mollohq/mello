@@ -985,6 +985,7 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 		logger.Error("Failed to append game_session event: %v", err)
 		return "", runtime.NewError("failed to save game session", 13)
 	}
+	questsMarkSession(ctx, logger, nk, req.CrewID, endMs, data)
 
 	logger.Info("User %s game session end in crew %s: game=%s duration=%dm %dW-%dL streak=%d",
 		userID, req.CrewID, req.GameName, req.DurationMin, req.Wins, req.Losses, streakAfter)

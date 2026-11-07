@@ -52,6 +52,11 @@ fn extract_value(url: &str, len: usize) -> Option<String> {
 /// - a deep link: `mello://join/CODE`;
 /// - a bare code, in any case, with or without the dash.
 ///
+/// A link also takes the custom invite name of a crew (crew quests gift 2),
+/// returned in upper case: `https://m3llo.app/join/brawlbros` is `BRAWLBROS`.
+/// A bare word is not a name: typed in the field, it must be a code, so a
+/// typo in a code is still refused without a network call.
+///
 /// Surrounding spaces do not matter. Anything else returns `None`, so the
 /// caller can refuse it without a network call.
 pub fn parse_invite_input(input: &str) -> Option<String> {
@@ -70,9 +75,26 @@ pub fn parse_invite_input(input: &str) -> Option<String> {
             DeepLink::Crew { .. } => return None,
         }
     } else {
-        input.to_string()
+        return normalize_invite_code(input);
     };
-    normalize_invite_code(&raw)
+    normalize_link_code(&raw)
+}
+
+/// The code of a join link: a code as `XXXX-XXXX`, else a custom name.
+fn normalize_link_code(raw: &str) -> Option<String> {
+    normalize_invite_code(raw).or_else(|| normalize_invite_name(raw))
+}
+
+/// A custom invite name as the server stores it, in upper case: 3 to 24
+/// letters, digits or dashes, no dash at either end and no two in a row
+/// (crew_gifts.go `inviteNameAllowed`).
+fn normalize_invite_name(raw: &str) -> Option<String> {
+    let ok = (3..=24).contains(&raw.len())
+        && raw.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && !raw.starts_with('-')
+        && !raw.ends_with('-')
+        && !raw.contains("--");
+    ok.then(|| raw.to_ascii_uppercase())
 }
 
 /// The part of `https://m3llo.app/join/CODE` after the host: `join/CODE`.
@@ -136,7 +158,7 @@ pub fn lounge_link_code(text: &str, lounge_host: &str) -> Option<String> {
         return None;
     }
     match parse(&format!("mello://{path}"))? {
-        DeepLink::Join { code } => normalize_invite_code(&code),
+        DeepLink::Join { code } => normalize_link_code(&code),
         DeepLink::Crew { .. } => None,
     }
 }
@@ -348,6 +370,30 @@ mod tests {
                 "{text:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_link_takes_a_custom_invite_name() {
+        for text in [
+            "https://m3llo.app/join/brawlbros",
+            "m3llo.app/join/BrawlBros/",
+            "mello://join/brawlbros",
+        ] {
+            assert_eq!(invite(text).as_deref(), Some("BRAWLBROS"), "{text:?}");
+        }
+        assert_eq!(
+            lounge_link_code("https://m3llo.app/join/bob-test-26?x=1", "m3llo.app").as_deref(),
+            Some("BOB-TEST-26")
+        );
+        for text in [
+            "https://m3llo.app/join/ab",
+            "https://m3llo.app/join/-brawl",
+            "https://m3llo.app/join/brawl--bros",
+            "https://m3llo.app/join/brawl_bros",
+        ] {
+            assert_eq!(invite(text), None, "{text:?}");
+        }
+        assert_eq!(invite("brawlbros"), None, "a bare word must be a code");
     }
 
     #[test]

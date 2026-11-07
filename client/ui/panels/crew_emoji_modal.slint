@@ -1,0 +1,201 @@
+import { Theme, MelloInputField } from "../theme.slint";
+import { CutShape, CutButton } from "../components/cut.slint";
+import { ZoneButton, Kicker } from "../components/feed_board.slint";
+import { CrewEmojiData } from "../components/crew_emoji.slint";
+
+// ============================================================
+//  Crew emoji (crew quests gift 3, plans/crew-quests.md 4.3): add one, and
+//  the crew's five with who added them. Opened from the face of the gift
+//  (Add emoji) and from a free slot in the chat picker. Save is red.
+// ============================================================
+
+export component CrewEmojiModal inherits Rectangle {
+    in property <[CrewEmojiData]> emoji;
+    in property <int> free;
+    in-out property <string> name;
+    in property <image> image;
+    in property <bool> has-image;
+    in property <bool> busy;
+    in property <string> error;
+    callback choose-image();
+    callback save();
+    callback remove(string);
+    callback close-requested();
+
+    property <bool> name-ok: root.name.character-count >= 2 && root.name.character-count <= 24;
+    property <bool> can-save: !root.busy && root.free > 0 && root.has-image && root.name-ok;
+
+    width: 100%;
+    height: 100%;
+    background: Theme.scrim;
+
+    init => { key-scope.focus(); }
+
+    key-scope := FocusScope {
+        width: 100%;
+        height: 100%;
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.close-requested();
+                accept
+            } else {
+                reject
+            }
+        }
+
+        TouchArea {
+            // a11y: none (backdrop: a click outside the dialog closes it)
+            clicked => { root.close-requested(); }
+        }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 440px;
+            height: inner.preferred-height;
+            background: transparent;
+
+            CutShape { width: parent.width; height: parent.height; n: Theme.notch; fill: Theme.graphic-light; }
+            CutShape { width: parent.width; height: parent.height; n: Theme.notch; inset: Theme.keyline; fill: Theme.surface; }
+            TouchArea {
+                // a11y: none (input blocker: stops clicks reaching the backdrop)
+            }
+
+            inner := VerticalLayout {
+                padding: 22px;
+                spacing: 14px;
+
+                Kicker { text: "CREW EMOJI"; }
+
+                if root.free > 0: HorizontalLayout {
+                    spacing: 18px;
+                    alignment: start;
+                    Rectangle {
+                        width: 128px;
+                        height: 128px;
+                        background: Theme.raised;
+                        clip: true;
+                        if root.has-image: Image { source: root.image; width: parent.width; height: parent.height; image-fit: cover; }
+                        if root.has-image: Rectangle { border-width: 2px; border-color: Theme.action; }
+                        if !root.has-image: Kicker {
+                            width: parent.width; height: parent.height;
+                            horizontal-alignment: center; vertical-alignment: center;
+                            text: "SQUARE"; color: Theme.text-tertiary;
+                        }
+                    }
+                    VerticalLayout {
+                        spacing: 10px;
+                        alignment: start;
+                        horizontal-stretch: 1;
+                        if root.has-image: HorizontalLayout {
+                            spacing: 10px;
+                            alignment: start;
+                            cross-axis-alignment: end;
+                            Image { source: root.image; width: 48px; height: 48px; image-fit: cover; }
+                            Image { source: root.image; width: 22px; height: 22px; image-fit: cover; }
+                        }
+                        ZoneButton {
+                            label: root.has-image ? "REPLACE" : "CHOOSE IMAGE";
+                            a11y-label: root.has-image ? "Replace" : "Choose image";
+                            tone: "line";
+                            clicked => { root.choose-image(); }
+                        }
+                        HorizontalLayout {
+                            spacing: 4px;
+                            cross-axis-alignment: center;
+                            Text { text: ":"; font-family: Theme.font-display; font-size: 16px; color: Theme.text-dim; }
+                            MelloInputField {
+                                width: 210px;
+                                label: "Emoji name";
+                                text <=> root.name;
+                                field-height: 36px;
+                                accepted => { if root.can-save { root.save(); } }
+                            }
+                            Text { text: ":"; font-family: Theme.font-display; font-size: 16px; color: Theme.text-dim; }
+                        }
+                    }
+                }
+                if root.free == 0: Text {
+                    text: "All five slots are full.";
+                    font-family: Theme.font-body; font-size: 13px; color: Theme.text-body;
+                }
+
+                if root.error != "": Text {
+                    text: root.error;
+                    font-family: Theme.font-body; font-size: 13px; color: Theme.live;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: end;
+                    ZoneButton {
+                        label: "CANCEL"; a11y-label: "Cancel"; tone: "line";
+                        clicked => { root.close-requested(); }
+                    }
+                    if root.free > 0: Rectangle {
+                        width: save-text.preferred-width + 56px;
+                        height: 36px;
+                        opacity: root.can-save ? 1 : 0.4;
+                        accessible-role: button;
+                        accessible-label: "Save";
+                        accessible-enabled: root.can-save;
+                        CutButton { width: parent.width; height: parent.height; fill-color: Theme.confirm; }
+                        save-text := Text {
+                            text: root.busy ? "SAVING" : "SAVE";
+                            font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 10px;
+                            letter-spacing: Theme.track-kicker; color: Theme.on-confirm;
+                        }
+                        TouchArea {
+                            enabled: root.can-save;
+                            mouse-cursor: root.can-save ? pointer : default;
+                            clicked => { root.save(); }
+                        }
+                    }
+                }
+
+                if root.emoji.length > 0: Rectangle { height: 1px; background: Theme.card-border; }
+                for e in root.emoji: HorizontalLayout {
+                    height: 40px;
+                    spacing: 12px;
+                    cross-axis-alignment: center;
+                    Rectangle {
+                        width: 28px; height: 28px;
+                        background: Theme.raised;
+                        if e.has-image: Image { source: e.image; width: parent.width; height: parent.height; image-fit: cover; }
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        Text { text: ":" + e.name + ":"; font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 13px; color: Theme.text-primary; }
+                        Kicker { text: ("Added by " + e.added-by).to-uppercase(); }
+                    }
+                    if e.can-remove: ZoneButton {
+                        label: "REMOVE";
+                        a11y-label: "Remove :" + e.name + ":";
+                        tone: "line";
+                        clicked => { root.remove(e.name); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Three emoji, an image chosen for a fourth.
+export component Preview inherits Rectangle {
+    width: 865px;
+    height: 640px;
+    background: Theme.bg-app;
+    CrewEmojiModal {
+        free: 2;
+        name: "carry";
+        image: @image-url("../previews/fixtures/stream-sample-2.png");
+        has-image: true;
+        emoji: [
+            { name: "ida_rage", image: @image-url("../previews/fixtures/avatars/ida.svg"), has-image: true, added-by: "You", can-remove: true },
+            { name: "brawl", image: @image-url("../previews/fixtures/capsule-sample-2.png"), has-image: true, added-by: "Ida", can-remove: true },
+            { name: "gg", image: @image-url("../previews/fixtures/capsule-sample-1.png"), has-image: true, added-by: "Ida", can-remove: true },
+        ];
+    }
+}

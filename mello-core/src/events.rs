@@ -875,6 +875,31 @@ pub enum Event {
         /// Signed streak after this session: +N win streak, -N loss streak.
         streak_after: i32,
     },
+    /// A crew quests gift changed (banner, invite name, emoji). Crew state and
+    /// the feed load again after it; this names what changed.
+    CrewGiftChanged {
+        crew_id: String,
+        gift: String,
+    },
+    /// A gift action failed. `reason` is one sentence for the UI.
+    CrewGiftFailed {
+        crew_id: String,
+        gift: String,
+        reason: String,
+    },
+    /// The answer to `CheckInviteName`: "free", "taken" or "not_allowed".
+    InviteNameChecked {
+        crew_id: String,
+        name: String,
+        state: String,
+    },
+    /// An image of the media bucket, as fetched (`FetchMediaImage`). Empty
+    /// bytes: the fetch failed. Skipped from serde: an in-process blob.
+    #[serde(skip)]
+    MediaImageLoaded {
+        url: String,
+        bytes: Vec<u8>,
+    },
     /// A crew-shared game icon fetched from the backend (raw PNG bytes).
     /// Skipped from serde: an in-process blob, not an FFI payload.
     #[serde(skip)]

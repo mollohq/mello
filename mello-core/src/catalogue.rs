@@ -240,6 +240,31 @@ impl Head {
             .collect()
     }
 
+    /// Entries whose name contains `query`, case-insensitively: names that
+    /// start with it first, then the rest, each in catalogue order. For the
+    /// game search of the crew banner picker.
+    pub fn search(&self, query: &str, limit: usize) -> Vec<CatalogueEntry<'_>> {
+        let q = query.trim().to_lowercase();
+        if q.is_empty() || limit == 0 {
+            return Vec::new();
+        }
+        let (mut starts, mut contains) = (Vec::new(), Vec::new());
+        for e in (0..self.count).filter_map(|i| self.entry_at(i)) {
+            let name = e.name.to_lowercase();
+            if name.starts_with(&q) {
+                starts.push(e);
+                if starts.len() >= limit {
+                    break;
+                }
+            } else if contains.len() < limit && name.contains(&q) {
+                contains.push(e);
+            }
+        }
+        starts.extend(contains);
+        starts.truncate(limit);
+        starts
+    }
+
     pub fn len(&self) -> usize {
         self.count
     }
@@ -400,6 +425,25 @@ mod tests {
         let h = head();
         assert!(h.len() > 1000, "expected a populated head, got {}", h.len());
         assert!(!h.is_empty());
+    }
+
+    #[test]
+    fn search_puts_names_that_start_with_the_query_first() {
+        let h = head();
+        let hits = h.search("rocket", 4);
+        assert!(!hits.is_empty() && hits.len() <= 4);
+        assert!(
+            hits[0].name.to_lowercase().starts_with("rocket"),
+            "{:?}",
+            hits[0].name
+        );
+        assert!(hits.iter().any(|e| e.name == "Rocket League"));
+        let mid = h.search("strike 2", 4);
+        assert!(
+            mid.iter().any(|e| e.name == "Counter-Strike 2"),
+            "a name that contains it"
+        );
+        assert!(h.search("  ", 4).is_empty());
     }
 
     #[test]

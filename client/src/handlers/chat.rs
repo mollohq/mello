@@ -27,6 +27,8 @@ pub(crate) struct ChatRefresh {
     chat_scroll: Rc<crate::chat_ui::ChatScrollState>,
     avatar_cache: Rc<std::cell::RefCell<std::collections::HashMap<String, slint::Image>>>,
     reactions: crate::converters::ReactionMap,
+    crew_emoji: Rc<std::cell::RefCell<Vec<mello_core::crew_state::CrewEmoji>>>,
+    media_images: Rc<std::cell::RefCell<std::collections::HashMap<String, Option<slint::Image>>>>,
     rt: tokio::runtime::Handle,
     gif_chat_anim: crate::gif_animator::GifAnimator,
 }
@@ -39,6 +41,8 @@ impl ChatRefresh {
             chat_scroll: ctx.chat_scroll.clone(),
             avatar_cache: ctx.avatar_cache.clone(),
             reactions: ctx.reactions.clone(),
+            crew_emoji: ctx.crew_emoji.clone(),
+            media_images: ctx.media_images.clone(),
             rt: ctx.rt.clone(),
             gif_chat_anim: ctx.gif_chat_anim.clone(),
         }
@@ -63,12 +67,28 @@ impl ChatRefresh {
         let mention_color = color_hex(app.global::<crate::Theme>().get_mention());
         let first_unread = self.chat_scroll.first_unread_id();
         let reactions = self.reactions.borrow();
+        // The loaded crew emoji by name. One that is not loaded yet draws as
+        // its text; the load builds the rows again.
+        let crew_emoji: std::collections::HashMap<String, slint::Image> = {
+            let media = self.media_images.borrow();
+            self.crew_emoji
+                .borrow()
+                .iter()
+                .filter_map(|e| {
+                    media
+                        .get(&e.url)
+                        .and_then(|i| i.clone())
+                        .map(|i| (e.name.clone(), i))
+                })
+                .collect()
+        };
         let opts = ChatConvertOptions {
             user_id: &uid,
             reactions: &reactions,
             user_avatar: &uav,
             has_user_avatar: huav,
             avatar_cache: &self.avatar_cache.borrow(),
+            crew_emoji: &crew_emoji,
             mention_color: &mention_color,
             first_unread_id: first_unread.as_deref(),
         };

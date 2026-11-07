@@ -1,5 +1,5 @@
 import { Theme } from "../theme.slint";
-import { H2hPerson, BeltReveal, RecapSeal, FeedCardData } from "../types.slint";
+import { H2hPerson, BeltReveal, RecapSeal, FeedCardData, QuestGift, QuestRow } from "../types.slint";
 import { SealedFixtures } from "./sealed_fixtures.slint";
 import { CrewFeed } from "../panels/crew_feed.slint";
 import { ControlBar } from "../panels/control_bar.slint";
@@ -371,5 +371,94 @@ export component PreviewFeedJoinCall inherits Panel {
         joined: [Crew.elin], joined-line: "Elin joined", joined-sub: "invited by Jonas, 20:46", say-hi-card: "j1", say-hi-name: "Elin",
         voice: "call", channel: "Lounge", voice-line: "2 in the call", voice-people: [Crew.jonas, Crew.elin],
         sessions: [Hist.s-hs, Hist.s-cs, Hist.s-drg],
+    };
+}
+
+// ── Crew quests (mockup feed-quests.html, frames 1, 2, 8, 9) ──────────
+
+global Q {
+    out property <QuestGift> banner-ready: { key: "quest:banner:c1", label: "DROP 1", state: "ready", can-open: true, bright: SealedFixtures.gift-ready-bright, dim: SealedFixtures.gift-ready-dim };
+    out property <QuestGift> banner-open: { key: "quest:banner:c1", label: "BANNER", state: "open", content: "art", art: @image-url("fixtures/stream-sample-2.png"), has-art: true };
+    out property <QuestGift> link-locked: { key: "quest:friend:c1", label: "DROP 2", state: "locked", dim: SealedFixtures.gift-locked-dim };
+    out property <QuestGift> link-ready: { key: "quest:friend:c1", label: "DROP 2", state: "ready", can-open: true, bright: SealedFixtures.gift-ready-bright, dim: SealedFixtures.gift-ready-dim };
+    out property <QuestGift> link-open: { key: "quest:friend:c1", label: "INVITE LINK", state: "open", content: "link" };
+    out property <QuestGift> emoji-locked: { key: "quest:call:c1", label: "DROP 3", state: "locked", dim: SealedFixtures.gift-locked-dim };
+    out property <QuestGift> emoji-member: { key: "quest:call:c1", label: "DROP 3", state: "ready", can-open: false, bright: SealedFixtures.gift-member-bright, dim: SealedFixtures.gift-member-dim };
+    out property <QuestGift> emoji-open: { key: "quest:call:c1", label: "CREW EMOJI", state: "open", content: "emoji", art: Crew.ida.avatar, has-art: true };
+    out property <QuestGift> week-locked: { key: "quest:clip:c1", label: "DROP 4", state: "locked", dim: SealedFixtures.gift-locked-dim };
+    out property <QuestGift> week-open: { key: "quest:clip:c1", label: "FIRST WEEK", state: "open", content: "week", text: "W45" };
+    out property <QuestGift> plus-locked: { key: "quest:session:c1", label: "DROP 5", state: "locked", big: true, dim: SealedFixtures.gift-locked-big-dim };
+
+    out property <QuestRow> made: { name: "Crew made", done: true, meta: "bob_test_26" };
+    out property <QuestRow> friend-todo: { name: "A friend joins", meta: "Works in the browser", action: "invite" };
+    out property <QuestRow> friend-done: { name: "A friend joins", done: true, person: Crew.ida, has-person: true, title: "Ida joined", meta: "2 min" };
+    out property <QuestRow> call-todo: { name: "First call", action: "voice" };
+    out property <QuestRow> call-done: { name: "First call", done: true, meta: "You and Ida · General" };
+    out property <QuestRow> clip-todo: { name: "First clip", meta: "Join voice to clip", key-cap: "F8" };
+    out property <QuestRow> clip-done: { name: "First clip", done: true, art: @image-url("fixtures/stream-sample-2.png"), has-art: true, meta: "You · Brawlhalla", value: "0:30" };
+    out property <QuestRow> session-todo: { name: "First session", meta: "Play with m3llo open" };
+    out property <QuestRow> session-off: { name: "First session", meta: "Game activity is off", action: "settings" };
+}
+
+/// Quests 1 · A crew of one, minute one: the banner is ready.
+export component PreviewFeedQuests1 inherits Panel {
+    zones: {
+        you: Crew.bob,
+        stage: "quests", quest-count: "1 / 5", quest-fill: 0,
+        quest-gifts: [Q.banner-ready, Q.link-locked, Q.emoji-locked, Q.week-locked, Q.plus-locked],
+        quest-rows: [Q.made, Q.friend-todo, Q.call-todo, Q.clip-todo, Q.session-todo],
+        board: "solo",
+        solo-games: [
+            { name: "Counter-Strike 2", art: Crew.cs2, count: "4,167 h" },
+            { name: "Rocket League", art: Crew.rl, count: "812 h" },
+        ],
+        own-chips: [{ belt: Own.carry }, { belt: Own.owl }],
+        people: true, members: [Crew.bob], open-seats: 4,
+    };
+}
+
+/// Quests 2 · The owner, a friend joined: the banner open, the link ready.
+export component PreviewFeedQuests2 inherits Panel {
+    zones: {
+        you: Crew.bob,
+        stage: "quests", quest-count: "2 / 5", quest-fill: 0.25,
+        quest-gifts: [Q.banner-open, Q.link-ready, Q.emoji-locked, Q.week-locked, Q.plus-locked],
+        quest-rows: [Q.made, Q.friend-done, Q.call-todo, Q.clip-todo, Q.session-todo],
+        board: "tabs",
+        today-big: { value: "0", unit: "min", label: "HANGOUT" },
+        today-stats: [{ value: "0", label: "CLIPS" }, { value: "0", label: "SESSIONS" }, { value: "2", label: "ON" }],
+        week-big: { value: "0", unit: "min", label: "HANGOUT" }, week-stats: Base.week-stats,
+        people: true, members: [Crew.bob, Crew.ida], open-seats: 3,
+        joined: [Crew.ida], joined-line: "Ida joined", joined-sub: "Invited by you · 2 min", say-hi-card: "j1", say-hi-name: "Ida",
+    };
+}
+
+/// Quests 3 · Ida's view: the emoji gift waits for the owner, no key.
+export component PreviewFeedQuests3 inherits Panel {
+    zones: {
+        you: Crew.ida,
+        stage: "quests", quest-count: "3 / 5", quest-fill: 0.5,
+        quest-gifts: [Q.banner-open, Q.link-open, Q.emoji-member, Q.week-locked, Q.plus-locked],
+        quest-rows: [Q.made, { name: "A friend joins", done: true, person: Crew.ida, has-person: true, title: "You joined" }, { name: "First call", done: true, meta: "You and b0bben · General" }, Q.clip-todo, Q.session-todo],
+        board: "tabs",
+        today-big: { value: "34", unit: "min", label: "HANGOUT" },
+        today-stats: [{ value: "0", label: "CLIPS" }, { value: "0", label: "SESSIONS" }, { value: "2", label: "ON" }],
+        week-big: { value: "34", unit: "min", label: "HANGOUT" }, week-stats: Base.week-stats,
+        people: true, members: [Crew.ida, Crew.bob], open-seats: 3,
+    };
+}
+
+/// Quests 4 · The owner at 4 / 5, game activity off.
+export component PreviewFeedQuests4 inherits Panel {
+    zones: {
+        you: Crew.bob,
+        stage: "quests", quest-count: "4 / 5", quest-fill: 0.75,
+        quest-gifts: [Q.banner-open, Q.link-open, Q.emoji-open, Q.week-open, Q.plus-locked],
+        quest-rows: [Q.made, Q.friend-done, Q.call-done, Q.clip-done, Q.session-off],
+        board: "tabs",
+        today-big: { value: "34", unit: "min", label: "HANGOUT" },
+        today-stats: [{ value: "1", label: "CLIPS" }, { value: "0", label: "SESSIONS" }, { value: "2", label: "ON" }],
+        week-big: { value: "34", unit: "min", label: "HANGOUT" }, week-stats: Base.week-stats,
+        people: true, members: [Crew.bob, Crew.ida], open-seats: 3,
     };
 }

@@ -352,6 +352,7 @@ func PostClipRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 	logger.Info("User %s (%s) clipped in crew %s: clip_id=%s type=%s",
 		userID, username, req.CrewID, req.ClipID, req.ClipType)
 	recordClipActivity(ctx, logger, nk, userID)
+	questsMarkClip(ctx, logger, nk, req.CrewID, clip)
 	recomputeHead2headForUser(ctx, logger, nk, userID, head2headTriggerSession)
 	PushFeedChanged(ctx, logger, nk, req.CrewID, "clip")
 	PushCrewEvent(ctx, logger, nk, req.CrewID, "clip_posted", clipPostedPayload(req.ClipID, userID, req.ClipType))

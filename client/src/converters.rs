@@ -62,6 +62,8 @@ pub struct ChatConvertOptions<'a> {
     pub user_avatar: &'a slint::Image,
     pub has_user_avatar: bool,
     pub avatar_cache: &'a HashMap<String, slint::Image>,
+    /// The loaded crew emoji of the active crew, by name (no colons).
+    pub crew_emoji: &'a HashMap<String, slint::Image>,
     /// `Theme.mention` as `#rrggbb`, for the mention spans in the markdown.
     pub mention_color: &'a str,
     pub first_unread_id: Option<&'a str>,
@@ -158,10 +160,15 @@ pub fn chat_messages_to_slint(
                 by_emoji
                     .iter()
                     .filter(|(_, users)| !users.is_empty())
-                    .map(|(emoji, users)| crate::ReactionData {
-                        emoji: emoji.clone().into(),
-                        count: users.len() as i32,
-                        mine: users.iter().any(|u| u == opts.user_id),
+                    .map(|(emoji, users)| {
+                        let img = crew_emoji_token(emoji).and_then(|n| opts.crew_emoji.get(n));
+                        crate::ReactionData {
+                            emoji: emoji.clone().into(),
+                            count: users.len() as i32,
+                            mine: users.iter().any(|u| u == opts.user_id),
+                            has_image: img.is_some(),
+                            image: img.cloned().unwrap_or_default(),
+                        }
                     })
                     .collect()
             })
@@ -186,6 +193,11 @@ pub fn chat_messages_to_slint(
             .collect();
         let is_emoji_only =
             !d.is_system && !d.is_deleted && mello_core::chat::is_emoji_only(&d.display_body);
+        let crew_emoji: Vec<slint::Image> = if d.is_system || d.is_deleted {
+            Vec::new()
+        } else {
+            crew_emoji_only(&d.display_body, opts.crew_emoji)
+        };
         let (display_text, links) = if d.is_system || d.is_deleted {
             (d.display_body.clone(), Vec::new())
         } else {
@@ -259,6 +271,7 @@ pub fn chat_messages_to_slint(
             gif_failed: false,
             gif_url: gif_url.into(),
             is_emoji_only,
+            crew_emoji: Rc::new(slint::VecModel::from(crew_emoji)).into(),
             is_image,
             images: Rc::new(slint::VecModel::from(images)).into(),
             gif_width,
@@ -325,9 +338,39 @@ fn same_reactions(
         return false;
     }
     (0..a.row_count()).all(|i| match (a.row_data(i), b.row_data(i)) {
-        (Some(x), Some(y)) => x.emoji == y.emoji && x.count == y.count && x.mine == y.mine,
+        (Some(x), Some(y)) => {
+            x.emoji == y.emoji
+                && x.count == y.count
+                && x.mine == y.mine
+                && x.has_image == y.has_image
+        }
         _ => false,
     })
+}
+
+/// The name in a crew emoji token, `:gg:` is `gg`: 2 to 24 lower-case
+/// letters, digits or underscores (crew_gifts.go).
+pub fn crew_emoji_token(s: &str) -> Option<&str> {
+    let name = s.strip_prefix(':')?.strip_suffix(':')?;
+    let ok = (2..=24).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+    ok.then_some(name)
+}
+
+/// The images of a body of one to three crew emoji and nothing else, when
+/// every one is loaded. Anything else draws as text.
+pub fn crew_emoji_only(body: &str, crew: &HashMap<String, slint::Image>) -> Vec<slint::Image> {
+    let words: Vec<&str> = body.split_whitespace().collect();
+    if words.is_empty() || words.len() > 3 {
+        return Vec::new();
+    }
+    let imgs: Option<Vec<slint::Image>> = words
+        .iter()
+        .map(|w| crew_emoji_token(w).and_then(|n| crew.get(n)).cloned())
+        .collect();
+    imgs.unwrap_or_default()
 }
 
 /// The fields a rebuild can change. `gif_image` and `has_gif_image` are
@@ -348,6 +391,7 @@ fn chat_row_same(a: &ChatMessageData, b: &ChatMessageData) -> bool {
         && a.reply_preview_text == b.reply_preview_text
         && a.sender_name == b.sender_name
         && a.is_emoji_only == b.is_emoji_only
+        && a.crew_emoji.row_count() == b.crew_emoji.row_count()
         && a.is_image == b.is_image
         && a.day_label == b.day_label
         && same_reactions(&a.reactions, &b.reactions)

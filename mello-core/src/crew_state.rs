@@ -34,6 +34,49 @@ pub struct CrewState {
     pub invite_policy: Option<String>,
     #[serde(default)]
     pub sfu_enabled: bool,
+    /// Crew quests gift 1: the art behind the crew name.
+    #[serde(default)]
+    pub banner: Option<CrewBanner>,
+    /// Crew quests gift 2: the custom invite name, `m3llo.app/join/<name>`.
+    #[serde(default)]
+    pub invite_name: String,
+    /// Crew quests gift 3: the crew's own emoji, five at most.
+    #[serde(default)]
+    pub emoji: Vec<CrewEmoji>,
+}
+
+/// The crew banner: the wide art of a game (`kind` "game", from the art
+/// Worker) or an image the owner uploaded (`kind` "upload"). `version`
+/// changes on every save.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CrewBanner {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub game_id: String,
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub version: i64,
+}
+
+/// One crew emoji: written `:name:`, an image on the media bucket.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CrewEmoji {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub added_by: String,
+    #[serde(default)]
+    pub added_by_name: String,
+    #[serde(default)]
+    pub added_ms: i64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

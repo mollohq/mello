@@ -5,7 +5,7 @@ import { StatValue } from "./stat.slint";
 import { DotWaveform } from "./clip_wave.slint";
 import { StreamTag, PlayButton, FootageWash, MediaChip } from "./stream_hero.slint";
 import { CardLabel, OpenSeat, InviteButton, TitleChip, H2hHue } from "./head2head.slint";
-import { H2hPerson, BeltReveal, RecapSeal, FeedCardData, ChatFocus, TitleHeld } from "../types.slint";
+import { H2hPerson, BeltReveal, RecapSeal, FeedCardData, ChatFocus, TitleHeld, QuestGift, QuestRow } from "../types.slint";
 import { BeltSlot } from "./sealed.slint";
 import { CutButton } from "./cut.slint";
 import { GameClipCard } from "../panels/game_clip_card.slint";
@@ -331,6 +331,9 @@ export component FeedBoard inherits BoardShell {
     /// Day 0: your games, from the library scan.
     in property <string> game-rows-label;
     in property <[BoardGame]> game-rows;
+    /// A crew of one while the quest card holds the Stage: the viewer's own
+    /// sealed chips, under the games. They keep their seals and their reveal.
+    in property <[TitleHeld]> own-chips;
     /// Monday: the week is sealed until the viewer opens it.
     in property <bool> week-sealed: false;
     in property <RecapSeal> seal;
@@ -450,6 +453,40 @@ export component FeedBoard inherits BoardShell {
                         color: Theme.text-body;
                     }
                 }
+            }
+        }
+
+        if root.own-chips.length > 0: VerticalLayout {
+            spacing: 10px;
+            vertical-stretch: 0;
+            Rectangle { height: 1px; background: Theme.card-border; }
+            Kicker { text: "HEAD2HEAD"; height: 20px; vertical-alignment: center; }
+            Rectangle {
+                height: Math.ceil(root.own-chips.length / 2) * 56px - 10px;
+                for t[i] in root.own-chips: BeltSlot {
+                    x: Math.mod(i, 2) * (parent.width + 10px) / 2;
+                    y: Math.floor(i / 2) * 56px;
+                    width: (parent.width - 10px) / 2;
+                    height: 46px;
+                    belt: t.belt;
+                    tight: true;
+                    slot-id: "board:" + t.belt.key;
+
+                    TitleChip {
+                        x: 0px; y: (parent.height - self.height) / 2;
+                        width: parent.width;
+                        hue: H2hHue.of(t.hue-index);
+                        icon: t.icon; title: t.title; value: t.value; unit: t.unit;
+                        tip: t.stat-line;
+                    }
+                }
+            }
+            Text {
+                text: "Go head2head with your crew";
+                font-family: Theme.font-body;
+                font-weight: Theme.weight-sentence;
+                font-size: 13px;
+                color: Theme.text-body;
             }
         }
 
@@ -953,7 +990,7 @@ export component ClipRow inherits Rectangle {
 //  Games. A zone with nothing to show collapses; the zones under it move up.
 // ============================================================
 
-component ZoneButton inherits Rectangle {
+export component ZoneButton inherits Rectangle {
     in property <string> label;
     /// "white": the one filled action. "red": a commit (join, invite).
     /// "line": a white outline action.
@@ -1296,14 +1333,21 @@ export component PlusStrip inherits BoardShell {
 /// the feed the client already has. A prototype: the server still sends the
 /// card list, the client folds it into zones.
 export struct ZonesData {
-    // Stage. "live": the live stream panel. "card": `stage-card` drawn as a
-    // feed card (a game clip, a stream preview, the belt hero). "own": the
-    // viewer's own sealed belts (a crew of one). "": collapsed.
+    // Stage. "live": the live stream panel. "quests": the quest card of a new
+    // crew. "card": `stage-card` drawn as a feed card (a game clip, a stream
+    // preview, the belt hero). "own": the viewer's own sealed belts (a crew
+    // of one). "": collapsed.
     stage: string,
     stage-card: FeedCardData,
     stage-short: bool,
     own-chips: [TitleHeld],
     you: H2hPerson,
+    // Stage "quests": the quest card of a new crew. `quest-fill` is the part
+    // of the rail that is done, 0 to 1.
+    quest-count: string,
+    quest-fill: float,
+    quest-gifts: [QuestGift],
+    quest-rows: [QuestRow],
 
     // Board. "sealed": the sealed weekly recap (`recap-card`). "tabs",
     // "quiet", "past", "solo". "": collapsed.

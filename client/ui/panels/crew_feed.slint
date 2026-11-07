@@ -6,6 +6,7 @@ import { ActiveStreamsPanel, StreamCardSize } from "./active_streams_panel.slint
 import { SessionPreviewCard } from "./session_preview_card.slint";
 import { GameClipCard } from "./game_clip_card.slint";
 import { BeltHero, TitleChip, H2hHue } from "../components/head2head.slint";
+import { QuestCard } from "../components/feed_quests.slint";
 import { FeedBoard, PeopleZone, StageOwnBelts, MostInstalledCard, BoardDormantStrip, ZonesData, HistoryWeek, LockedTeaserTile, PlusStrip, BoardShell, Kicker } from "../components/feed_board.slint";
 import { BeltSlot, SealedRecap, SealedUi, SealedFmt, Ease } from "../components/sealed.slint";
 import { SealedStage } from "./sealed_stage.slint";
@@ -2061,6 +2062,8 @@ export component CrewFeed inherits Rectangle {
     callback card-clicked(string);
     callback invite-clicked();
     callback start-voice-clicked(string);
+    /// The quest row of step 5 asks for the game activity setting.
+    callback game-activity-settings-clicked();
     callback seek-clip-ms(int);
     callback watch-stream-clicked(string, string, int, int);
     callback stop-stream-clicked();
@@ -2211,6 +2214,16 @@ export component CrewFeed inherits Rectangle {
                             session-seen(id) => { root.session-seen(id); }
                             session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                         }
+                        if zones.stage == "quests": QuestCard {
+                            height: root.stage-h;
+                            count: zones.quest-count;
+                            fill: zones.quest-fill;
+                            gifts: zones.quest-gifts;
+                            rows: zones.quest-rows;
+                            invite => { root.invite-clicked(); }
+                            voice => { root.start-voice-clicked(zones.channel-id); }
+                            settings => { root.game-activity-settings-clicked(); }
+                        }
                         if zones.stage == "own": StageOwnBelts {
                             height: root.stage-h;
                             you: zones.you;
@@ -2275,6 +2288,7 @@ export component CrewFeed inherits Rectangle {
                         show-numbers: zones.board != "solo";
                         game-rows-label: "YOUR GAMES";
                         game-rows: zones.board == "solo" ? zones.solo-games : [];
+                        own-chips: zones.board == "solo" && zones.stage == "quests" ? zones.own-chips : [];
                         tab-clicked(i) => { root.tab-pick = i; }
                     }
                 }

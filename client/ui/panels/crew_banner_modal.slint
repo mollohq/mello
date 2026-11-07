@@ -1,0 +1,288 @@
+import { Theme, MelloInputField } from "../theme.slint";
+import { CutShape, CutButton, CutButtonShape, CutMask } from "../components/cut.slint";
+import { ZoneButton, Kicker } from "../components/feed_board.slint";
+import { BannerGame } from "../types.slint";
+
+// ============================================================
+//  The crew banner picker (crew quests gift 1, plans/crew-quests.md 4.1).
+//  Opened from the face of the gift (Game art, Upload). Two tabs: the games
+//  of the crew with a search, or an own image, cropped to the shape of the
+//  link card (1200 by 630). Save is red: it commits.
+// ============================================================
+
+/// The state of the picker, driven from Rust (handlers/quests.rs).
+export global BannerPicker {
+    in-out property <bool> open: false;
+    in-out property <int> tab: 0;
+    in-out property <[BannerGame]> games;
+    in-out property <[BannerGame]> results;
+    in-out property <string> query;
+    in-out property <string> picked-id;
+    in-out property <image> image;
+    in-out property <bool> has-image;
+    in-out property <string> image-line;
+    in-out property <bool> busy;
+    in-out property <string> error;
+    callback search(string);
+    callback choose-image();
+    callback save();
+}
+
+component Tab inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    callback clicked();
+    height: 30px;
+    width: t.preferred-width;
+    accessible-role: tab;
+    accessible-label: root.label;
+    t := Text {
+        y: (30px - self.height) / 2;
+        text: root.label.to-uppercase();
+        font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 10px;
+        letter-spacing: Theme.track-kicker;
+        color: root.active ? Theme.text-primary : Theme.text-dim;
+    }
+    if root.active: Rectangle { y: parent.height - 2px; height: 2px; background: Theme.action; }
+    TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+/// A game tile of the grid: the wide art, a white line when picked.
+component GameTile inherits Rectangle {
+    in property <BannerGame> game;
+    in property <bool> picked;
+    callback clicked();
+    accessible-role: button;
+    accessible-label: root.game.name;
+    height: 92px;
+
+    Rectangle {
+        x: 0; y: 0;
+        width: parent.width;
+        height: 70px;
+        clip: true;
+        background: Theme.raised;
+        if root.game.has-art: Image { source: root.game.art; width: parent.width; height: parent.height; image-fit: cover; }
+        if !root.game.has-art: Text {
+            width: parent.width; height: parent.height;
+            horizontal-alignment: center; vertical-alignment: center;
+            text: root.game.name; font-family: Theme.font-display; font-size: 12px; color: Theme.text-dim;
+            wrap: word-wrap;
+        }
+        CutMask { width: parent.width; height: parent.height; n: 6px; corner: "tl"; fill: Theme.surface; }
+        CutMask { width: parent.width; height: parent.height; n: 6px; corner: "br"; fill: Theme.surface; }
+        if root.picked: CutButtonShape {
+            width: parent.width; height: parent.height; n: 6px;
+            fill: transparent; stroke: Theme.action; stroke-width: 2px;
+        }
+    }
+    Text {
+        y: 74px;
+        width: parent.width;
+        text: root.game.name;
+        font-family: Theme.font-body; font-weight: Theme.weight-sentence; font-size: 11px;
+        color: Theme.text-dim; overflow: elide;
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+export component CrewBannerModal inherits Rectangle {
+    /// 0: game art, 1: your image.
+    in-out property <int> tab: 0;
+    in property <[BannerGame]> games;
+    in property <[BannerGame]> results;
+    in-out property <string> query;
+    in property <string> picked-id;
+    /// The image the owner chose, cropped as it will be saved.
+    in property <image> image;
+    in property <bool> has-image;
+    in property <string> image-line;
+    /// Saving: the buttons wait.
+    in property <bool> busy;
+    /// One sentence when a save failed.
+    in property <string> error;
+
+    callback pick-game(string);
+    callback search(string);
+    callback choose-image();
+    callback save();
+    callback close-requested();
+
+    property <[BannerGame]> shown: root.query != "" ? root.results : root.games;
+    property <bool> can-save: !root.busy && (root.tab == 0 ? root.picked-id != "" : root.has-image);
+
+    width: 100%;
+    height: 100%;
+    background: Theme.scrim;
+
+    init => { key-scope.focus(); }
+
+    key-scope := FocusScope {
+        width: 100%;
+        height: 100%;
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.close-requested();
+                accept
+            } else {
+                reject
+            }
+        }
+
+        TouchArea {
+            // a11y: none (backdrop: a click outside the dialog closes it)
+            clicked => { root.close-requested(); }
+        }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 440px;
+            height: inner.preferred-height;
+            background: transparent;
+
+            CutShape { width: parent.width; height: parent.height; n: Theme.notch; fill: Theme.graphic-light; }
+            CutShape { width: parent.width; height: parent.height; n: Theme.notch; inset: Theme.keyline; fill: Theme.surface; }
+            TouchArea {
+                // a11y: none (input blocker: stops clicks reaching the backdrop)
+            }
+
+            inner := VerticalLayout {
+                padding: 22px;
+                spacing: 14px;
+
+                Kicker { text: "CREW BANNER"; }
+                HorizontalLayout {
+                    spacing: 18px;
+                    alignment: start;
+                    Tab { label: "Game art"; active: root.tab == 0; clicked => { root.tab = 0; } }
+                    Tab { label: "Your image"; active: root.tab == 1; clicked => { root.tab = 1; } }
+                }
+                Rectangle { height: 1px; background: Theme.card-border; }
+
+                if root.tab == 0: VerticalLayout {
+                    spacing: 12px;
+                    Rectangle {
+                        height: Math.max(1, Math.ceil(root.shown.length / 2)) * 102px - 10px;
+                        for g[i] in root.shown: GameTile {
+                            x: Math.mod(i, 2) * (parent.width + 10px) / 2;
+                            y: Math.floor(i / 2) * 102px;
+                            width: (parent.width - 10px) / 2;
+                            game: g;
+                            picked: g.id == root.picked-id;
+                            clicked => { root.pick-game(g.id); }
+                        }
+                        if root.shown.length == 0: Text {
+                            width: parent.width; height: parent.height;
+                            vertical-alignment: center;
+                            text: root.query != "" ? "No game by that name" : "No games yet";
+                            font-family: Theme.font-body; font-size: 13px; color: Theme.text-dim;
+                        }
+                    }
+                    MelloInputField {
+                        label: "Search a game";
+                        placeholder: "Search a game";
+                        text <=> root.query;
+                        field-height: 36px;
+                        edited => { root.search(self.text); }
+                    }
+                }
+
+                if root.tab == 1: VerticalLayout {
+                    spacing: 12px;
+                    Rectangle {
+                        height: (440px - 44px) * 630 / 1200;
+                        background: Theme.raised;
+                        clip: true;
+                        if root.has-image: Image { source: root.image; width: parent.width; height: parent.height; image-fit: cover; }
+                        if root.has-image: Rectangle { border-width: 2px; border-color: Theme.action; }
+                        if !root.has-image: Kicker {
+                            width: parent.width; height: parent.height;
+                            horizontal-alignment: center; vertical-alignment: center;
+                            text: "JPEG OR PNG"; color: Theme.text-tertiary;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: end;
+                        if root.image-line != "": Text {
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                            text: root.image-line;
+                            font-family: Theme.font-body; font-size: 12px; color: Theme.text-dim; overflow: elide;
+                        }
+                        ZoneButton {
+                            label: root.has-image ? "REPLACE" : "CHOOSE IMAGE";
+                            a11y-label: root.has-image ? "Replace" : "Choose image";
+                            tone: "line";
+                            clicked => { root.choose-image(); }
+                        }
+                    }
+                }
+
+                if root.error != "": Text {
+                    text: root.error;
+                    font-family: Theme.font-body; font-size: 13px; color: Theme.live;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: end;
+                    ZoneButton {
+                        label: "CANCEL"; a11y-label: "Cancel"; tone: "line";
+                        clicked => { root.close-requested(); }
+                    }
+                    Rectangle {
+                        width: save-text.preferred-width + 56px;
+                        height: 36px;
+                        opacity: root.can-save ? 1 : 0.4;
+                        accessible-role: button;
+                        accessible-label: "Save";
+                        accessible-enabled: root.can-save;
+                        CutButton { width: parent.width; height: parent.height; fill-color: Theme.confirm; }
+                        save-text := Text {
+                            text: root.busy ? "SAVING" : "SAVE";
+                            font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 10px;
+                            letter-spacing: Theme.track-kicker; color: Theme.on-confirm;
+                        }
+                        TouchArea {
+                            enabled: root.can-save;
+                            mouse-cursor: root.can-save ? pointer : default;
+                            clicked => { root.save(); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The picker over a dark panel, with the games of a crew.
+export component Preview inherits Rectangle {
+    width: 865px;
+    height: 700px;
+    background: Theme.bg-app;
+    CrewBannerModal {
+        games: [
+            { id: "steam-291550", name: "Brawlhalla", art: @image-url("../previews/fixtures/stream-sample-2.png"), has-art: true },
+            { id: "steam-730", name: "Counter-Strike 2", art: @image-url("../previews/fixtures/capsule-sample-1.png"), has-art: true },
+            { id: "steam-252950", name: "Rocket League", art: @image-url("../previews/fixtures/capsule-sample-2.png"), has-art: true },
+            { id: "steam-548430", name: "Deep Rock Galactic", art: @image-url("../previews/fixtures/capsule-sample-4.png"), has-art: true },
+        ];
+        picked-id: "steam-291550";
+    }
+}
+
+/// The image tab with an image chosen.
+export component PreviewImage inherits Rectangle {
+    width: 865px;
+    height: 700px;
+    background: Theme.bg-app;
+    CrewBannerModal {
+        tab: 1;
+        image: @image-url("../previews/fixtures/stream-sample-1.png");
+        has-image: true;
+        image-line: "crew-night.jpg";
+    }
+}

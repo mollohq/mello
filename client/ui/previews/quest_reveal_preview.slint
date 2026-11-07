@@ -1,0 +1,115 @@
+import { Theme } from "../theme.slint";
+import { H2hPerson, QuestReveal, QuestGift, QuestRow } from "../types.slint";
+import { SealedFixtures } from "./sealed_fixtures.slint";
+import { Clock, SealedUi } from "../components/sealed.slint";
+import { CrewFeed } from "../panels/crew_feed.slint";
+import { ControlBar } from "../panels/control_bar.slint";
+import { ZonesData } from "../components/feed_board.slint";
+
+// ============================================================
+//  Crew quests: a sealed gift in the centre view, at rest (2.4 s into the
+//  reveal, on a manual clock), over the feed of a crew at 2 / 5. One preview
+//  for each gift (mockup feed-quests.html, frames 3 to 7).
+//
+//    slint-viewer --component PreviewRevealQuest1 --screenshot out.png \
+//      client/ui/previews/quest_reveal_preview.slint
+// ============================================================
+
+global P {
+    out property <H2hPerson> bob: { id: "u-bob", name: "b0bben", initials: "B0", hue-index: 0, avatar: @image-url("fixtures/avatars/b0bben.svg"), has-avatar: true };
+    out property <H2hPerson> ida: { id: "u-ida", name: "Ida", initials: "ID", hue-index: 2, avatar: @image-url("fixtures/avatars/ida.svg"), has-avatar: true };
+    out property <image> art: @image-url("fixtures/stream-sample-2.png");
+    out property <image> header: @image-url("fixtures/capsule-sample-1.png");
+
+    out property <QuestReveal> made: {
+        step: "made", label: "QUEST  ·  CREW MADE", hue-index: 0, count: "1 / 5",
+        moment-title: "bob_test_26", moment-sub: "Made 5 November",
+        name: "Crew banner", content: "art",
+        action1: "banner-game", action1-label: "Game art", action2: "banner-upload", action2-label: "Upload",
+        bright: SealedFixtures.gift-ready-bright, dim: SealedFixtures.gift-ready-dim,
+    };
+    out property <QuestReveal> friend: {
+        step: "friend", label: "QUEST  ·  A FRIEND JOINS", hue-index: 2, count: "2 / 5",
+        moment-person: P.ida, moment-has-person: true, moment-title: "Ida joined", moment-sub: "Invited by you",
+        name: "Your invite link", content: "link", gift-text: "bobtest26",
+        action1: "link", action1-label: "Set the link",
+        bright: SealedFixtures.gift-ready-bright, dim: SealedFixtures.gift-ready-dim,
+    };
+    out property <QuestReveal> call: {
+        step: "call", label: "QUEST  ·  FIRST CALL", hue-index: 2, count: "3 / 5",
+        moment-title: "You and Ida, +1 guest", moment-sub: "General",
+        name: "Crew emoji", content: "emoji", gift-line: "5 slots",
+        action1: "emoji", action1-label: "Add emoji",
+        bright: SealedFixtures.gift-ready-bright, dim: SealedFixtures.gift-ready-dim,
+    };
+    out property <QuestReveal> clip: {
+        step: "clip", label: "QUEST  ·  FIRST CLIP", hue-index: 0, count: "4 / 5",
+        moment-art: P.art, moment-has-art: true, moment-title: "You clipped", moment-sub: "Brawlhalla",
+        name: "Founding week", content: "week", gift-text: "W45", gift-line: "Open in Crew history for every member",
+        bright: SealedFixtures.gift-ready-bright, dim: SealedFixtures.gift-ready-dim,
+    };
+    out property <QuestReveal> session: {
+        step: "session", label: "QUEST  ·  FIRST SESSION", hue-index: 2, count: "5 / 5",
+        moment-art: P.header, moment-has-art: true, moment-title: "2 h 05 · Brawlhalla", moment-sub: "You and Ida",
+        name: "For the crew", content: "plus", gift-text: "30 DAYS", gift-line: "30 days of m3llo+\nfor every member in the crew",
+        bright: SealedFixtures.gift-ready-bright, dim: SealedFixtures.gift-ready-dim,
+    };
+
+    out property <ZonesData> feed: {
+        you: P.bob,
+        stage: "quests", quest-count: "2 / 5", quest-fill: 0.25,
+        quest-gifts: [
+            { label: "BANNER", state: "open", content: "art", art: P.art, has-art: true },
+            { label: "DROP 2", state: "ready", can-open: true, bright: SealedFixtures.gift-ready-bright, dim: SealedFixtures.gift-ready-dim },
+            { label: "DROP 3", state: "locked", dim: SealedFixtures.gift-locked-dim },
+            { label: "DROP 4", state: "locked", dim: SealedFixtures.gift-locked-dim },
+            { label: "DROP 5", state: "locked", big: true, dim: SealedFixtures.gift-locked-big-dim },
+        ],
+        quest-rows: [
+            { name: "Crew made", done: true, meta: "bob_test_26" },
+            { name: "A friend joins", done: true, person: P.ida, has-person: true, title: "Ida joined" },
+            { name: "First call", action: "voice" },
+            { name: "First clip", meta: "Join voice to clip", key-cap: "F8" },
+            { name: "First session", meta: "Play with m3llo open" },
+        ],
+        board: "tabs",
+        today-big: { value: "0", unit: "min", label: "HANGOUT" },
+        week-big: { value: "0", unit: "min", label: "HANGOUT" },
+        people: true, members: [P.bob, P.ida], open-seats: 3,
+    };
+}
+
+/// The feed panel at 1x with a gift at rest in the centre view.
+component Panel inherits Rectangle {
+    in property <QuestReveal> reveal;
+    width: 865px;
+    height: 865px;
+    background: Theme.bg-app;
+    init => {
+        Clock.manual = true;
+        Clock.manual-now = 2400ms;
+        SealedUi.quest = root.reveal;
+        SealedUi.from = { x: 140px, y: 160px, w: 72px, h: 72px };
+        SealedUi.t0 = 0ms;
+        SealedUi.active-key = "quest:preview";
+        SealedUi.active-slot = "quest:preview";
+        SealedUi.active-kind = "quest";
+    }
+    VerticalLayout {
+        CrewFeed { vertical-stretch: 1; zones: P.feed; }
+        ControlBar {
+            height: Theme.control-bar-height;
+            user-name: "b0bben";
+            user-initials: "B0";
+            user-avatar: P.bob.avatar;
+            has-user-avatar: true;
+            can-stream: true;
+        }
+    }
+}
+
+export component PreviewRevealQuest1 inherits Panel { reveal: P.made; }
+export component PreviewRevealQuest2 inherits Panel { reveal: P.friend; }
+export component PreviewRevealQuest3 inherits Panel { reveal: P.call; }
+export component PreviewRevealQuest4 inherits Panel { reveal: P.clip; }
+export component PreviewRevealQuest5 inherits Panel { reveal: P.session; }

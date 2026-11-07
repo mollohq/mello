@@ -111,7 +111,8 @@ impl Drop for Harness {
     /// Cut the cycles that would keep the window, and with it the runtime's
     /// kqueue, open for the rest of the process.
     ///
-    /// A few callbacks on `StreamCardUi`, `SealedUi`, `ClipPlayerUi` and
+    /// A few callbacks on `StreamCardUi`, `SealedUi`, `ClipPlayerUi`,
+    /// `BannerPicker`, `InviteNamePicker`, `CrewEmojiUi` and
     /// `MainWindow::play-clip` capture a strong `AppContext` clone. That
     /// clone owns the `MainWindow` that owns the callback, so the window
     /// never drops, and every closure in it keeps a `Handle` clone that keeps
@@ -127,6 +128,22 @@ impl Drop for Harness {
         self.ctx.app.global::<crate::SealedUi>().on_landed(|| {});
         self.ctx.app.global::<crate::ClipPlayerUi>().on_close(|| {});
         self.ctx.app.on_play_clip(|_| {});
+        self.ctx
+            .app
+            .global::<crate::SealedUi>()
+            .on_quest_action(|_| {});
+        let bp = self.ctx.app.global::<crate::BannerPicker>();
+        bp.on_search(|_| {});
+        bp.on_choose_image(|| {});
+        bp.on_save(|| {});
+        let np = self.ctx.app.global::<crate::InviteNamePicker>();
+        np.on_edited(|_| {});
+        np.on_save(|| {});
+        let eu = self.ctx.app.global::<crate::CrewEmojiUi>();
+        eu.on_add_requested(|| {});
+        eu.on_choose_image(|| {});
+        eu.on_save(|| {});
+        eu.on_remove(|_| {});
     }
 }
 

@@ -1,6 +1,6 @@
 import { Theme } from "../theme.slint";
 import { CutShape, CutButtonShape } from "cut.slint";
-import { BeltReveal, RecapSeal, FeedCardData } from "../types.slint";
+import { BeltReveal, RecapSeal, FeedCardData, QuestReveal } from "../types.slint";
 
 // ============================================================
 //  Sealed cards (spec SEALED-REVEAL.md). A belt that moved, and the weekly
@@ -100,7 +100,7 @@ export struct SealedArea {
 /// leaves its slot, and `landed` runs when it is back, so Rust builds the
 /// feed cards again before the keys here clear.
 export global SealedUi {
-    /// "belt", "recap" or "" for no card in the centre.
+    /// "belt", "recap", "quest" or "" for no card in the centre.
     in-out property <string> active-kind: "";
     /// The key of the card in the centre. Every slot with this key stays sealed
     /// until the card lands, except the slot it left.
@@ -110,6 +110,11 @@ export global SealedUi {
     in-out property <BeltReveal> belt;
     /// The recap card in the centre.
     in-out property <FeedCardData> recap-card;
+    /// The quest gift in the centre (crew quests).
+    in-out property <QuestReveal> quest;
+    /// An action on the face of a quest gift: "banner-game", "banner-upload",
+    /// "link" or "emoji". The view closes first.
+    callback quest-action(string);
     in-out property <SealedArea> from;
     in-out property <duration> t0;
     in-out property <bool> closing: false;

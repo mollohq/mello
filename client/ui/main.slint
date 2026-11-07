@@ -1,3 +1,7 @@
+import { CrewEmojiModal } from "panels/crew_emoji_modal.slint";
+import { CrewEmojiUi } from "components/crew_emoji.slint";
+import { InviteNameModal, InviteNamePicker } from "panels/invite_name_modal.slint";
+import { CrewBannerModal, BannerPicker } from "panels/crew_banner_modal.slint";
 import { Theme } from "theme.slint";
 import {
     CrewData,
@@ -73,6 +77,7 @@ export { ClipPlayerUi }
 // --- end stage 9 ---
 
 
+export { BannerPicker, InviteNamePicker, CrewEmojiUi }
 export { ChatFocus, BeltReveal, RecapSeal, Clock, SealedUi, CrewData, MemberData, ChatMessageData, AudioDeviceData, SoundSettings, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, BeltHeroData, HeroStreamData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, NoticeEntryData, TesterData, InvitePersonData, Theme, VideoRect, FeedView, ForceUpdateWindow }
 
 export component MainWindow inherits Window {
@@ -735,6 +740,9 @@ export component MainWindow inherits Window {
     callback voice-toggle();
     callback presence-changed(int);
     callback settings-requested();
+    /// The tab Settings opens on. A quest row opens it on Games (3); a close
+    /// puts it back on the first tab.
+    in-out property <int> settings-active-tab: 0;
     callback capture-device-selected(string);
     callback playback-device-selected(string);
     callback mic-test-toggled();
@@ -1157,6 +1165,10 @@ export component MainWindow inherits Window {
                             seek-clip-ms(m) => { root.seek-clip-ms(m); }
                             invite-clicked => { root.invite-share-requested(); }
                             start-voice-clicked(channel-id) => { root.join-voice-channel(channel-id); }
+                            game-activity-settings-clicked => {
+                                root.settings-active-tab = 3;
+                                root.settings-requested();
+                            }
                             plus-clicked => {
                                 root.plus-soon-open = true;
                                 root.zones-plus-clicked();
@@ -1713,6 +1725,64 @@ export component MainWindow inherits Window {
         close-requested => { root.plus-soon-open = false; }
     }
 
+    // Crew quests gift 1: the banner picker.
+    if BannerPicker.open: CrewBannerModal {
+        tab <=> BannerPicker.tab;
+        games: BannerPicker.games;
+        results: BannerPicker.results;
+        query <=> BannerPicker.query;
+        picked-id: BannerPicker.picked-id;
+        image: BannerPicker.image;
+        has-image: BannerPicker.has-image;
+        image-line: BannerPicker.image-line;
+        busy: BannerPicker.busy;
+        error: BannerPicker.error;
+        pick-game(id) => { BannerPicker.picked-id = id; }
+        search(q) => { BannerPicker.search(q); }
+        choose-image => { BannerPicker.choose-image(); }
+        save => { BannerPicker.save(); }
+        close-requested => {
+            if !BannerPicker.busy {
+                BannerPicker.open = false;
+            }
+        }
+    }
+
+    // Crew quests gift 2: the custom invite link.
+    if InviteNamePicker.open: InviteNameModal {
+        crew-name: InviteNamePicker.crew-name;
+        name <=> InviteNamePicker.name;
+        state: InviteNamePicker.state;
+        busy: InviteNamePicker.busy;
+        error: InviteNamePicker.error;
+        edited(n) => { InviteNamePicker.edited(n); }
+        save => { InviteNamePicker.save(); }
+        close-requested => {
+            if !InviteNamePicker.busy {
+                InviteNamePicker.open = false;
+            }
+        }
+    }
+
+    // Crew quests gift 3: crew emoji.
+    if CrewEmojiUi.open: CrewEmojiModal {
+        emoji: CrewEmojiUi.emoji;
+        free: CrewEmojiUi.free;
+        name <=> CrewEmojiUi.name;
+        image: CrewEmojiUi.image;
+        has-image: CrewEmojiUi.has-image;
+        busy: CrewEmojiUi.busy;
+        error: CrewEmojiUi.error;
+        choose-image => { CrewEmojiUi.choose-image(); }
+        save => { CrewEmojiUi.save(); }
+        remove(n) => { CrewEmojiUi.remove(n); }
+        close-requested => {
+            if !CrewEmojiUi.busy {
+                CrewEmojiUi.open = false;
+            }
+        }
+    }
+
     if invite-share-open: InviteShareModal {
         invite-url: root.invite-share-url;
         // Two-way: the modal's revert writes `copied`, and a one-way binding
@@ -1729,6 +1799,7 @@ export component MainWindow inherits Window {
 
     // ===================== SETTINGS OVERLAY =====================
     if settings-open: SettingsModal {
+        active-tab <=> root.settings-active-tab;
         // Profile
         profile-nickname: root.user-name;
         profile-current-avatar: root.user-avatar;
@@ -1875,6 +1946,7 @@ export component MainWindow inherits Window {
         // Callbacks
         close-requested => {
             root.settings-open = false;
+            root.settings-active-tab = 0;
             if root.mic-testing {
                 root.mic-testing = false;
                 root.mic-test-toggled();

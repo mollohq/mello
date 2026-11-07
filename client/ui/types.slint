@@ -14,6 +14,15 @@ export struct CrewData {
     avatar: image,
     has-avatar: bool,
 
+    // Crew quests gift 1: the banner behind the crew name. `banner-game` is an
+    // art Worker id, `banner-url` an uploaded image; Rust fills `banner`.
+    banner: image,
+    has-banner: bool,
+    banner-game: string,
+    banner-url: string,
+    // Crew quests gift 2: the custom invite name, "" when none.
+    invite-name: string,
+
     has-stream: bool,
     stream-name: string,
 
@@ -582,6 +591,10 @@ export struct ReactionData {
     count: int,
     /// This user is among the reactors: the chip gets the white outline.
     mine: bool,
+    /// A crew emoji (`:name:`, crew quests gift 3): its image in place of
+    /// the text, once loaded.
+    image: image,
+    has-image: bool,
 }
 
 /// One image of an image message. `image` is filled by the client's image
@@ -643,6 +656,9 @@ export struct ChatMessageData {
     gif-url: string,
     /// Only emoji, at most three: the body renders at Theme.font-xxl.
     is-emoji-only: bool,
+    /// Only crew emoji (`:name:`), at most three, all loaded: the body is
+    /// these images, big (crew quests gift 3).
+    crew-emoji: [image],
     is-image: bool,
     images: [ChatImageData],
     /// "Today", "Yesterday" or a date when this message starts a day. "" otherwise.
@@ -928,4 +944,81 @@ export struct NoticeEntryData {
     names: string,
     license: string,
     text: string,
+}
+
+// Crew quests (plans/crew-quests.md). One gift on the track of the quest card.
+// `state` is "locked", "ready" (step done, sealed until the owner opens it) or
+// "open". `content` says what an open gift shows: "art" (`art`), "link" (the
+// link icon), "emoji" (`art`), "week" (`text`, "W45") or "plus" (m3llo+).
+// The face of a quest gift in the centre view: the moment of the step on top,
+// the gift under it, and the actions that set it up. Built in Rust
+// (handlers/quests.rs) for each ready gift of the owner.
+export struct QuestReveal {
+    step: string,
+    label: string,
+    hue-index: int,
+    count: string,
+    moment-title: string,
+    moment-sub: string,
+    moment-person: H2hPerson,
+    moment-has-person: bool,
+    moment-art: image,
+    moment-has-art: bool,
+    moment-value: string,
+    moment-unit: string,
+    name: string,
+    content: string,
+    gift-art: image,
+    gift-has-art: bool,
+    gift-text: string,
+    gift-line: string,
+    /// What the actions do: "banner-game", "banner-upload", "link", "emoji".
+    action1: string,
+    action1-label: string,
+    action2: string,
+    action2-label: string,
+    bright: string,
+    dim: string,
+}
+
+export struct QuestGift {
+    reveal: QuestReveal,
+    key: string,
+    label: string,
+    state: string,
+    /// The viewer is the owner: a ready gift has the red key and opens.
+    can-open: bool,
+    big: bool,
+    /// The field of a sealed gift: `Path` commands in a box of 52 by 52.
+    bright: string,
+    dim: string,
+    content: string,
+    art: image,
+    has-art: bool,
+    text: string,
+}
+
+// One step under the track. A done step shows its data at once; a step that
+// is not done shows its action: "invite", "voice", "settings" or "".
+export struct QuestRow {
+    name: string,
+    done: bool,
+    person: H2hPerson,
+    has-person: bool,
+    title: string,
+    meta: string,
+    value: string,
+    unit: string,
+    art: image,
+    has-art: bool,
+    action: string,
+    key-cap: string,
+}
+
+// A game the banner picker offers: the art Worker id, the name, its wide art.
+export struct BannerGame {
+    id: string,
+    name: string,
+    art: image,
+    has-art: bool,
 }

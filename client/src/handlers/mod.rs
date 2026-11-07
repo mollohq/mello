@@ -5,6 +5,7 @@ mod crew;
 mod game;
 pub(crate) mod games;
 mod presence;
+mod quests;
 mod stats;
 mod stream_cards;
 // stage 9: the stream card state and helpers are used by the app context,
@@ -226,6 +227,12 @@ fn dispatch(ctx: &AppContext, event: Event) {
         | Event::InstalledGames { .. }
         | Event::RiotStatus { .. }
         | Event::RiotLinkFailed { .. } => games::handle(ctx, event),
+
+        // Crew quests gifts
+        Event::CrewGiftChanged { .. }
+        | Event::CrewGiftFailed { .. }
+        | Event::InviteNameChecked { .. }
+        | Event::MediaImageLoaded { .. } => quests::handle(ctx, event),
 
         // Personal stats (You strip)
         Event::UserGameStatsLoaded { .. } => stats::handle(ctx, event),
