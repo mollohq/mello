@@ -102,6 +102,7 @@ pub(crate) fn handle(ctx: &crate::app_context::AppContext, event: mello_core::ev
             state,
         } => {
             log::debug!("[gifts] invite name {name} for crew {crew_id}: {state}");
+            crate::callbacks::on_invite_name_checked(ctx, &name, &state);
         }
         _ => {}
     }

@@ -179,6 +179,7 @@ func TestInviteNameRules(t *testing.T) {
 		"brawlbros": true, "bob-test-26": true, "abc": true, strings.Repeat("a", 24): true,
 		"ab": false, "-abc": false, "abc-": false, "a--b": false, "admin": false, "m3llo": false,
 		strings.Repeat("a", 25): false, "a b c": false, "abc_d": false,
+		"brawlbro": false, "abcd-1234": false, "ab-cd1234": true,
 	} {
 		if got := inviteNameAllowed(name); got != want {
 			t.Errorf("inviteNameAllowed(%q) = %v, want %v", name, got, want)
@@ -260,9 +261,11 @@ func TestInviteNameOldNameIsHeldThenFreed(t *testing.T) {
 func TestRandomCodesSkipACustomName(t *testing.T) {
 	nk := giftsCrew(t)
 	markStep(t, nk, "gc", func(q *CrewQuests) { q.Steps.Friend = &QuestFriend{UserID: "ida"} })
-	if _, err := rpcT(t, SetInviteNameRPC, nk, "own", `{"crew_id":"gc","name":"abcd-efgh"}`); err != nil {
-		t.Fatal(err)
+	if _, err := rpcT(t, SetInviteNameRPC, nk, "own", `{"crew_id":"gc","name":"abcd-efgh"}`); errCode(err) != 3 {
+		t.Fatalf("a name in the shape of a code: %v", err)
 	}
+	// A taken key of any kind is skipped: put one in the way.
+	nk.put(InviteCodeCollection, "ABCD-EFGH", SystemUserID, inviteCodeObject{CrewID: "gc", Custom: true})
 	for i := 0; i < 50; i++ {
 		code, err := generateCode(context.Background(), nk)
 		if err != nil || code == "ABCD-EFGH" {

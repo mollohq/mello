@@ -589,3 +589,156 @@ fn a_banner_image_is_cropped_to_the_link_card_and_fits_the_limit() {
     assert!(jpeg.len() <= 400 << 10, "{} bytes", jpeg.len());
     assert_eq!(&jpeg[..2], &[0xFF, 0xD8], "a JPEG");
 }
+
+// ── 4d: the custom invite link ──────────────────────────────────────────────
+
+fn names(h: &Harness) -> crate::InviteNamePicker<'_> {
+    h.app().global::<crate::InviteNamePicker>()
+}
+
+fn friend_feed() -> FeedResponse {
+    quests_feed(
+        "user-1",
+        serde_json::json!({"friend": {"done_ms": MADE_MS, "user_id": "u-ida", "name": "Ida"}}),
+        serde_json::json!({}),
+    )
+}
+
+/// Open the second gift (the link): the banner is opened first.
+fn open_link_face(h: &mut Harness) {
+    {
+        let settings = h.settings();
+        crate::sealed::mark_opened(
+            &mut settings.borrow_mut(),
+            "crew-0",
+            "quest:made:crew-0",
+            crate::head2head::now_ms(),
+        );
+    }
+    h.emit(Event::FeedLoaded {
+        response: friend_feed(),
+    });
+    open_face_action(h, "Set the link");
+}
+
+#[test]
+fn set_the_link_checks_the_suggested_name_and_saves_a_free_one() {
+    let mut h = Harness::new();
+    on_crew(&mut h);
+    h.commands();
+    open_link_face(&mut h);
+    assert!(names(&h).get_open());
+    assert_eq!(
+        names(&h).get_name().as_str(),
+        "crew0",
+        "a name made from the crew name"
+    );
+    let sent = h.commands();
+    assert!(
+        sent.iter()
+            .any(|c| matches!(c, Command::CheckInviteName { name, .. } if name == "crew0")),
+        "{sent:?}"
+    );
+    assert_eq!(names(&h).get_state().as_str(), "checking");
+
+    // An answer for another name is old: it changes nothing.
+    h.emit(Event::InviteNameChecked {
+        crew_id: "crew-0".into(),
+        name: "other".into(),
+        state: "taken".into(),
+    });
+    assert_eq!(names(&h).get_state().as_str(), "checking");
+    h.emit(Event::InviteNameChecked {
+        crew_id: "crew-0".into(),
+        name: "crew0".into(),
+        state: "free".into(),
+    });
+    assert_eq!(names(&h).get_state().as_str(), "free");
+
+    h.click_label("Save");
+    assert!(
+        h.commands()
+            .iter()
+            .any(|c| matches!(c, Command::SetInviteName { crew_id, name }
+            if crew_id == "crew-0" && name == "crew0")),
+        "Save sets the name"
+    );
+    h.emit(Event::CrewGiftChanged {
+        crew_id: "crew-0".into(),
+        gift: "link".into(),
+    });
+    assert!(!names(&h).get_open(), "a saved name closes the screen");
+}
+
+#[test]
+fn a_name_in_the_shape_of_a_code_is_refused_without_a_call() {
+    let mut h = Harness::new();
+    on_crew(&mut h);
+    open_link_face(&mut h);
+    h.commands();
+    names(&h).set_name("abcd1234".into());
+    names(&h).invoke_edited("abcd1234".into());
+    assert_eq!(names(&h).get_state().as_str(), "not_allowed");
+    assert!(
+        h.commands().is_empty(),
+        "no check for a name the server refuses"
+    );
+    assert!(h
+        .controls_labelled("Save")
+        .iter()
+        .all(|c| !c.accessible_enabled().unwrap_or(true)));
+}
+
+#[test]
+fn a_crew_with_a_custom_name_shares_that_link_and_a_copy_is_reported() {
+    let mut h = Harness::new();
+    on_crew(&mut h);
+    let state = mello_core::crew_state::CrewState {
+        crew_id: "crew-0".into(),
+        name: "Crew 0".into(),
+        invite_name: "brawlbros".into(),
+        ..Default::default()
+    };
+    h.emit(Event::CrewStateLoaded { state });
+    h.commands();
+    h.app().invoke_invite_share_requested();
+    assert!(h.app().get_invite_share_open());
+    assert_eq!(
+        h.app().get_invite_share_url().as_str(),
+        "https://m3llo.app/join/brawlbros"
+    );
+    h.app().invoke_invite_copy_link();
+    let sent = h.commands();
+    assert!(
+        !sent
+            .iter()
+            .any(|c| matches!(c, Command::CreateInviteCode { .. })),
+        "no new code for a crew with a name"
+    );
+    assert!(
+        sent.iter()
+            .any(|c| matches!(c, Command::ReportInviteCopied { crew_id } if crew_id == "crew-0")),
+        "{sent:?}"
+    );
+}
+
+#[test]
+fn the_invite_name_rule_matches_the_server() {
+    use crate::callbacks::invite_name_ok_for_test as ok;
+    for (name, want) in [
+        ("brawlbros", true),
+        ("bob-test-26", true),
+        ("ab-cd1234", true),
+        ("abc", true),
+        ("ab", false),
+        ("-ab", false),
+        ("a--b", false),
+        ("admin", false),
+        ("abcd1234", false),
+        ("abcd-1234", false),
+        ("Brawl", false),
+        ("brawl_bros", false),
+    ] {
+        assert_eq!(ok(name), want, "{name}");
+    }
+}

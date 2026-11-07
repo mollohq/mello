@@ -1,3 +1,4 @@
+import { InviteNameModal, InviteNamePicker } from "panels/invite_name_modal.slint";
 import { CrewBannerModal, BannerPicker } from "panels/crew_banner_modal.slint";
 import { Theme } from "theme.slint";
 import {
@@ -73,7 +74,7 @@ export { ClipPlayerUi }
 // --- end stage 9 ---
 
 
-export { BannerPicker }
+export { BannerPicker, InviteNamePicker }
 export { ChatFocus, BeltReveal, RecapSeal, Clock, SealedUi, CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, BeltHeroData, HeroStreamData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, NoticeEntryData, TesterData, InvitePersonData, Theme, VideoRect, FeedView, ForceUpdateWindow }
 
 export component MainWindow inherits Window {
@@ -1729,6 +1730,22 @@ export component MainWindow inherits Window {
         close-requested => {
             if !BannerPicker.busy {
                 BannerPicker.open = false;
+            }
+        }
+    }
+
+    // Crew quests gift 2: the custom invite link.
+    if InviteNamePicker.open: InviteNameModal {
+        crew-name: InviteNamePicker.crew-name;
+        name <=> InviteNamePicker.name;
+        state: InviteNamePicker.state;
+        busy: InviteNamePicker.busy;
+        error: InviteNamePicker.error;
+        edited(n) => { InviteNamePicker.edited(n); }
+        save => { InviteNamePicker.save(); }
+        close-requested => {
+            if !InviteNamePicker.busy {
+                InviteNamePicker.open = false;
             }
         }
     }

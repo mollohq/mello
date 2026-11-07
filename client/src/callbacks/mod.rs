@@ -9,7 +9,9 @@ pub(crate) mod onboarding;
 mod quests;
 #[cfg(test)]
 pub(crate) use quests::banner_jpeg as banner_jpeg_for_test;
-pub(crate) use quests::{on_gift_result, refresh_picker_art};
+#[cfg(test)]
+pub(crate) use quests::invite_name_ok as invite_name_ok_for_test;
+pub(crate) use quests::{on_gift_result, on_invite_name_checked, refresh_picker_art};
 mod sealed;
 pub(crate) mod settings;
 mod streaming;

@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use slint::{ComponentHandle, Model};
 
 use crate::app_context::AppContext;
-use crate::{BannerGame, BannerPicker};
+use crate::{BannerGame, BannerPicker, InviteNamePicker};
 
 /// The banner is saved at the shape of the link card.
 pub(crate) const BANNER_FRAME: (u32, u32) = (1200, 630);
@@ -34,8 +34,19 @@ pub fn wire(ctx: &AppContext) {
                     open_banner_picker(&ctx2, 1, &pending);
                     choose_banner_image(&ctx2, &pending);
                 }
+                "link" => open_invite_name(&ctx2),
                 other => log::info!("[gifts] action {other} has no screen yet"),
             });
+    }
+
+    let np = ctx.app.global::<InviteNamePicker>();
+    {
+        let ctx2 = ctx.clone();
+        np.on_edited(move |name| check_invite_name(&ctx2, name.as_str()));
+    }
+    {
+        let ctx2 = ctx.clone();
+        np.on_save(move || save_invite_name(&ctx2));
     }
 
     let bp = ctx.app.global::<BannerPicker>();
@@ -253,6 +264,17 @@ fn save_banner(ctx: &AppContext, pending: &PendingJpeg) {
 
 /// The answer to a save: close the picker, or say why it failed.
 pub(crate) fn on_gift_result(ctx: &AppContext, gift: &str, failed: Option<&str>) {
+    if gift == "link" {
+        let np = ctx.app.global::<InviteNamePicker>();
+        if np.get_busy() {
+            np.set_busy(false);
+            match failed {
+                Some(reason) => np.set_error(reason.into()),
+                None => np.set_open(false),
+            }
+        }
+        return;
+    }
     if gift != "banner" {
         return;
     }
@@ -295,4 +317,104 @@ pub(crate) fn refresh_picker_art(ctx: &AppContext) {
     bp.set_results(slint::ModelRc::new(slint::VecModel::from(redo(
         bp.get_results(),
     ))));
+}
+
+// ── Gift 2: the custom invite link ──────────────────────────────────────────
+
+/// The name rule of the server (crew_gifts.go `inviteNameAllowed`), so the
+/// screen refuses a bad name without a call. The server checks again.
+pub(crate) fn invite_name_ok(name: &str) -> bool {
+    const NOT_ALLOWED: [&str; 15] = [
+        "m3llo",
+        "mello",
+        "mollo",
+        "admin",
+        "support",
+        "help",
+        "api",
+        "join",
+        "invite",
+        "official",
+        "staff",
+        "mod",
+        "moderator",
+        "system",
+        "lounge",
+    ];
+    let b = name.as_bytes();
+    let form = (3..=24).contains(&b.len())
+        && b.iter()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && !name.contains("--");
+    // The shape of a generated code, with or without its dash.
+    let compact = name.replacen('-', "", 1);
+    let code_shape = compact.len() == 8
+        && compact.bytes().all(|c| c.is_ascii_alphanumeric())
+        && (!name.contains('-') || name.find('-') == Some(4));
+    form && !code_shape && !NOT_ALLOWED.contains(&name)
+}
+
+fn open_invite_name(ctx: &AppContext) {
+    let np = ctx.app.global::<InviteNamePicker>();
+    let crew = active_crew(ctx);
+    let current = crew
+        .as_ref()
+        .map(|c| c.invite_name.to_string())
+        .unwrap_or_default();
+    let suggested = ctx
+        .app
+        .global::<crate::SealedUi>()
+        .get_quest()
+        .gift_text
+        .to_string();
+    let name = if current.is_empty() {
+        suggested
+    } else {
+        current
+    };
+    np.set_crew_name(crew.map(|c| c.name).unwrap_or_default());
+    np.set_name(name.clone().into());
+    np.set_busy(false);
+    np.set_error("".into());
+    np.set_open(true);
+    log::info!("[gifts] invite name screen open");
+    check_invite_name(ctx, &name);
+}
+
+fn check_invite_name(ctx: &AppContext, raw: &str) {
+    let np = ctx.app.global::<InviteNamePicker>();
+    let name = raw.trim().to_lowercase();
+    if !invite_name_ok(&name) {
+        np.set_state("not_allowed".into());
+        return;
+    }
+    np.set_state("checking".into());
+    let _ = ctx.cmd_tx.send(mello_core::Command::CheckInviteName {
+        crew_id: ctx.app.get_active_crew_id().to_string(),
+        name,
+    });
+}
+
+/// The answer to a check, when it is for the name in the field now.
+pub(crate) fn on_invite_name_checked(ctx: &AppContext, name: &str, state: &str) {
+    let np = ctx.app.global::<InviteNamePicker>();
+    if np.get_open() && np.get_name().trim().to_lowercase() == name {
+        np.set_state(if state.is_empty() { "" } else { state }.into());
+    }
+}
+
+fn save_invite_name(ctx: &AppContext) {
+    let np = ctx.app.global::<InviteNamePicker>();
+    let name = np.get_name().trim().to_lowercase();
+    if np.get_busy() || np.get_state() != "free" || !invite_name_ok(&name) {
+        return;
+    }
+    np.set_busy(true);
+    np.set_error("".into());
+    let _ = ctx.cmd_tx.send(mello_core::Command::SetInviteName {
+        crew_id: ctx.app.get_active_crew_id().to_string(),
+        name,
+    });
 }

@@ -360,9 +360,15 @@ func normalizeInviteName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
 
+// inviteCodeShapeRe is the shape of a generated code with or without its
+// dash. A name in that shape is refused: a client turns "abcd1234" into
+// the code "ABCD-1234", which is another key (deep_link.rs).
+var inviteCodeShapeRe = regexp.MustCompile(`^[a-z0-9]{4}-?[a-z0-9]{4}$`)
+
 // inviteNameAllowed checks the form and the list of names not allowed.
 func inviteNameAllowed(name string) bool {
-	return inviteNameRe.MatchString(name) && !strings.Contains(name, "--") && !inviteNamesNotAllowed[name]
+	return inviteNameRe.MatchString(name) && !strings.Contains(name, "--") &&
+		!inviteNamesNotAllowed[name] && !inviteCodeShapeRe.MatchString(name)
 }
 
 // inviteNameState is free, taken or not_allowed for crewID, and the storage
