@@ -136,6 +136,18 @@ pub(crate) fn cue(ctx: &AppContext, sound: Sound) {
 /// The sound for a change of the local mute and deafen state. A deafen that
 /// also mutes plays the deafen sound only.
 pub(crate) fn cue_mute_change(ctx: &AppContext, before: (bool, bool), after: (bool, bool)) {
+    cue_mute_change_with(&ctx.sounds, &ctx.settings.borrow(), before, after);
+}
+
+/// [`cue_mute_change`] for a window callback. It takes the cues and the
+/// settings, not the context: a callback that holds the context holds the
+/// window, and the window then never drops.
+pub(crate) fn cue_mute_change_with(
+    sounds: &SoundCues,
+    settings: &Settings,
+    before: (bool, bool),
+    after: (bool, bool),
+) {
     let (was_muted, was_deafened) = before;
     let (muted, deafened) = after;
     let sound = if deafened != was_deafened {
@@ -153,7 +165,7 @@ pub(crate) fn cue_mute_change(ctx: &AppContext, before: (bool, bool), after: (bo
     } else {
         return;
     };
-    cue(ctx, sound);
+    sounds.cue(settings, sound);
 }
 
 /// Called with the other members of the joined channel after each change of
