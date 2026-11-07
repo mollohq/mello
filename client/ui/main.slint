@@ -1,3 +1,5 @@
+import { CrewEmojiModal } from "panels/crew_emoji_modal.slint";
+import { CrewEmojiUi } from "components/crew_emoji.slint";
 import { InviteNameModal, InviteNamePicker } from "panels/invite_name_modal.slint";
 import { CrewBannerModal, BannerPicker } from "panels/crew_banner_modal.slint";
 import { Theme } from "theme.slint";
@@ -74,7 +76,7 @@ export { ClipPlayerUi }
 // --- end stage 9 ---
 
 
-export { BannerPicker, InviteNamePicker }
+export { BannerPicker, InviteNamePicker, CrewEmojiUi }
 export { ChatFocus, BeltReveal, RecapSeal, Clock, SealedUi, CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, BeltHeroData, HeroStreamData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, NoticeEntryData, TesterData, InvitePersonData, Theme, VideoRect, FeedView, ForceUpdateWindow }
 
 export component MainWindow inherits Window {
@@ -1746,6 +1748,25 @@ export component MainWindow inherits Window {
         close-requested => {
             if !InviteNamePicker.busy {
                 InviteNamePicker.open = false;
+            }
+        }
+    }
+
+    // Crew quests gift 3: crew emoji.
+    if CrewEmojiUi.open: CrewEmojiModal {
+        emoji: CrewEmojiUi.emoji;
+        free: CrewEmojiUi.free;
+        name <=> CrewEmojiUi.name;
+        image: CrewEmojiUi.image;
+        has-image: CrewEmojiUi.has-image;
+        busy: CrewEmojiUi.busy;
+        error: CrewEmojiUi.error;
+        choose-image => { CrewEmojiUi.choose-image(); }
+        save => { CrewEmojiUi.save(); }
+        remove(n) => { CrewEmojiUi.remove(n); }
+        close-requested => {
+            if !CrewEmojiUi.busy {
+                CrewEmojiUi.open = false;
             }
         }
     }

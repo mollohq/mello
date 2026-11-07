@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use slint::{ComponentHandle, Model};
 
 use crate::app_context::AppContext;
-use crate::{BannerGame, BannerPicker, InviteNamePicker};
+use crate::{BannerGame, BannerPicker, CrewEmojiUi, InviteNamePicker};
 
 /// The banner is saved at the shape of the link card.
 pub(crate) const BANNER_FRAME: (u32, u32) = (1200, 630);
@@ -21,11 +21,13 @@ type PendingJpeg = Arc<Mutex<Option<Vec<u8>>>>;
 
 pub fn wire(ctx: &AppContext) {
     let pending: PendingJpeg = Arc::new(Mutex::new(None));
+    let pending_emoji: PendingJpeg = Arc::new(Mutex::new(None));
 
     // The actions on the face of a gift. The view closes itself.
     {
         let ctx2 = ctx.clone();
         let pending = pending.clone();
+        let pending_emoji = pending_emoji.clone();
         ctx.app
             .global::<crate::SealedUi>()
             .on_quest_action(move |action| match action.as_str() {
@@ -35,8 +37,35 @@ pub fn wire(ctx: &AppContext) {
                     choose_banner_image(&ctx2, &pending);
                 }
                 "link" => open_invite_name(&ctx2),
+                "emoji" => open_emoji_add(&ctx2, &pending_emoji),
                 other => log::info!("[gifts] action {other} has no screen yet"),
             });
+    }
+
+    let eu = ctx.app.global::<CrewEmojiUi>();
+    {
+        let ctx2 = ctx.clone();
+        let pending = pending_emoji.clone();
+        eu.on_add_requested(move || open_emoji_add(&ctx2, &pending));
+    }
+    {
+        let ctx2 = ctx.clone();
+        let pending = pending_emoji.clone();
+        eu.on_choose_image(move || choose_emoji_image(&ctx2, &pending));
+    }
+    {
+        let ctx2 = ctx.clone();
+        let pending = pending_emoji.clone();
+        eu.on_save(move || save_emoji(&ctx2, &pending));
+    }
+    {
+        let ctx2 = ctx.clone();
+        eu.on_remove(move |name| {
+            let _ = ctx2.cmd_tx.send(mello_core::Command::RemoveCrewEmoji {
+                crew_id: ctx2.app.get_active_crew_id().to_string(),
+                name: name.to_string(),
+            });
+        });
     }
 
     let np = ctx.app.global::<InviteNamePicker>();
@@ -264,6 +293,20 @@ fn save_banner(ctx: &AppContext, pending: &PendingJpeg) {
 
 /// The answer to a save: close the picker, or say why it failed.
 pub(crate) fn on_gift_result(ctx: &AppContext, gift: &str, failed: Option<&str>) {
+    if gift == "emoji" {
+        let eu = ctx.app.global::<CrewEmojiUi>();
+        if eu.get_busy() {
+            eu.set_busy(false);
+            match failed {
+                Some(reason) => eu.set_error(reason.into()),
+                None => eu.set_open(false),
+            }
+        } else if let Some(reason) = failed {
+            // A remove that failed.
+            eu.set_error(reason.into());
+        }
+        return;
+    }
     if gift == "link" {
         let np = ctx.app.global::<InviteNamePicker>();
         if np.get_busy() {
@@ -416,5 +459,109 @@ fn save_invite_name(ctx: &AppContext) {
     let _ = ctx.cmd_tx.send(mello_core::Command::SetInviteName {
         crew_id: ctx.app.get_active_crew_id().to_string(),
         name,
+    });
+}
+
+// ── Gift 3: crew emoji ──────────────────────────────────────────────────────
+
+/// A crew emoji is sent square, at 128 px, as a PNG (it keeps transparency).
+const EMOJI_SIDE: u32 = 128;
+/// The server takes an emoji of 256 KB at most (crew_gifts.go).
+const EMOJI_MAX_BYTES: usize = 256 << 10;
+
+/// Crop an image square and encode it at the emoji size.
+pub(crate) fn emoji_png(bytes: &[u8]) -> Option<(Vec<u8>, Vec<u8>, u32, u32)> {
+    let img = image::load_from_memory(bytes).ok()?.to_rgba8();
+    let square = crate::game_icons::crop_cover(img, (1, 1));
+    let sized = image::imageops::resize(
+        &square,
+        EMOJI_SIDE,
+        EMOJI_SIDE,
+        image::imageops::FilterType::Lanczos3,
+    );
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(sized.clone())
+        .write_to(&mut out, image::ImageFormat::Png)
+        .ok()?;
+    let png = out.into_inner();
+    (png.len() <= EMOJI_MAX_BYTES).then(|| (png, sized.into_raw(), EMOJI_SIDE, EMOJI_SIDE))
+}
+
+fn open_emoji_add(ctx: &AppContext, pending: &PendingJpeg) {
+    *pending.lock().expect("emoji png lock") = None;
+    let eu = ctx.app.global::<CrewEmojiUi>();
+    eu.set_name("".into());
+    eu.set_image(slint::Image::default());
+    eu.set_has_image(false);
+    eu.set_busy(false);
+    eu.set_error("".into());
+    eu.set_open(true);
+    log::info!("[gifts] crew emoji screen open");
+}
+
+fn choose_emoji_image(ctx: &AppContext, pending: &PendingJpeg) {
+    let app_weak = ctx.app.as_weak();
+    let pending = pending.clone();
+    ctx.rt.spawn(async move {
+        let Some(file) = rfd::AsyncFileDialog::new()
+            .add_filter("Images", &["png", "jpg", "jpeg", "gif"])
+            .pick_file()
+            .await
+        else {
+            return;
+        };
+        let bytes = file.read().await;
+        let made = if bytes.len() > 20 << 20 {
+            None
+        } else {
+            emoji_png(&bytes)
+        };
+        let preview = made.map(|(png, rgba, w, h)| {
+            *pending.lock().expect("emoji png lock") = Some(png);
+            (rgba, w, h)
+        });
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            let eu = app.global::<CrewEmojiUi>();
+            match preview {
+                Some((rgba, w, h)) => {
+                    eu.set_image(crate::avatar::rgba_to_image(&rgba, w, h));
+                    eu.set_has_image(true);
+                    eu.set_error("".into());
+                }
+                None => eu.set_error("That file is not an image we can use.".into()),
+            }
+        });
+    });
+}
+
+/// The emoji name rule of the server: 2 to 24 lower-case letters, digits or
+/// underscores.
+pub(crate) fn emoji_name_ok(name: &str) -> bool {
+    crate::converters::crew_emoji_token(&format!(":{name}:")).is_some()
+}
+
+fn save_emoji(ctx: &AppContext, pending: &PendingJpeg) {
+    let eu = ctx.app.global::<CrewEmojiUi>();
+    let name = eu.get_name().trim().trim_matches(':').to_lowercase();
+    if eu.get_busy() {
+        return;
+    }
+    if !emoji_name_ok(&name) {
+        eu.set_error("A name is 2 to 24 letters, digits or underscores.".into());
+        return;
+    }
+    let Some(png) = pending.lock().expect("emoji png lock").clone() else {
+        return;
+    };
+    eu.set_busy(true);
+    eu.set_error("".into());
+    let _ = ctx.cmd_tx.send(mello_core::Command::UploadCrewEmoji {
+        crew_id: ctx.app.get_active_crew_id().to_string(),
+        name,
+        mime: "image/png".into(),
+        bytes: png,
     });
 }

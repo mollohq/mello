@@ -67,6 +67,66 @@ pub(crate) fn refresh_banners(ctx: &crate::app_context::AppContext) {
     }
 }
 
+/// The crew emoji of the active crew changed (crew state): keep them, ask
+/// for their images, and build the picker and the chat again.
+pub(crate) fn set_crew_emoji(
+    ctx: &crate::app_context::AppContext,
+    emoji: Vec<mello_core::crew_state::CrewEmoji>,
+    owner: bool,
+) {
+    *ctx.crew_emoji.borrow_mut() = emoji;
+    ctx.crew_emoji_owner.set(owner);
+    refresh_crew_emoji(ctx);
+}
+
+/// Build the crew emoji of the picker and the add screen, and the chat rows,
+/// from the list and the loaded images.
+pub(crate) fn refresh_crew_emoji(ctx: &crate::app_context::AppContext) {
+    use slint::ComponentHandle as _;
+    let viewer = ctx.app.get_user_id().to_string();
+    let owner = ctx.crew_emoji_owner.get();
+    let rows: Vec<crate::CrewEmojiData> = ctx
+        .crew_emoji
+        .borrow()
+        .iter()
+        .map(|e| {
+            let img = media_image(ctx, &e.url);
+            crate::CrewEmojiData {
+                name: e.name.clone().into(),
+                has_image: img.is_some(),
+                image: img.unwrap_or_default(),
+                added_by: if e.added_by == viewer {
+                    "You".into()
+                } else {
+                    e.added_by_name.clone().into()
+                },
+                can_remove: owner || e.added_by == viewer,
+            }
+        })
+        .collect();
+    let ui = ctx.app.global::<crate::CrewEmojiUi>();
+    ui.set_crew_name(ctx.app.get_active_crew_name());
+    ui.set_free((EMOJI_SLOTS - rows.len() as i32).max(0));
+    ui.set_emoji(slint::ModelRc::new(slint::VecModel::from(rows)));
+    ui.set_enabled(emoji_gift_open(ctx));
+    super::chat::refresh_chat_ui(ctx);
+}
+
+/// Five crew emoji for every crew (crew_gifts.go).
+const EMOJI_SLOTS: i32 = 5;
+
+/// The emoji gift is open: the crew has no quests (made before they
+/// shipped, or the feed says nothing), or its first call is done.
+fn emoji_gift_open(ctx: &crate::app_context::AppContext) -> bool {
+    let active = ctx.app.get_active_crew_id();
+    ctx.last_feed
+        .borrow()
+        .as_ref()
+        .filter(|f| f.crew_id == active.as_str())
+        .and_then(|f| f.zones.quests.as_ref())
+        .is_none_or(|q| q.steps.call.is_some())
+}
+
 /// The events of the crew quests gifts.
 pub(crate) fn handle(ctx: &crate::app_context::AppContext, event: mello_core::events::Event) {
     use mello_core::events::Event;
@@ -83,6 +143,7 @@ pub(crate) fn handle(ctx: &crate::app_context::AppContext, event: mello_core::ev
             ctx.media_images.borrow_mut().insert(url, img);
             super::zones::refresh(ctx);
             refresh_banners(ctx);
+            refresh_crew_emoji(ctx);
         }
         Event::CrewGiftChanged { crew_id, gift } => {
             log::info!("[gifts] {gift} changed for crew {crew_id}");

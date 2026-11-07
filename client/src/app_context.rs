@@ -98,6 +98,10 @@ pub struct AppContext {
     /// (`handlers/quests.rs`, `media_image`). `None`: asked, not here yet,
     /// or the fetch failed; either way it is not asked again.
     pub media_images: Rc<RefCell<HashMap<String, Option<slint::Image>>>>,
+    /// The crew emoji of the active crew, from crew state (crew quests gift 3).
+    pub crew_emoji: Rc<RefCell<Vec<mello_core::crew_state::CrewEmoji>>>,
+    /// The viewer owns the active crew: every crew emoji can be removed.
+    pub crew_emoji_owner: Rc<Cell<bool>>,
     /// The last crew feed, so cards that name members (head2head, invite) can
     /// be built again when the member list arrives after the feed.
     pub last_feed: Rc<RefCell<Option<mello_core::crew_events::FeedResponse>>>,
@@ -231,6 +235,8 @@ impl AppContext {
             dbg_hist: Rc::new(RefCell::new(crate::DebugHistory::new())),
             avatar_cache: Rc::new(RefCell::new(HashMap::new())),
             media_images: Rc::new(RefCell::new(HashMap::new())),
+            crew_emoji: Rc::new(RefCell::new(Vec::new())),
+            crew_emoji_owner: Rc::new(Cell::new(false)),
             last_feed: Rc::new(RefCell::new(None)),
             zones_history_pending: Rc::new(Cell::new(0)),
             live_games: Rc::new(RefCell::new(Default::default())),
@@ -306,6 +312,8 @@ impl Clone for AppContext {
             dbg_hist: self.dbg_hist.clone(),
             avatar_cache: self.avatar_cache.clone(),
             media_images: self.media_images.clone(),
+            crew_emoji: self.crew_emoji.clone(),
+            crew_emoji_owner: self.crew_emoji_owner.clone(),
             last_feed: self.last_feed.clone(),
             zones_history_pending: self.zones_history_pending.clone(),
             live_games: self.live_games.clone(),

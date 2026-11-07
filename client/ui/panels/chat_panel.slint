@@ -1,6 +1,7 @@
 import { Theme, MelloTextInput } from "../theme.slint";
 import { CutShape, CutButtonShape, CutMask } from "../components/cut.slint";
 import { UserAvatar } from "../components/avatar.slint";
+import { CrewEmojiUi } from "../components/crew_emoji.slint";
 import { ChatFocus, ChatMessageData, ChatLinkData, ChatImageData, AttachmentData, GifItemData, EmojiItemData, EmojiRowData, EmojiCategoryData, MentionMemberData } from "../types.slint";
 import { ListView } from "std-widgets.slint";
 
@@ -1042,7 +1043,20 @@ export component ChatPanel inherits Rectangle {
                                     horizontal-stretch: 1;
                                     spacing: 6px;
 
-                                    StyledText {
+                                    // A message of crew emoji only: the images, big.
+                                    if msg.crew-emoji.length > 0: HorizontalLayout {
+                                        accessible-role: text;
+                                        accessible-label: msg.text;
+                                        spacing: 6px;
+                                        alignment: start;
+                                        for img in msg.crew-emoji: Image {
+                                            source: img;
+                                            width: 48px;
+                                            height: 48px;
+                                            image-fit: cover;
+                                        }
+                                    }
+                                    if msg.crew-emoji.length == 0: StyledText {
                                         // A StyledText gets no accessible text of its own, as a
                                         // Text does. Without these, a screen reader and the e2e
                                         // driver cannot read the message.
@@ -1399,7 +1413,13 @@ export component ChatPanel inherits Rectangle {
                                 alignment: center;
                                 padding-left: 6px;
                                 padding-right: 8px;
-                                Text {
+                                if r.has-image: Image {
+                                    source: r.image;
+                                    width: 16px;
+                                    height: 16px;
+                                    image-fit: cover;
+                                }
+                                if !r.has-image: Text {
                                     text: r.emoji;
                                     font-size: 12px;
                                     vertical-alignment: center;
@@ -1869,6 +1889,81 @@ export component ChatPanel inherits Rectangle {
                         font-size: Theme.font-md;
                         color: Theme.text-tertiary;
                         vertical-alignment: center;
+                    }
+                }
+
+                // The crew's own emoji first (crew quests gift 3), then a "+"
+                // for each free slot. Only while not searching.
+                if emoji-search-input.text == "" && (CrewEmojiUi.emoji.length > 0 || (CrewEmojiUi.enabled && CrewEmojiUi.free > 0)): VerticalLayout {
+                    spacing: 2px;
+                    Text {
+                        font-family: Theme.font-label;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: Theme.track-label;
+                        text: CrewEmojiUi.crew-name.to-uppercase();
+                        font-size: 9px;
+                        color: Theme.text-tertiary;
+                        height: 14px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    crew-row := HorizontalLayout {
+                        spacing: 2px;
+                        height: 36px;
+                        alignment: start;
+                        for e[ei] in CrewEmojiUi.emoji: Rectangle {
+                            width: (crew-row.width - 16px) / 9;
+                            background: crew-touch.has-hover ? Theme.bg-tertiary : transparent;
+                            if e.has-image: Image {
+                                source: e.image;
+                                width: 26px;
+                                height: 26px;
+                                image-fit: cover;
+                            }
+                            if !e.has-image: Text {
+                                text: ":" + e.name + ":";
+                                font-family: Theme.font-body;
+                                font-size: 9px;
+                                color: Theme.text-tertiary;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                width: parent.width;
+                                height: parent.height;
+                                overflow: elide;
+                            }
+                            crew-touch := TouchArea {
+                                accessible-role: button;
+                                accessible-label: ":" + e.name + ":";
+                                clicked => { root.pick-emoji(":" + e.name + ":"); }
+                            }
+                        }
+                        for i in (CrewEmojiUi.enabled ? CrewEmojiUi.free : 0): Rectangle {
+                            width: (crew-row.width - 16px) / 9;
+                            Rectangle {
+                                width: 28px;
+                                height: 28px;
+                                border-width: 1px;
+                                border-color: add-touch.has-hover ? Theme.graphic-med : Theme.graphic-light;
+                                Text {
+                                    text: "+";
+                                    font-family: Theme.font-display;
+                                    font-size: 16px;
+                                    color: Theme.text-dim;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    width: parent.width;
+                                    height: parent.height;
+                                }
+                            }
+                            add-touch := TouchArea {
+                                accessible-role: button;
+                                accessible-label: "Add emoji";
+                                clicked => {
+                                    root.emoji-popover-open = false;
+                                    CrewEmojiUi.add-requested();
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -2502,5 +2597,40 @@ export component PreviewGif inherits ChatPanel {
         { gif-id: "4", url: "", preview-url: "", width: 200, height: 150 },
         { gif-id: "5", url: "", preview-url: "", width: 200, height: 150 },
         { gif-id: "6", url: "", preview-url: "", width: 200, height: 150 },
+    ];
+}
+
+/// Crew emoji (crew quests gift 3): a message of one crew emoji, a reaction
+/// with one, and the picker with the crew's row and its free slots.
+export component PreviewCrewEmoji inherits PreviewEmoji {
+    init => {
+        CrewEmojiUi.crew-name = "bob_test_26";
+        CrewEmojiUi.enabled = true;
+        CrewEmojiUi.free = 2;
+        CrewEmojiUi.emoji = [
+            { name: "ida_rage", image: @image-url("../previews/fixtures/avatars/ida.svg"), has-image: true },
+            { name: "brawl", image: @image-url("../previews/fixtures/capsule-sample-2.png"), has-image: true },
+            { name: "gg", image: @image-url("../previews/fixtures/capsule-sample-1.png"), has-image: true },
+        ];
+    }
+    messages: [
+        {
+            message-id: "c1", sender-id: "u2", sender-name: "Ida", sender-initials: "ID",
+            text: "who let me drop off the edge three times",
+            display-text: "who let me drop off the edge three times",
+            display-styled: @markdown("who let me drop off the edge three times"),
+            display-time: "21:42", is-group-start: true,
+            reactions: [
+                { emoji: ":ida_rage:", count: 2, mine: true, image: @image-url("../previews/fixtures/avatars/ida.svg"), has-image: true },
+                { emoji: "😂", count: 1, mine: false },
+            ],
+        },
+        {
+            message-id: "c2", sender-id: "u1", sender-name: "bobdev", sender-initials: "B0",
+            text: ":ida_rage:", display-text: ":ida_rage:",
+            display-styled: @markdown(":ida_rage:"),
+            display-time: "21:43", is-group-start: true,
+            crew-emoji: [@image-url("../previews/fixtures/avatars/ida.svg")],
+        },
     ];
 }

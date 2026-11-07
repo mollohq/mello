@@ -216,6 +216,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
             );
 
             let crews = ctx.app.get_crews();
+            // The crew emoji of the active crew, kept after the crews.
+            let mut emoji = None;
             let updated: Vec<CrewData> = (0..crews.row_count())
                 .map(|i| {
                     let mut c = crews.row_data(i).unwrap();
@@ -236,6 +238,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         c.banner_url = url.into();
                         c.invite_name = state.invite_name.clone().into();
                         super::quests::fill_banner(ctx, &mut c);
+                        if c.id == ctx.app.get_active_crew_id() {
+                            emoji = Some(state.emoji.clone());
+                        }
                         c.voice_count = 0;
                         c.v0_name = "".into();
                         c.v0_initials = "".into();
@@ -362,6 +367,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 })
                 .collect();
             crate::converters::sync_crews(&ctx.app, updated);
+            if let Some(e) = emoji {
+                super::quests::set_crew_emoji(ctx, e, state.my_role == 0);
+            }
 
             if ctx.app.get_active_crew_id() == state.crew_id.as_str() {
                 if let Some(ref stream) = state.stream {

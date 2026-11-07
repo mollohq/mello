@@ -574,6 +574,10 @@ export struct ReactionData {
     count: int,
     /// This user is among the reactors: the chip gets the white outline.
     mine: bool,
+    /// A crew emoji (`:name:`, crew quests gift 3): its image in place of
+    /// the text, once loaded.
+    image: image,
+    has-image: bool,
 }
 
 /// One image of an image message. `image` is filled by the client's image
@@ -635,6 +639,9 @@ export struct ChatMessageData {
     gif-url: string,
     /// Only emoji, at most three: the body renders at Theme.font-xxl.
     is-emoji-only: bool,
+    /// Only crew emoji (`:name:`), at most three, all loaded: the body is
+    /// these images, big (crew quests gift 3).
+    crew-emoji: [image],
     is-image: bool,
     images: [ChatImageData],
     /// "Today", "Yesterday" or a date when this message starts a day. "" otherwise.

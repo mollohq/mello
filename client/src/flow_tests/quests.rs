@@ -742,3 +742,192 @@ fn the_invite_name_rule_matches_the_server() {
         assert_eq!(ok(name), want, "{name}");
     }
 }
+
+// ── 4e: crew emoji ──────────────────────────────────────────────────────────
+
+fn emoji_ui(h: &Harness) -> crate::CrewEmojiUi<'_> {
+    h.app().global::<crate::CrewEmojiUi>()
+}
+
+const GG: &str = "https://media.example/crew-emoji/crew-0/gg.png";
+
+/// Crew state with the emoji :gg: (added by Ida) for the viewer, the owner.
+fn crew_with_gg(h: &mut Harness) {
+    h.app().set_user_id("user-1".into());
+    let state = mello_core::crew_state::CrewState {
+        crew_id: "crew-0".into(),
+        name: "Crew 0".into(),
+        my_role: 0,
+        emoji: vec![mello_core::crew_state::CrewEmoji {
+            id: "e1".into(),
+            name: "gg".into(),
+            url: GG.into(),
+            added_by: "u-ida".into(),
+            added_by_name: "Ida".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    h.emit(Event::CrewStateLoaded { state });
+}
+
+#[test]
+fn crew_emoji_load_into_the_picker() {
+    let mut h = Harness::new();
+    on_crew(&mut h);
+    h.commands();
+    crew_with_gg(&mut h);
+    assert_eq!(fetches(&h.commands()), [GG], "the image is asked for");
+    let row = |h: &Harness| emoji_ui(h).get_emoji().row_data(0).expect(":gg:");
+    assert_eq!(row(&h).name.as_str(), "gg");
+    assert!(!row(&h).has_image);
+    assert!(row(&h).can_remove, "the owner removes any emoji");
+    assert_eq!(row(&h).added_by.as_str(), "Ida");
+    assert_eq!(emoji_ui(&h).get_free(), 4);
+    assert!(
+        emoji_ui(&h).get_enabled(),
+        "a crew with no quests in the feed has emoji"
+    );
+    h.emit(Event::MediaImageLoaded {
+        url: GG.into(),
+        bytes: png_bytes(),
+    });
+    assert!(row(&h).has_image, "the image arrives in the picker");
+}
+
+#[test]
+fn a_crew_emoji_draws_in_reactions_and_alone_in_a_message() {
+    let mut h = Harness::new();
+    on_crew(&mut h);
+    crew_with_gg(&mut h);
+    h.emit(Event::MediaImageLoaded {
+        url: GG.into(),
+        bytes: png_bytes(),
+    });
+    let mut alone = chat_message_fixture("c1", "alice", 0);
+    alone.content = ":gg:".into();
+    alone.display_body = ":gg:".into();
+    let mut words = chat_message_fixture("c2", "bob", 1);
+    words.content = ":gg: nice".into();
+    words.display_body = ":gg: nice".into();
+    let mut unknown = chat_message_fixture("c3", "bob", 2);
+    unknown.content = ":nope:".into();
+    unknown.display_body = ":nope:".into();
+    h.emit(Event::MessagesLoaded {
+        messages: vec![alone, words, unknown],
+        has_more_history: false,
+    });
+    h.emit(Event::ChatReactionsLoaded {
+        crew_id: "crew-0".into(),
+        items: vec![reaction_update(
+            "c2",
+            &[(":gg:", &["u-ida"]), ("🔥", &["user-1"])],
+        )],
+    });
+    let rows = h.app().get_messages();
+    let row = |id: &str| {
+        (0..rows.row_count())
+            .filter_map(|i| rows.row_data(i))
+            .find(|r| r.message_id == id)
+            .expect("row")
+    };
+    assert_eq!(
+        row("c1").crew_emoji.row_count(),
+        1,
+        "one crew emoji alone draws big"
+    );
+    assert_eq!(row("c2").crew_emoji.row_count(), 0, "with words it is text");
+    assert_eq!(
+        row("c3").crew_emoji.row_count(),
+        0,
+        "an emoji the crew has not is text"
+    );
+    let chips: Vec<(String, bool)> = row("c2")
+        .reactions
+        .iter()
+        .map(|r| (r.emoji.to_string(), r.has_image))
+        .collect();
+    assert!(chips.contains(&(":gg:".into(), true)), "{chips:?}");
+    assert!(chips.contains(&("🔥".into(), false)), "{chips:?}");
+}
+
+#[test]
+fn add_emoji_opens_the_screen_and_remove_sends_the_command() {
+    let mut h = Harness::new();
+    on_crew(&mut h);
+    crew_with_gg(&mut h);
+    {
+        let settings = h.settings();
+        for step in ["made", "friend"] {
+            crate::sealed::mark_opened(
+                &mut settings.borrow_mut(),
+                "crew-0",
+                &crate::sealed::quest_key(step, "crew-0"),
+                crate::head2head::now_ms(),
+            );
+        }
+    }
+    h.emit(Event::FeedLoaded {
+        response: quests_feed(
+            "user-1",
+            serde_json::json!({"friend": {"user_id": "u-ida"}, "call": {"minutes": 6}}),
+            serde_json::json!({"invite_name": "x1y2z", "banner_url": "u"}),
+        ),
+    });
+    open_face_action(&mut h, "Add emoji");
+    assert!(emoji_ui(&h).get_open(), "Add emoji opens the screen");
+    // Wait a frame: the modal is a conditional element.
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    h.commands();
+    h.click_label("Remove :gg:");
+    assert!(
+        h.commands()
+            .iter()
+            .any(|c| matches!(c, Command::RemoveCrewEmoji { crew_id, name }
+            if crew_id == "crew-0" && name == "gg")),
+        "Remove sends the command"
+    );
+
+    emoji_ui(&h).set_busy(true);
+    h.emit(Event::CrewGiftChanged {
+        crew_id: "crew-0".into(),
+        gift: "emoji".into(),
+    });
+    assert!(!emoji_ui(&h).get_open(), "an added emoji closes the screen");
+}
+
+#[test]
+fn the_picker_offers_a_free_slot_that_opens_the_screen() {
+    let mut h = Harness::new();
+    on_crew(&mut h);
+    crew_with_gg(&mut h);
+    h.app().set_emoji_popover_open(true);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(
+        h.controls_labelled(":gg:").len(),
+        1,
+        "the crew's emoji are in the picker"
+    );
+    assert_eq!(
+        h.controls_labelled("Add emoji").len(),
+        4,
+        "a + for each free slot"
+    );
+    h.click_label("Add emoji");
+    assert!(emoji_ui(&h).get_open());
+    assert!(!h.app().get_emoji_popover_open(), "the picker closes");
+}
+
+#[test]
+fn an_emoji_image_is_a_square_png_and_names_follow_the_server() {
+    let img = image::RgbaImage::from_pixel(300, 200, image::Rgba([10, 20, 30, 255]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut png, image::ImageFormat::Png)
+        .expect("png");
+    let (out, _, w, h) = crate::callbacks::emoji_png_for_test(&png.into_inner()).expect("an emoji");
+    assert_eq!((w, h), (128, 128));
+    assert_eq!(&out[1..4], b"PNG");
+    use crate::callbacks::emoji_name_ok_for_test as ok;
+    assert!(ok("gg") && ok("ida_rage") && ok("w45"));
+    assert!(!ok("g") && !ok("Ida") && !ok("ida-rage") && !ok(&"a".repeat(25)));
+}
