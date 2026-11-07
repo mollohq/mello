@@ -12,6 +12,7 @@
 #include "voice_playout.hpp"
 #include "device_enumerator.hpp"
 #include "clip_audio_stream.hpp"
+#include "ui_sound_mixer.hpp"
 #include "clip_buffer.hpp"
 #include "clip_encoder.hpp"
 #include "vad.hpp"
@@ -269,6 +270,16 @@ public:
     /// reference. Any thread.
     void set_clip_stream(std::shared_ptr<ClipAudioStream> stream);
 
+    /// Notification sounds (ui_sound_mixer.hpp). They play after the deafen
+    /// gate, are not in a voice clip, and are in the echo reference. The
+    /// output volume does not apply: `gain` is the sound volume. Control
+    /// thread, serialized by the caller.
+    bool load_ui_sound(uint32_t id, const int16_t* stereo, size_t frames) {
+        return ui_sounds_.load(id, stereo, frames);
+    }
+    bool play_ui_sound(uint32_t id, float gain) { return ui_sounds_.play(id, gain); }
+    size_t ui_sounds_playing() const { return ui_sounds_.active_voices(); }
+
 private:
     void on_captured_audio(const int16_t* samples, size_t count);
     void process_and_encode_frame(int16_t* frame, uint32_t timestamp);
@@ -473,6 +484,9 @@ private:
     // The game clip that plays. Read with std::atomic_load on the render
     // thread, which then holds it for one frame.
     std::shared_ptr<ClipAudioStream> clip_stream_;
+
+    // Notification sounds (ui_sound_mixer.hpp). Mixed in render_frame.
+    UiSoundMixer ui_sounds_;
 };
 
 } // namespace mello::audio

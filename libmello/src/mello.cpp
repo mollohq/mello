@@ -647,6 +647,30 @@ MelloResult mello_clip_stop_playback(MelloContext* ctx) {
     }
 }
 
+static_assert(mello::audio::UiSoundMixer::kMaxSounds == MELLO_SOUND_SLOTS,
+              "mello.h MELLO_SOUND_SLOTS must match the mixer");
+
+MelloResult mello_sound_load(MelloContext* ctx, uint32_t id, const int16_t* stereo_pcm,
+                             size_t frames) {
+    if (!ctx || !stereo_pcm || id >= MELLO_SOUND_SLOTS) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        return ctx_cast(ctx)->audio().load_ui_sound(id, stereo_pcm, frames)
+                   ? MELLO_OK
+                   : MELLO_ERROR_INVALID_PARAM;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+}
+
+MelloResult mello_sound_play(MelloContext* ctx, uint32_t id, float gain) {
+    if (!ctx || id >= MELLO_SOUND_SLOTS) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        return ctx_cast(ctx)->audio().play_ui_sound(id, gain) ? MELLO_OK : MELLO_ERROR_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+}
+
 bool mello_clip_is_playing(MelloContext* ctx) {
     if (!ctx) return false;
     return ctx_cast(ctx)->audio().clip_is_playing();

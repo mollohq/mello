@@ -1105,7 +1105,7 @@ void AudioPipeline::render_frame() {
     }
 
     // Clip playback into the speaker output (retained PCM, lock-free read).
-    bool has_clip_audio = false;
+    bool has_local_audio = false;
     if (clip_playing_.load(std::memory_order_relaxed) &&
         !clip_paused_.load(std::memory_order_relaxed)) {
         const size_t pos = clip_playback_pos_.load(std::memory_order_relaxed);
@@ -1113,7 +1113,7 @@ void AudioPipeline::render_frame() {
         const size_t avail = (pos < total) ? (total - pos) : 0;
         const size_t to_read = (std::min)(kFrames, avail);
         if (to_read > 0) {
-            has_clip_audio = true;
+            has_local_audio = true;
             for (size_t i = 0; i < to_read; ++i) {
                 const int32_t c = clip_playback_pcm_[pos + i];
                 for (size_t ch = 0; ch < 2; ++ch) {
@@ -1135,20 +1135,27 @@ void AudioPipeline::render_frame() {
     if (const auto stream = std::atomic_load_explicit(&clip_stream_, std::memory_order_acquire)) {
         if (stream->mix_into(stereo, mono_.data(), kFrames,
                              static_cast<int64_t>(steady_now_us()))) {
-            has_clip_audio = true;
+            has_local_audio = true;
         }
+    }
+
+    // Notification sounds: after the deafen gate (a deafened user hears the
+    // undeafen sound) and after the clip tap (a voice clip has none), but in
+    // the echo reference, so the mic does not send them.
+    if (ui_sounds_.mix_into(stereo, mono_.data(), kFrames)) {
+        has_local_audio = true;
     }
 
     // Far-end reference: the mixer output that plays, after NetEQ, so a
     // silent peer feeds silence (comfort noise at most), not PLC noise.
-    if (remote || has_clip_audio) {
+    if (remote || has_local_audio) {
         echo_canceller_.process_render(mono_.data(), static_cast<int>(kFrames));
         if (echo_suppressor_.enabled()) {
             echo_suppressor_.feed_far_end(mono_.data(), kFrames);
         }
     }
 
-    ring_audible_ = remote || has_clip_audio;
+    ring_audible_ = remote || has_local_audio;
     ring_pos_ = 0;
 }
 

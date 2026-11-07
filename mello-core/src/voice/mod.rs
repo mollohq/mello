@@ -141,6 +141,9 @@ pub struct VoiceManager {
     /// The joined channel's bitrate in kbps: the top rung of the encoder
     /// ladder (spec 10 section 4.6).
     channel_bitrate_kbps: u32,
+    /// Plays notification sounds on this context (sounds.rs). Detached
+    /// before the context is destroyed.
+    sound_player: Option<crate::sounds::SoundPlayer>,
 }
 
 // Safety: VoiceManager is only ever accessed from a single tokio task (the client run loop).
@@ -253,7 +256,18 @@ impl VoiceManager {
             rtp_stall_checks: 0,
             inband_speaking: Arc::new(InbandSpeaking::new()),
             channel_bitrate_kbps: crate::crew_state::DEFAULT_CHANNEL_BITRATE_KBPS,
+            sound_player: None,
         }
+    }
+
+    /// Loads the notification sounds into this context and lets `player`
+    /// play them. A manager without a context leaves the player silent.
+    pub fn attach_sound_player(&mut self, player: crate::sounds::SoundPlayer) {
+        if let Some(old) = self.sound_player.take() {
+            old.detach();
+        }
+        player.attach(self.ctx);
+        self.sound_player = Some(player);
     }
 
     pub fn mello_ctx(&self) -> *mut mello_sys::MelloContext {
@@ -1313,6 +1327,10 @@ impl Drop for VoiceManager {
             // direct voice sink must not reference the context destroyed below.
             if let Some(conn) = self.sfu_connection.take() {
                 conn.clear_direct_voice_sink();
+            }
+            // A player clone held by the UI must not reach the context below.
+            if let Some(player) = self.sound_player.take() {
+                player.detach();
             }
             unsafe {
                 mello_sys::mello_destroy(self.ctx);
