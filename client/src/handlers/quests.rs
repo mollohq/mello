@@ -32,6 +32,41 @@ pub(crate) fn media_image(ctx: &crate::app_context::AppContext, url: &str) -> Op
     None
 }
 
+/// The banner image of a crew: a game from the art cache, or an uploaded
+/// image from the media loader. Either may arrive later.
+pub(crate) fn fill_banner(ctx: &crate::app_context::AppContext, c: &mut crate::CrewData) {
+    let img = if !c.banner_game.is_empty() {
+        crate::game_icons::resolve_art_worker(
+            ctx,
+            &[c.banner_game.to_string()],
+            mello_core::art::ArtSlot::Hero,
+        )
+    } else {
+        media_image(ctx, c.banner_url.as_str())
+    };
+    c.has_banner = img.is_some();
+    c.banner = img.unwrap_or_default();
+}
+
+/// Fill the banner of every crew again: an image arrived.
+pub(crate) fn refresh_banners(ctx: &crate::app_context::AppContext) {
+    use slint::Model as _;
+    let crews = ctx.app.get_crews();
+    for i in 0..crews.row_count() {
+        let Some(mut c) = crews.row_data(i) else {
+            continue;
+        };
+        if c.banner_game.is_empty() && c.banner_url.is_empty() && !c.has_banner {
+            continue;
+        }
+        let had = c.has_banner;
+        fill_banner(ctx, &mut c);
+        if had != c.has_banner || c.has_banner {
+            crews.set_row_data(i, c);
+        }
+    }
+}
+
 /// The events of the crew quests gifts.
 pub(crate) fn handle(ctx: &crate::app_context::AppContext, event: mello_core::events::Event) {
     use mello_core::events::Event;
@@ -47,9 +82,11 @@ pub(crate) fn handle(ctx: &crate::app_context::AppContext, event: mello_core::ev
             }
             ctx.media_images.borrow_mut().insert(url, img);
             super::zones::refresh(ctx);
+            refresh_banners(ctx);
         }
         Event::CrewGiftChanged { crew_id, gift } => {
             log::info!("[gifts] {gift} changed for crew {crew_id}");
+            crate::callbacks::on_gift_result(ctx, &gift, None);
         }
         Event::CrewGiftFailed {
             crew_id,
@@ -57,6 +94,7 @@ pub(crate) fn handle(ctx: &crate::app_context::AppContext, event: mello_core::ev
             reason,
         } => {
             log::warn!("[gifts] {gift} failed for crew {crew_id}: {reason}");
+            crate::callbacks::on_gift_result(ctx, &gift, Some(&reason));
         }
         Event::InviteNameChecked {
             crew_id,

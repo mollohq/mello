@@ -226,6 +226,16 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         c.member_count = state.counts.total as i32;
                         c.online_count = state.counts.online as i32;
                         c.sfu_enabled = state.sfu_enabled;
+                        // Crew quests gifts: the banner, then its image.
+                        let (game, url) = state
+                            .banner
+                            .as_ref()
+                            .map(|b| (b.game_id.clone(), b.url.clone()))
+                            .unwrap_or_default();
+                        c.banner_game = game.into();
+                        c.banner_url = url.into();
+                        c.invite_name = state.invite_name.clone().into();
+                        super::quests::fill_banner(ctx, &mut c);
                         c.voice_count = 0;
                         c.v0_name = "".into();
                         c.v0_initials = "".into();

@@ -138,6 +138,12 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 super::games::on_icon_art_loaded(ctx, &game_id);
             }
             super::clip::refresh_game_art(ctx);
+            if slot == mello_core::art::ArtSlot::Hero {
+                super::quests::refresh_banners(ctx);
+            }
+            if slot == mello_core::art::ArtSlot::Header {
+                crate::callbacks::refresh_picker_art(ctx);
+            }
         }
         Event::SessionSummary {
             wins,

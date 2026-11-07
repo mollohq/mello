@@ -1,3 +1,4 @@
+import { CrewBannerModal, BannerPicker } from "panels/crew_banner_modal.slint";
 import { Theme } from "theme.slint";
 import {
     CrewData,
@@ -72,6 +73,7 @@ export { ClipPlayerUi }
 // --- end stage 9 ---
 
 
+export { BannerPicker }
 export { ChatFocus, BeltReveal, RecapSeal, Clock, SealedUi, CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, BeltHeroData, HeroStreamData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, NoticeEntryData, TesterData, InvitePersonData, Theme, VideoRect, FeedView, ForceUpdateWindow }
 
 export component MainWindow inherits Window {
@@ -1706,6 +1708,29 @@ export component MainWindow inherits Window {
 
     if plus-soon-open: PlusSoonModal {
         close-requested => { root.plus-soon-open = false; }
+    }
+
+    // Crew quests gift 1: the banner picker.
+    if BannerPicker.open: CrewBannerModal {
+        tab <=> BannerPicker.tab;
+        games: BannerPicker.games;
+        results: BannerPicker.results;
+        query <=> BannerPicker.query;
+        picked-id: BannerPicker.picked-id;
+        image: BannerPicker.image;
+        has-image: BannerPicker.has-image;
+        image-line: BannerPicker.image-line;
+        busy: BannerPicker.busy;
+        error: BannerPicker.error;
+        pick-game(id) => { BannerPicker.picked-id = id; }
+        search(q) => { BannerPicker.search(q); }
+        choose-image => { BannerPicker.choose-image(); }
+        save => { BannerPicker.save(); }
+        close-requested => {
+            if !BannerPicker.busy {
+                BannerPicker.open = false;
+            }
+        }
     }
 
     if invite-share-open: InviteShareModal {

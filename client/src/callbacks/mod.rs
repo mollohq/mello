@@ -6,6 +6,10 @@ mod crew_settings;
 mod game;
 mod games;
 pub(crate) mod onboarding;
+mod quests;
+#[cfg(test)]
+pub(crate) use quests::banner_jpeg as banner_jpeg_for_test;
+pub(crate) use quests::{on_gift_result, refresh_picker_art};
 mod sealed;
 pub(crate) mod settings;
 mod streaming;
@@ -24,6 +28,7 @@ pub fn wire_all(ctx: &AppContext) {
     chat::wire(ctx);
     clip::wire(ctx);
     sealed::wire(ctx);
+    quests::wire(ctx);
     streaming::wire(ctx);
     settings::wire(ctx);
     onboarding::wire(ctx);

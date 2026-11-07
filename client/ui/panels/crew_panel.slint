@@ -711,7 +711,9 @@ component ActiveCrewCard inherits Rectangle {
         spacing: 0px;
 
         Rectangle {
-            height: 56px;
+            // A crew banner (crew quests gift 1) makes the header 88 px: the
+            // art, faded into the header at the bottom, the row on top.
+            height: crew.has-banner ? 88px : 56px;
             background: transparent;
             border-width: 0px;
 
@@ -727,7 +729,43 @@ component ActiveCrewCard inherits Rectangle {
                 fill: Theme.raised;
             }
 
+            if crew.has-banner: Rectangle {
+                x: Theme.keyline;
+                y: Theme.keyline;
+                width: parent.width - 2 * Theme.keyline;
+                height: parent.height - Theme.keyline;
+                clip: true;
+                Image {
+                    source: crew.banner;
+                    width: parent.width;
+                    height: parent.height;
+                    image-fit: cover;
+                }
+                // Chrome over art gets a black wash, not the graphite ramp.
+                Rectangle {
+                    background: @linear-gradient(180deg, Theme.media-ground.with-alpha(0.1) 0%, Theme.media-ground.with-alpha(0.45) 45%, Theme.raised 100%);
+                }
+                // The cut corner: paint the panel back, then the keyline.
+                CutMask {
+                    width: parent.width; height: parent.height;
+                    n: Theme.notch-sm - Theme.keyline;
+                    corner: "tr";
+                    fill: Theme.surface;
+                }
+            }
+            if crew.has-banner: CutShape {
+                width: parent.width;
+                height: parent.height;
+                n: Theme.notch-sm;
+                corner: "tr";
+                fill: transparent;
+                stroke: Theme.action-line;
+                stroke-width: Theme.keyline;
+            }
+
             HorizontalLayout {
+                y: parent.height - 56px;
+                height: 56px;
                 padding-left: 10px;
                 padding-right: 10px;
                 spacing: 8px;
@@ -1492,4 +1530,24 @@ export component MemberVolumePreview inherits Window {
         initials: "b0";
         volume: 70;
     }
+}
+
+// Crew quests gift 1: the active crew has a banner. The header is 88 px, the
+// art fades into it, the row stands at the bottom.
+//   slint-viewer --screenshot out.png --component BannerPreview \
+//     client/ui/panels/crew_panel.slint
+export component BannerPreview inherits Preview {
+    crews: [
+        {
+            id: "c1", name: "bob_test_26", initials: "BT", member-count: 2, online-count: 2,
+            sfu-enabled: true, voice-count: 2,
+            banner: @image-url("../previews/fixtures/stream-sample-2.png"), has-banner: true,
+            v0-initials: "b0", v0-name: "b0bben", v0-speaking: false,
+            v1-initials: "Id", v1-name: "Ida", v1-speaking: true,
+        },
+        {
+            id: "c4", name: "Quiet Squad", initials: "QS", member-count: 5, online-count: 0,
+            catchup-loaded: true, catchup-text: "Quiet this week.",
+        },
+    ];
 }

@@ -426,3 +426,166 @@ fn a_failed_media_image_is_not_asked_again() {
     assert_eq!(emoji.state.as_str(), "open");
     assert!(!emoji.has_art);
 }
+
+// ── 4c: the banner picker and the crew header ──────────────────────────────
+
+fn picker(h: &Harness) -> crate::BannerPicker<'_> {
+    h.app().global::<crate::BannerPicker>()
+}
+
+fn feed_with_session(owner: &str) -> FeedResponse {
+    let mut f = quests_feed(owner, serde_json::json!({}), serde_json::json!({}));
+    f.zones.sessions = vec![serde_json::from_value(serde_json::json!({
+        "id": "s1", "type": "session", "ts": MADE_MS,
+        "data": {"game_id": "steam-291550", "game_name": "Brawlhalla", "duration_min": 60, "player_ids": ["user-1"]}
+    }))
+    .expect("a session entry")];
+    f
+}
+
+fn open_face_action(h: &mut Harness, label: &str) {
+    clock_at(h, 0);
+    h.click_label("Sealed gift, open it");
+    clock_at(h, 2000);
+    h.click_label(label);
+}
+
+#[test]
+fn game_art_opens_the_picker_with_the_crews_games_and_save_sets_it() {
+    let mut h = Harness::new();
+    on_crew(&mut h);
+    h.emit(Event::FeedLoaded {
+        response: feed_with_session("user-1"),
+    });
+    open_face_action(&mut h, "Game art");
+    assert!(picker(&h).get_open(), "the picker opens");
+    assert_eq!(picker(&h).get_tab(), 0);
+    let games: Vec<String> = picker(&h)
+        .get_games()
+        .iter()
+        .map(|g| g.name.to_string())
+        .collect();
+    assert_eq!(
+        games.first().map(String::as_str),
+        Some("Brawlhalla"),
+        "{games:?}"
+    );
+    assert_eq!(
+        picker(&h).get_picked_id().as_str(),
+        "steam-291550",
+        "the first game is picked"
+    );
+
+    h.commands();
+    h.click_label("Save");
+    let sent = h.commands();
+    assert!(
+        sent.iter().any(
+            |c| matches!(c, Command::SetCrewBannerGame { crew_id, game_id }
+            if crew_id == "crew-0" && game_id == "steam-291550")
+        ),
+        "{sent:?}"
+    );
+    assert!(picker(&h).get_busy());
+
+    h.emit(Event::CrewGiftFailed {
+        crew_id: "crew-0".into(),
+        gift: "banner".into(),
+        reason: "Only the owner sets the banner.".into(),
+    });
+    assert!(
+        picker(&h).get_open() && !picker(&h).get_busy(),
+        "a failure keeps the picker"
+    );
+    assert_eq!(
+        picker(&h).get_error().as_str(),
+        "Only the owner sets the banner."
+    );
+
+    h.click_label("Save");
+    h.emit(Event::CrewGiftChanged {
+        crew_id: "crew-0".into(),
+        gift: "banner".into(),
+    });
+    assert!(!picker(&h).get_open(), "a saved banner closes the picker");
+}
+
+#[test]
+fn upload_opens_the_picker_on_your_image() {
+    let mut h = Harness::new();
+    on_crew(&mut h);
+    h.emit(Event::FeedLoaded {
+        response: feed_with_session("user-1"),
+    });
+    open_face_action(&mut h, "Upload");
+    let bp = h.app().global::<crate::BannerPicker>();
+    assert!(bp.get_open());
+    assert_eq!(bp.get_tab(), 1);
+    assert!(!bp.get_has_image(), "nothing chosen yet");
+}
+
+#[test]
+fn the_search_finds_games_in_the_catalogue() {
+    let mut h = Harness::new();
+    on_crew(&mut h);
+    h.emit(Event::FeedLoaded {
+        response: feed_with_session("user-1"),
+    });
+    open_face_action(&mut h, "Game art");
+    let bp = h.app().global::<crate::BannerPicker>();
+    bp.invoke_search("rocket league".into());
+    let hits: Vec<String> = bp
+        .get_results()
+        .iter()
+        .map(|g| g.name.to_string())
+        .collect();
+    assert!(hits.iter().any(|n| n == "Rocket League"), "{hits:?}");
+    assert!(
+        bp.get_results().iter().all(|g| g.id.starts_with("igdb-")),
+        "a catalogue game is an igdb- id for the art Worker"
+    );
+}
+
+#[test]
+fn an_uploaded_banner_shows_in_the_crew_header() {
+    let mut h = Harness::new();
+    on_crew(&mut h);
+    let url = "https://media.example/crew-banners/crew-0/b.jpg";
+    h.commands();
+    let mut state = mello_core::crew_state::CrewState {
+        crew_id: "crew-0".into(),
+        name: "Crew 0".into(),
+        ..Default::default()
+    };
+    state.banner = Some(mello_core::crew_state::CrewBanner {
+        kind: "upload".into(),
+        url: url.into(),
+        version: 1,
+        ..Default::default()
+    });
+    h.emit(Event::CrewStateLoaded { state });
+    assert_eq!(fetches(&h.commands()), [url]);
+    let crew = |h: &Harness| h.app().get_crews().row_data(0).expect("crew 0");
+    assert!(!crew(&h).has_banner);
+    h.emit(Event::MediaImageLoaded {
+        url: url.into(),
+        bytes: png_bytes(),
+    });
+    assert!(crew(&h).has_banner, "the header draws the banner");
+    assert_eq!(crew(&h).banner_url.as_str(), url);
+}
+
+#[test]
+fn a_banner_image_is_cropped_to_the_link_card_and_fits_the_limit() {
+    let img = image::RgbaImage::from_fn(3000, 1000, |x, y| {
+        image::Rgba([(x % 251) as u8, (y % 241) as u8, ((x * y) % 239) as u8, 255])
+    });
+    let mut png = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut png, image::ImageFormat::Png)
+        .expect("png");
+    let (jpeg, _, w, h) =
+        crate::callbacks::banner_jpeg_for_test(&png.into_inner()).expect("a banner");
+    assert_eq!((w, h), (1200, 630));
+    assert!(jpeg.len() <= 400 << 10, "{} bytes", jpeg.len());
+    assert_eq!(&jpeg[..2], &[0xFF, 0xD8], "a JPEG");
+}
