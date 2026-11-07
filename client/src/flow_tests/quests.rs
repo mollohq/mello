@@ -294,3 +294,135 @@ fn the_row_actions_do_what_they_say() {
     assert!(h.app().get_settings_open(), "Settings opens");
     assert_eq!(h.app().get_settings_active_tab(), 3, "on the Games tab");
 }
+
+fn png_bytes() -> Vec<u8> {
+    let img = image::RgbaImage::from_pixel(4, 2, image::Rgba([200, 120, 40, 255]));
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Png)
+        .expect("a png in memory");
+    out.into_inner()
+}
+
+fn fetches(cmds: &[Command]) -> Vec<String> {
+    cmds.iter()
+        .filter_map(|c| match c {
+            Command::FetchMediaImage { url } => Some(url.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// An uploaded banner is a media image: the open tile asks for it once and
+/// shows it when it arrives.
+#[test]
+fn an_uploaded_banner_loads_into_its_open_tile() {
+    let mut h = Harness::new();
+    on_crew(&mut h);
+    let url = "https://media.example/crew-banners/crew-0/b.jpg";
+    {
+        let settings = h.settings();
+        crate::sealed::mark_opened(
+            &mut settings.borrow_mut(),
+            "crew-0",
+            "quest:made:crew-0",
+            crate::head2head::now_ms(),
+        );
+    }
+    h.commands();
+    h.emit(Event::FeedLoaded {
+        response: quests_feed(
+            "user-1",
+            serde_json::json!({}),
+            serde_json::json!({"banner_url": url}),
+        ),
+    });
+    assert_eq!(
+        fetches(&h.commands()),
+        [url],
+        "the banner is asked for once"
+    );
+    let tile = |h: &Harness| {
+        h.app()
+            .get_feed_zones()
+            .quest_gifts
+            .row_data(0)
+            .expect("gift 1")
+    };
+    assert_eq!(tile(&h).state.as_str(), "open");
+    assert!(!tile(&h).has_art, "nothing to draw before it arrives");
+    h.emit(Event::FeedLoaded {
+        response: quests_feed(
+            "user-1",
+            serde_json::json!({}),
+            serde_json::json!({"banner_url": url}),
+        ),
+    });
+    assert!(
+        fetches(&h.commands()).is_empty(),
+        "a fetch in flight is not asked again"
+    );
+
+    h.emit(Event::MediaImageLoaded {
+        url: url.into(),
+        bytes: png_bytes(),
+    });
+    assert!(tile(&h).has_art, "the banner draws in its tile");
+    h.emit(Event::FeedLoaded {
+        response: quests_feed(
+            "user-1",
+            serde_json::json!({}),
+            serde_json::json!({"banner_url": url}),
+        ),
+    });
+    assert!(
+        fetches(&h.commands()).is_empty(),
+        "a loaded image is not asked again"
+    );
+}
+
+/// A fetch that failed is not asked again on every rebuild.
+#[test]
+fn a_failed_media_image_is_not_asked_again() {
+    let mut h = Harness::new();
+    on_crew(&mut h);
+    let url = "https://media.example/crew-emoji/crew-0/gg.png";
+    let all = serde_json::json!({"call": {"minutes": 6}});
+    {
+        let settings = h.settings();
+        crate::sealed::mark_opened(
+            &mut settings.borrow_mut(),
+            "crew-0",
+            "quest:call:crew-0",
+            crate::head2head::now_ms(),
+        );
+    }
+    h.commands();
+    h.emit(Event::FeedLoaded {
+        response: quests_feed(
+            "user-1",
+            all.clone(),
+            serde_json::json!({"emoji_count": 1, "first_emoji_url": url}),
+        ),
+    });
+    assert_eq!(fetches(&h.commands()), [url]);
+    h.emit(Event::MediaImageLoaded {
+        url: url.into(),
+        bytes: Vec::new(),
+    });
+    h.emit(Event::FeedLoaded {
+        response: quests_feed(
+            "user-1",
+            all,
+            serde_json::json!({"emoji_count": 1, "first_emoji_url": url}),
+        ),
+    });
+    assert!(fetches(&h.commands()).is_empty());
+    let emoji = h
+        .app()
+        .get_feed_zones()
+        .quest_gifts
+        .row_data(2)
+        .expect("gift 3");
+    assert_eq!(emoji.state.as_str(), "open");
+    assert!(!emoji.has_art);
+}

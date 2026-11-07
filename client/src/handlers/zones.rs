@@ -47,15 +47,17 @@ fn quest_card(
             .find(|p| p.id == id)
             .map(|p| super::clip::live_person(ctx, p))
     };
-    let banner_art = (!q.gifts.banner_game_id.is_empty())
-        .then(|| {
-            crate::game_icons::resolve_art_worker(
-                ctx,
-                std::slice::from_ref(&q.gifts.banner_game_id),
-                mello_core::art::ArtSlot::Hero,
-            )
-        })
-        .flatten();
+    // A banner of game art draws from the art cache; an uploaded one is a
+    // media image.
+    let banner_art = if q.gifts.banner_game_id.is_empty() {
+        super::quests::media_image(ctx, &q.gifts.banner_url)
+    } else {
+        crate::game_icons::resolve_art_worker(
+            ctx,
+            std::slice::from_ref(&q.gifts.banner_game_id),
+            mello_core::art::ArtSlot::Hero,
+        )
+    };
     let crew_name = ctx.app.get_active_crew_name().to_string();
     super::quests::build(
         q,
@@ -68,8 +70,7 @@ fn quest_card(
             activity_on,
             person: &person,
             banner_art,
-            // The loader for media images comes with the gift screens.
-            emoji_art: None,
+            emoji_art: super::quests::media_image(ctx, &q.gifts.first_emoji_url),
             game_art: &|id: &str| {
                 (!id.is_empty())
                     .then(|| {

@@ -16,6 +16,59 @@ use crate::{H2hPerson, QuestGift, QuestReveal, QuestRow};
 
 const DAY_MS: i64 = 86_400_000;
 
+/// An image of the media bucket (a banner, a crew emoji), from the cache.
+/// The first ask sends `FetchMediaImage`; the answer builds the zones again.
+pub(crate) fn media_image(ctx: &crate::app_context::AppContext, url: &str) -> Option<Image> {
+    if url.is_empty() {
+        return None;
+    }
+    if let Some(entry) = ctx.media_images.borrow().get(url) {
+        return entry.clone();
+    }
+    ctx.media_images.borrow_mut().insert(url.to_string(), None);
+    let _ = ctx.cmd_tx.send(mello_core::Command::FetchMediaImage {
+        url: url.to_string(),
+    });
+    None
+}
+
+/// The events of the crew quests gifts.
+pub(crate) fn handle(ctx: &crate::app_context::AppContext, event: mello_core::events::Event) {
+    use mello_core::events::Event;
+    match event {
+        Event::MediaImageLoaded { url, bytes } => {
+            let img = (!bytes.is_empty())
+                .then(|| crate::image_cache::decode_media(&bytes))
+                .flatten()
+                .and_then(|d| d.frames.into_iter().next())
+                .map(|(rgba, w, h)| crate::avatar::rgba_to_image(&rgba, w, h));
+            if img.is_none() {
+                log::warn!("[gifts] media image not usable: {url}");
+            }
+            ctx.media_images.borrow_mut().insert(url, img);
+            super::zones::refresh(ctx);
+        }
+        Event::CrewGiftChanged { crew_id, gift } => {
+            log::info!("[gifts] {gift} changed for crew {crew_id}");
+        }
+        Event::CrewGiftFailed {
+            crew_id,
+            gift,
+            reason,
+        } => {
+            log::warn!("[gifts] {gift} failed for crew {crew_id}: {reason}");
+        }
+        Event::InviteNameChecked {
+            crew_id,
+            name,
+            state,
+        } => {
+            log::debug!("[gifts] invite name {name} for crew {crew_id}: {state}");
+        }
+        _ => {}
+    }
+}
+
 /// The steps in order. Each step unlocks the gift at the same index.
 pub(crate) const STEPS: [&str; 5] = ["made", "friend", "call", "clip", "session"];
 /// The name of a gift, shown once it is open. Until then it is "DROP 1" to

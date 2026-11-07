@@ -227,6 +227,12 @@ fn dispatch(ctx: &AppContext, event: Event) {
         | Event::RiotStatus { .. }
         | Event::RiotLinkFailed { .. } => games::handle(ctx, event),
 
+        // Crew quests gifts
+        Event::CrewGiftChanged { .. }
+        | Event::CrewGiftFailed { .. }
+        | Event::InviteNameChecked { .. }
+        | Event::MediaImageLoaded { .. } => quests::handle(ctx, event),
+
         // Personal stats (You strip)
         Event::UserGameStatsLoaded { .. } => stats::handle(ctx, event),
 

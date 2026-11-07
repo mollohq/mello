@@ -6,6 +6,7 @@ mod connection;
 #[cfg(test)]
 mod connection_tests;
 mod crew;
+mod crew_gifts;
 mod diagnostics;
 mod game_clip_play;
 mod game_clip_upload;
@@ -853,6 +854,39 @@ impl Client {
             }
             Command::SendGif { gif, body } => {
                 self.handle_send_gif(gif, &body).await;
+            }
+            Command::SetCrewBannerGame { crew_id, game_id } => {
+                self.handle_set_crew_banner_game(&crew_id, &game_id).await;
+            }
+            Command::UploadCrewBanner { crew_id, jpeg } => {
+                self.handle_upload_crew_banner(&crew_id, jpeg).await;
+            }
+            Command::ClearCrewBanner { crew_id } => {
+                self.handle_clear_crew_banner(&crew_id).await;
+            }
+            Command::CheckInviteName { crew_id, name } => {
+                self.handle_check_invite_name(&crew_id, &name).await;
+            }
+            Command::SetInviteName { crew_id, name } => {
+                self.handle_set_invite_name(&crew_id, &name).await;
+            }
+            Command::UploadCrewEmoji {
+                crew_id,
+                name,
+                mime,
+                bytes,
+            } => {
+                self.handle_upload_crew_emoji(&crew_id, &name, &mime, bytes)
+                    .await;
+            }
+            Command::RemoveCrewEmoji { crew_id, name } => {
+                self.handle_remove_crew_emoji(&crew_id, &name).await;
+            }
+            Command::ReportInviteCopied { crew_id } => {
+                self.handle_report_invite_copied(&crew_id);
+            }
+            Command::FetchMediaImage { url } => {
+                self.handle_fetch_media_image(url);
             }
             Command::UploadChatImage {
                 attachment_id,

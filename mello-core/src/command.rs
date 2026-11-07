@@ -538,6 +538,52 @@ pub enum Command {
         position_ms: u32,
     },
     StopClipPlayback,
+    // --- Crew quests gifts (plans/crew-quests.md section 4) ---
+    /// Set the crew banner to the wide art of a game (art Worker id).
+    SetCrewBannerGame {
+        crew_id: String,
+        game_id: String,
+    },
+    /// Upload a banner image and set it. The client has cropped it to
+    /// 1200 by 630 and encoded it as a JPEG.
+    UploadCrewBanner {
+        crew_id: String,
+        #[serde(with = "serde_bytes_b64")]
+        jpeg: Vec<u8>,
+    },
+    ClearCrewBanner {
+        crew_id: String,
+    },
+    /// Is this invite name free for the crew? Answers `InviteNameChecked`.
+    CheckInviteName {
+        crew_id: String,
+        name: String,
+    },
+    SetInviteName {
+        crew_id: String,
+        name: String,
+    },
+    /// Upload an emoji image (square, 128 px) and add it as `:name:`.
+    UploadCrewEmoji {
+        crew_id: String,
+        name: String,
+        mime: String,
+        #[serde(with = "serde_bytes_b64")]
+        bytes: Vec<u8>,
+    },
+    RemoveCrewEmoji {
+        crew_id: String,
+        name: String,
+    },
+    /// The invite link was copied: for the funnel, once per crew.
+    ReportInviteCopied {
+        crew_id: String,
+    },
+    /// Fetch an image from the media bucket (a banner, a crew emoji).
+    /// Answers `MediaImageLoaded`.
+    FetchMediaImage {
+        url: String,
+    },
     /// The crew feed: the zones and the first page of Crew history.
     LoadCrewFeed {
         crew_id: String,

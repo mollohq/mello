@@ -94,6 +94,10 @@ pub struct AppContext {
     pub gif_chat_anim: GifAnimator,
     pub dbg_hist: Rc<RefCell<crate::DebugHistory>>,
     pub avatar_cache: Rc<RefCell<HashMap<String, slint::Image>>>,
+    /// Images of the media bucket by URL: crew banners and crew emoji
+    /// (`handlers/quests.rs`, `media_image`). `None`: asked, not here yet,
+    /// or the fetch failed; either way it is not asked again.
+    pub media_images: Rc<RefCell<HashMap<String, Option<slint::Image>>>>,
     /// The last crew feed, so cards that name members (head2head, invite) can
     /// be built again when the member list arrives after the feed.
     pub last_feed: Rc<RefCell<Option<mello_core::crew_events::FeedResponse>>>,
@@ -226,6 +230,7 @@ impl AppContext {
             gif_chat_anim: GifAnimator::new(50, Some(2), 16),
             dbg_hist: Rc::new(RefCell::new(crate::DebugHistory::new())),
             avatar_cache: Rc::new(RefCell::new(HashMap::new())),
+            media_images: Rc::new(RefCell::new(HashMap::new())),
             last_feed: Rc::new(RefCell::new(None)),
             zones_history_pending: Rc::new(Cell::new(0)),
             live_games: Rc::new(RefCell::new(Default::default())),
@@ -300,6 +305,7 @@ impl Clone for AppContext {
             gif_chat_anim: self.gif_chat_anim.clone(),
             dbg_hist: self.dbg_hist.clone(),
             avatar_cache: self.avatar_cache.clone(),
+            media_images: self.media_images.clone(),
             last_feed: self.last_feed.clone(),
             zones_history_pending: self.zones_history_pending.clone(),
             live_games: self.live_games.clone(),
