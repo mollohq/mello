@@ -8,7 +8,7 @@
 //!
 //! `build` is pure: the tests drive it with no window.
 
-use mello_core::crew_events::{QuestGifts, ZoneQuests};
+use mello_core::crew_events::{QuestCall, QuestGifts, ZoneQuests};
 use slint::Image;
 
 use crate::sealed;
@@ -394,17 +394,8 @@ fn reveal(i: usize, q: &ZoneQuests, inp: &Input, g: &QuestGift, done: usize) -> 
                 if let Some(o) = other(&c.user_ids) {
                     r.hue_index = hue_of(&o);
                 }
-                r.moment_value = c.minutes.to_string().into();
-                r.moment_unit = "min".into();
-                let mut sub = names_line(&c.user_ids, &c.names, inp);
-                if c.guests > 0 {
-                    let g = if c.guests == 1 { "guest" } else { "guests" };
-                    sub = format!("{sub}, +{} {g}", c.guests);
-                }
-                if !c.channel_name.is_empty() {
-                    sub = format!("{sub} · {}", c.channel_name);
-                }
-                r.moment_sub = sub.into();
+                r.moment_title = call_people(c, inp).into();
+                r.moment_sub = c.channel_name.clone().into();
             }
             r.name = "Crew emoji".into();
             r.gift_line = "5 slots".into();
@@ -608,18 +599,25 @@ fn call_row(q: &ZoneQuests, inp: &Input) -> QuestRow {
             ..row("First call")
         };
     };
-    let mut meta = names_line(&c.user_ids, &c.names, inp);
-    if c.guests > 0 {
-        let g = if c.guests == 1 { "guest" } else { "guests" };
-        meta = format!("{meta}, +{} {g}", c.guests);
+    let mut meta = call_people(c, inp);
+    if !c.channel_name.is_empty() {
+        meta = format!("{meta} · {}", c.channel_name);
     }
     QuestRow {
         done: true,
         meta: meta.into(),
-        value: c.minutes.to_string().into(),
-        unit: "min".into(),
         ..row("First call")
     }
+}
+
+/// Who was in the first call: "You and Ida, +1 guest".
+fn call_people(c: &QuestCall, inp: &Input) -> String {
+    let mut out = names_line(&c.user_ids, &c.names, inp);
+    if c.guests > 0 {
+        let g = if c.guests == 1 { "guest" } else { "guests" };
+        out = format!("{out}, +{} {g}", c.guests);
+    }
+    out
 }
 
 fn clip_row(q: &ZoneQuests, inp: &Input) -> QuestRow {
@@ -678,7 +676,7 @@ fn session_row(q: &ZoneQuests, inp: &Input) -> QuestRow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mello_core::crew_events::{QuestCall, QuestFriend, QuestSession};
+    use mello_core::crew_events::{QuestFriend, QuestSession};
     use std::collections::HashSet;
 
     fn quests(owner: &str) -> ZoneQuests {
@@ -767,9 +765,9 @@ mod tests {
             ..Default::default()
         });
         q.steps.call = Some(QuestCall {
-            minutes: 34,
             user_ids: vec!["own".into(), "ida".into()],
             names: vec!["b0bben".into(), "Ida".into()],
+            channel_name: "General".into(),
             ..Default::default()
         });
         q.gifts.banner_url = "https://art.example/steam-1/hero".into();
@@ -778,8 +776,8 @@ mod tests {
         assert_eq!(states(&c), ["open", "open", "ready", "locked", "locked"]);
         assert!(c.gifts.iter().all(|g| !g.can_open), "only the owner opens");
         assert_eq!(c.rows[1].title, "You joined");
-        assert_eq!(c.rows[2].meta, "You and b0bben");
-        assert_eq!(c.rows[2].value, "34");
+        assert_eq!(c.rows[2].meta, "You and b0bben · General");
+        assert_eq!(c.rows[2].value, "", "a call is marked on join: no length");
     }
 
     #[test]
@@ -897,7 +895,6 @@ mod tests {
         let none = |_: &str| false;
         let mut q = quests("own");
         q.steps.call = Some(QuestCall {
-            minutes: 6,
             user_ids: vec!["own".into()],
             names: vec!["b0bben".into()],
             guests: 1,

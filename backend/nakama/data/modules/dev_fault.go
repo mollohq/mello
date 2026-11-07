@@ -194,10 +194,6 @@ func backdateVoiceJoin(userID string, d time.Duration) bool {
 	for _, room := range voiceRooms {
 		if m, ok := room.Members[userID]; ok {
 			m.JoinedAt -= d.Milliseconds()
-			// The together span of the first call quest step moves with it.
-			if room.together != nil {
-				room.together.sinceMs -= d.Milliseconds()
-			}
 			return true
 		}
 	}

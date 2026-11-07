@@ -17,9 +17,6 @@ const (
 	CrewQuestsCollection = "crew_quests"
 	// questsWindowDays is how long the quest card shows on the feed.
 	questsWindowDays = 14
-	// questsCallMinMs is how long two or more people must be in one voice
-	// room together for the first call step. A browser guest counts.
-	questsCallMinMs = 5 * 60 * 1000
 	// questsNamesMax caps the names a step keeps.
 	questsNamesMax = 8
 )
@@ -63,10 +60,10 @@ type QuestFriend struct {
 }
 
 // QuestCall is the first time two or more people were in one voice room
-// together for questsCallMinMs. Guests have no name here, only a count.
+// together, marked on the join of the second. A browser guest counts. Guests
+// have no name here, only a count.
 type QuestCall struct {
 	DoneMs      int64    `json:"done_ms"`
-	Minutes     int      `json:"minutes"`
 	UserIDs     []string `json:"user_ids"`
 	Names       []string `json:"names"`
 	Guests      int      `json:"guests,omitempty"`
@@ -179,7 +176,9 @@ func questsCreate(ctx context.Context, logger runtime.Logger, nk runtime.NakamaM
 // questsMark sets one step when the crew has a record and the step is not
 // done. set returns false when it has nothing to write (the step is done).
 // It retries on a version conflict, as the ledger does. It reports whether
-// it wrote.
+// it wrote. After a write it tells the members with the crew open that the
+// feed changed: the quest card is in the feed, and no other event of a step
+// reloads it (a member join sends none).
 func questsMark(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID, step string, set func(*CrewQuests) bool) bool {
 	for attempt := 0; attempt < 3; attempt++ {
 		q, version := readCrewQuests(ctx, nk, crewID)
@@ -189,6 +188,7 @@ func questsMark(ctx context.Context, logger runtime.Logger, nk runtime.NakamaMod
 		err := writeCrewQuests(ctx, nk, q, version)
 		if err == nil {
 			logger.Info("crew_quests %s written for crew %s", step, crewID)
+			PushFeedChanged(ctx, logger, nk, crewID, "quest")
 			return true
 		}
 		retryWait(attempt)
@@ -211,7 +211,7 @@ func setQuestFriend(s *CrewQuestsSteps, ownerID string, f QuestFriend) bool {
 	return true
 }
 
-// setQuestCall marks the first call. questsMarkCall checks the length.
+// setQuestCall marks the first call.
 func setQuestCall(s *CrewQuestsSteps, c QuestCall) bool {
 	if s.Call != nil {
 		return false
@@ -261,23 +261,13 @@ func questsMarkFriend(ctx context.Context, logger runtime.Logger, nk runtime.Nak
 	})
 }
 
-// questsMarkCall is called when a voice room drops below two people after a
-// together span.
-func questsMarkCall(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID string, span voiceTogetherSpan) {
-	if crewID == "" || span.durationMs() < questsCallMinMs {
+// questsMarkCall is called on a voice join that puts a second person in a
+// room (VoiceRoom.questCall).
+func questsMarkCall(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID string, call QuestCall) {
+	if crewID == "" {
 		return
 	}
-	channelName := resolveChannelName(ctx, nk, crewID, span.channelID)
-	ids, names := capNames(span.memberIDs, span.memberNames)
-	call := QuestCall{
-		DoneMs:      span.endMs,
-		Minutes:     int(span.durationMs() / 60000),
-		UserIDs:     ids,
-		Names:       names,
-		Guests:      span.guests,
-		ChannelID:   span.channelID,
-		ChannelName: channelName,
-	}
+	call.UserIDs, call.Names = capNames(call.UserIDs, call.Names)
 	questsMark(ctx, logger, nk, crewID, questStepCall, func(q *CrewQuests) bool {
 		return setQuestCall(&q.Steps, call)
 	})

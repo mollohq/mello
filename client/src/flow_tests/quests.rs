@@ -249,7 +249,7 @@ fn the_card_goes_when_every_step_is_done_and_every_gift_opened() {
         );
     }
     let all = serde_json::json!({
-        "friend": {"user_id": "u-ida"}, "call": {"minutes": 6}, "clip": {"clip_id": "c1"}, "session": {"minutes": 40}
+        "friend": {"user_id": "u-ida"}, "call": {"user_ids": ["u-ida"]}, "clip": {"clip_id": "c1"}, "session": {"minutes": 40}
     });
     h.emit(Event::FeedLoaded {
         response: quests_feed("user-1", all, serde_json::json!({})),
@@ -386,7 +386,7 @@ fn a_failed_media_image_is_not_asked_again() {
     let mut h = Harness::new();
     on_crew(&mut h);
     let url = "https://media.example/crew-emoji/crew-0/gg.png";
-    let all = serde_json::json!({"call": {"minutes": 6}});
+    let all = serde_json::json!({"call": {"user_ids": ["u-ida"]}});
     {
         let settings = h.settings();
         crate::sealed::mark_opened(
@@ -870,7 +870,7 @@ fn add_emoji_opens_the_screen_and_remove_sends_the_command() {
     h.emit(Event::FeedLoaded {
         response: quests_feed(
             "user-1",
-            serde_json::json!({"friend": {"user_id": "u-ida"}, "call": {"minutes": 6}}),
+            serde_json::json!({"friend": {"user_id": "u-ida"}, "call": {"user_ids": ["u-ida"]}}),
             serde_json::json!({"invite_name": "x1y2z", "banner_url": "u"}),
         ),
     });

@@ -308,8 +308,6 @@ pub struct QuestCall {
     #[serde(default)]
     pub done_ms: i64,
     #[serde(default)]
-    pub minutes: i32,
-    #[serde(default)]
     pub user_ids: Vec<String>,
     #[serde(default)]
     pub names: Vec<String>,

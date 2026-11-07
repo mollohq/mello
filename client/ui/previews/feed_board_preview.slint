@@ -380,7 +380,7 @@ global Q {
     out property <QuestRow> friend-todo: { name: "A friend joins", meta: "Works in the browser", action: "invite" };
     out property <QuestRow> friend-done: { name: "A friend joins", done: true, person: Crew.ida, has-person: true, title: "Ida joined", meta: "2 min" };
     out property <QuestRow> call-todo: { name: "First call", action: "voice" };
-    out property <QuestRow> call-done: { name: "First call", done: true, meta: "You and Ida", value: "34", unit: "min" };
+    out property <QuestRow> call-done: { name: "First call", done: true, meta: "You and Ida · General" };
     out property <QuestRow> clip-todo: { name: "First clip", meta: "Join voice to clip", key-cap: "F8" };
     out property <QuestRow> clip-done: { name: "First clip", done: true, art: @image-url("fixtures/stream-sample-2.png"), has-art: true, meta: "You · Brawlhalla", value: "0:30" };
     out property <QuestRow> session-todo: { name: "First session", meta: "Play with m3llo open" };
@@ -426,7 +426,7 @@ export component PreviewFeedQuests3 inherits Panel {
         you: Crew.ida,
         stage: "quests", quest-count: "3 / 5", quest-fill: 0.5,
         quest-gifts: [Q.banner-open, Q.link-open, Q.emoji-member, Q.week-locked, Q.plus-locked],
-        quest-rows: [Q.made, { name: "A friend joins", done: true, person: Crew.ida, has-person: true, title: "You joined" }, { name: "First call", done: true, meta: "b0bben and you", value: "34", unit: "min" }, Q.clip-todo, Q.session-todo],
+        quest-rows: [Q.made, { name: "A friend joins", done: true, person: Crew.ida, has-person: true, title: "You joined" }, { name: "First call", done: true, meta: "You and b0bben · General" }, Q.clip-todo, Q.session-todo],
         board: "tabs",
         today-big: { value: "34", unit: "min", label: "HANGOUT" },
         today-stats: [{ value: "0", label: "CLIPS" }, { value: "0", label: "SESSIONS" }, { value: "2", label: "ON" }],

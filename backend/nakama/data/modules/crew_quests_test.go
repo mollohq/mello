@@ -75,18 +75,6 @@ func joinT(t *testing.T, nk runtime.NakamaModule, crewID, channelID, userID stri
 	}
 }
 
-// backdateTogether moves the together span of a room back by min minutes.
-func backdateTogether(t *testing.T, channelID string, min int) {
-	t.Helper()
-	voiceRoomsMu.Lock()
-	defer voiceRoomsMu.Unlock()
-	room := voiceRooms[channelID]
-	if room == nil || room.together == nil {
-		t.Fatalf("room %s has no together span", channelID)
-	}
-	room.together.sinceMs -= int64(min) * 60000
-}
-
 func newVoiceTest(t *testing.T) (*fakeQuestsNk, context.Context, runtime.Logger) {
 	t.Helper()
 	resetVoiceState()
@@ -189,30 +177,48 @@ func TestQuestsMemberJoinedMarksTheFriendWithTheInviter(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Step 3: first call, 5 minutes together
-// ---------------------------------------------------------------------------
-
-func TestQuestsCallOfFiveMinutesTogetherCounts(t *testing.T) {
-	nk, ctx, lg := newVoiceTest(t)
-	joinT(t, nk, "crew", "ch", "own", false)
-	joinT(t, nk, "crew", "ch", "ida", false)
-	backdateTogether(t, "ch", 6)
-	voiceLeaveInternal(ctx, lg, nk, "ida")
-	c := readQuestsT(t, nk, "crew").Steps.Call
-	if c == nil || c.Minutes != 6 || c.ChannelID != "ch" || len(c.UserIDs) != 2 || c.Guests != 0 {
-		t.Fatalf("call = %+v, want 6 minutes of own and ida", c)
+// The owner has the crew open when a friend joins. A join sends no event that
+// loads the feed again, so without this push the step shows as done only
+// after the next crew event (seen in a local test, 2026-11-07).
+func TestQuestsStepWriteTellsTheOpenCrewTheFeedChanged(t *testing.T) {
+	nk := newFakeQuestsNk()
+	nk.addMember("qfc-crew", "qfc-own", "b0bben")
+	nk.addMember("qfc-crew", "qfc-ida", "Ida")
+	openCrew("qfc-own", "qfc-crew")
+	feedNotesMu.Lock()
+	feedNotes = nil
+	feedNotesMu.Unlock()
+	ctx, lg := context.Background(), testLogger()
+	questsCreate(ctx, lg, nk, "qfc-crew", "qfc-own")
+	recordMemberJoined(ctx, lg, nk, "qfc-crew", "qfc-ida", "qfc-own")
+	got := feedChangedTo("qfc-own")
+	if len(got) != 1 || got[0].content["crew_id"] != "qfc-crew" || got[0].content["reason"] != "quest" {
+		t.Fatalf("feed_changed to the owner = %+v, want one for the quest", got)
+	}
+	// A step that is done writes nothing and sends nothing.
+	recordMemberJoined(ctx, lg, nk, "qfc-crew", "qfc-ida", "qfc-own")
+	if n := len(feedChangedTo("qfc-own")); n != 1 {
+		t.Fatalf("feed_changed count = %d after a second join, want 1", n)
 	}
 }
 
-func TestQuestsCallUnderFiveMinutesDoesNotCount(t *testing.T) {
-	nk, ctx, lg := newVoiceTest(t)
+// ---------------------------------------------------------------------------
+// Step 3: first call, two people in one voice room
+// ---------------------------------------------------------------------------
+
+func TestQuestsCallCountsOnTheJoinOfTheSecondPerson(t *testing.T) {
+	nk, _, _ := newVoiceTest(t)
 	joinT(t, nk, "crew", "ch", "own", false)
-	joinT(t, nk, "crew", "ch", "ida", false)
-	backdateTogether(t, "ch", 4)
-	voiceLeaveInternal(ctx, lg, nk, "ida")
 	if c := readQuestsT(t, nk, "crew").Steps.Call; c != nil {
-		t.Fatalf("a call of 4 minutes counted: %+v", c)
+		t.Fatalf("one person in voice is no call: %+v", c)
+	}
+	joinT(t, nk, "crew", "ch", "ida", false)
+	c := readQuestsT(t, nk, "crew").Steps.Call
+	if c == nil || c.DoneMs == 0 || c.ChannelID != "ch" || c.ChannelName != "General" || c.Guests != 0 {
+		t.Fatalf("call = %+v, want own and ida in General", c)
+	}
+	if len(c.UserIDs) != 2 || c.UserIDs[0] != "ida" || c.UserIDs[1] != "own" || c.Names[0] != "ida" {
+		t.Fatalf("call people = %v %v, want ida and own", c.UserIDs, c.Names)
 	}
 }
 
@@ -223,20 +229,27 @@ func TestQuestsCallAloneDoesNotCount(t *testing.T) {
 		t.Fatal("own is not in voice")
 	}
 	voiceLeaveInternal(ctx, lg, nk, "own")
+	joinT(t, nk, "crew", "ch", "own", false)
 	if c := readQuestsT(t, nk, "crew").Steps.Call; c != nil {
 		t.Fatalf("time alone counted as a call: %+v", c)
 	}
 }
 
+func TestQuestsCallInTwoRoomsDoesNotCount(t *testing.T) {
+	nk, _, _ := newVoiceTest(t)
+	joinT(t, nk, "crew", "ch", "own", false)
+	joinT(t, nk, "crew", "ch2", "ida", false)
+	if c := readQuestsT(t, nk, "crew").Steps.Call; c != nil {
+		t.Fatalf("two rooms with one person each counted: %+v", c)
+	}
+}
+
 func TestQuestsCallWithAGuestCountsAndTheGuestHasNoName(t *testing.T) {
 	// The owner and one browser guest: no voice_session is written for this
-	// call (guests are not ledger participants), but the step counts. The
-	// guest leaves, as ExpireGuestSessions makes a closed tab leave.
-	nk, ctx, lg := newVoiceTest(t)
+	// call (guests are not ledger participants), but the step counts.
+	nk, _, _ := newVoiceTest(t)
 	joinT(t, nk, "crew", "ch", "own", false)
 	joinT(t, nk, "crew", "ch", "guest:abc", true)
-	backdateTogether(t, "ch", 7)
-	voiceLeaveInternal(ctx, lg, nk, "guest:abc")
 	c := readQuestsT(t, nk, "crew").Steps.Call
 	if c == nil || c.Guests != 1 || len(c.UserIDs) != 1 || c.UserIDs[0] != "own" {
 		t.Fatalf("call = %+v, want own and 1 guest", c)
@@ -248,47 +261,15 @@ func TestQuestsCallWithAGuestCountsAndTheGuestHasNoName(t *testing.T) {
 	}
 }
 
-func TestQuestsCallEndsWhenTheRoomDropsBelowTwo(t *testing.T) {
-	nk, ctx, lg := newVoiceTest(t)
-	joinT(t, nk, "crew", "ch", "own", false)
-	joinT(t, nk, "crew", "ch", "ida", false)
-	joinT(t, nk, "crew", "ch", "elin", false)
-	backdateTogether(t, "ch", 10)
-	voiceLeaveInternal(ctx, lg, nk, "elin")
-	if c := readQuestsT(t, nk, "crew").Steps.Call; c != nil {
-		t.Fatalf("two people are still together: %+v", c)
-	}
-	voiceLeaveInternal(ctx, lg, nk, "ida")
-	c := readQuestsT(t, nk, "crew").Steps.Call
-	if c == nil || len(c.UserIDs) != 3 {
-		t.Fatalf("call = %+v, want all three who were in it", c)
-	}
-}
-
 func TestQuestsCallIsWrittenOnce(t *testing.T) {
 	nk, ctx, lg := newVoiceTest(t)
 	joinT(t, nk, "crew", "ch", "own", false)
 	joinT(t, nk, "crew", "ch", "ida", false)
-	backdateTogether(t, "ch", 6)
 	voiceLeaveInternal(ctx, lg, nk, "ida")
 	joinT(t, nk, "crew", "ch", "elin", false)
-	backdateTogether(t, "ch", 40)
-	voiceLeaveInternal(ctx, lg, nk, "elin")
-	if c := readQuestsT(t, nk, "crew").Steps.Call; c.Minutes != 6 {
+	c := readQuestsT(t, nk, "crew").Steps.Call
+	if c == nil || len(c.UserIDs) != 2 || c.UserIDs[0] != "ida" {
 		t.Fatalf("a done step changed: %+v", c)
-	}
-}
-
-func TestDevFaultBackdateMovesTheTogetherSpan(t *testing.T) {
-	nk, ctx, lg := newVoiceTest(t)
-	joinT(t, nk, "crew", "ch", "own", false)
-	joinT(t, nk, "crew", "ch", "ida", false)
-	if !backdateVoiceJoin("ida", 5*time.Minute) {
-		t.Fatal("ida is not in voice")
-	}
-	voiceLeaveInternal(ctx, lg, nk, "ida")
-	if readQuestsT(t, nk, "crew").Steps.Call == nil {
-		t.Fatal("a journey backdates the join to make a 5 minute call")
 	}
 }
 
@@ -371,7 +352,7 @@ func TestZonesQuestsKeepTheStageClipInClips(t *testing.T) {
 func TestZonesQuestsWireForm(t *testing.T) {
 	in := zInput()
 	in.Quests = newCrewQuests("crew", "own", zonesNow-dayMs)
-	in.Quests.Steps.Call = &QuestCall{DoneMs: 1, Minutes: 34, UserIDs: []string{"own"}, Names: []string{"b0bben"}, Guests: 1, ChannelID: "ch"}
+	in.Quests.Steps.Call = &QuestCall{DoneMs: 1, UserIDs: []string{"own"}, Names: []string{"b0bben"}, Guests: 1, ChannelID: "ch"}
 	data, err := json.Marshal(buildFeedZones(in))
 	if err != nil {
 		t.Fatal(err)

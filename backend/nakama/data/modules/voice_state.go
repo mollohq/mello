@@ -38,73 +38,32 @@ type VoiceRoom struct {
 	// because SFU instances do not relay between regions. It goes away with
 	// the room when the last member leaves.
 	SFURegion string `json:"sfu_region,omitempty"`
-	// together is the span the room has had two or more people, for the
-	// first call quest step. Nil while the room has fewer than two.
-	together *voiceTogether
 }
 
-// voiceTogether is a span of two or more people in one room. Members holds
-// everyone who was in the room during the span, guests too.
-type voiceTogether struct {
-	sinceMs int64
-	members map[string]togetherMember
-}
-
-type togetherMember struct {
-	name  string
-	guest bool
-}
-
-// voiceTogetherSpan is a together span that ended. Guests are a count only.
-type voiceTogetherSpan struct {
-	channelID   string
-	startMs     int64
-	endMs       int64
-	memberIDs   []string
-	memberNames []string
-	guests      int
-}
-
-func (s voiceTogetherSpan) durationMs() int64 { return s.endMs - s.startMs }
-
-// noteTogether starts or extends the together span after a member is added.
-// Call it with voiceRoomsMu held.
-func (r *VoiceRoom) noteTogether(nowMs int64) {
+// questCall is the first call quest step of a join that puts a second person
+// in the room: everyone in the room now, guests as a count. It reports false
+// while the room has fewer than two. Call it with voiceRoomsMu held, after the
+// member is added.
+func (r *VoiceRoom) questCall(nowMs int64, channelName string) (QuestCall, bool) {
 	if len(r.Members) < 2 {
-		return
+		return QuestCall{}, false
 	}
-	if r.together == nil {
-		r.together = &voiceTogether{sinceMs: nowMs, members: make(map[string]togetherMember)}
-	}
-	for id, m := range r.Members {
-		r.together.members[id] = togetherMember{name: m.Username, guest: m.IsGuest}
-	}
-}
-
-// endTogether ends the together span when the room has fewer than two
-// people. Call it with voiceRoomsMu held, after the member is removed.
-func (r *VoiceRoom) endTogether(endMs int64) (voiceTogetherSpan, bool) {
-	if r.together == nil || len(r.Members) >= 2 {
-		return voiceTogetherSpan{}, false
-	}
-	t := r.together
-	r.together = nil
-	span := voiceTogetherSpan{channelID: r.ChannelID, startMs: t.sinceMs, endMs: endMs}
-	ids := make([]string, 0, len(t.members))
-	for id := range t.members {
+	call := QuestCall{DoneMs: nowMs, ChannelID: r.ChannelID, ChannelName: channelName}
+	ids := make([]string, 0, len(r.Members))
+	for id := range r.Members {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 	for _, id := range ids {
-		m := t.members[id]
-		if m.guest {
-			span.guests++
+		m := r.Members[id]
+		if m.IsGuest {
+			call.Guests++
 			continue
 		}
-		span.memberIDs = append(span.memberIDs, id)
-		span.memberNames = append(span.memberNames, m.name)
+		call.UserIDs = append(call.UserIDs, id)
+		call.Names = append(call.Names, m.Username)
 	}
-	return span, true
+	return call, true
 }
 
 // VoiceSnapshot is a read-only view returned to callers.
@@ -226,7 +185,6 @@ func upsertVoiceMember(channelID, crewID, userID, username string, isGuest bool)
 			IsGuest:  isGuest,
 		}
 	}
-	room.noteTogether(time.Now().UnixMilli())
 	voiceRoomsMu.Unlock()
 
 	voiceChannelCrewMu.Lock()
@@ -343,6 +301,11 @@ func joinVoiceRoom(ctx context.Context, logger runtime.Logger, nk runtime.Nakama
 	sameChannelRejoin := voiceUserChannel[p.UserID] == p.ChannelID
 	voiceUserChannelMu.RUnlock()
 
+	// The first call quest step: this join puts a second person in the room.
+	// A re-join adds nobody, so only a first join or a switch counts.
+	var call QuestCall
+	together := false
+
 	if sameChannelRejoin {
 		// Ensure the member entry exists, preserve JoinedAt, refresh username.
 		upsertVoiceMember(p.ChannelID, p.CrewID, p.UserID, p.Username, p.IsGuest)
@@ -367,7 +330,7 @@ func joinVoiceRoom(ctx context.Context, logger runtime.Logger, nk runtime.Nakama
 			JoinedAt: time.Now().UnixMilli(),
 			IsGuest:  p.IsGuest,
 		}
-		room.noteTogether(time.Now().UnixMilli())
+		call, together = room.questCall(time.Now().UnixMilli(), p.ChannelName)
 		voiceRoomsMu.Unlock()
 
 		voiceUserChannelMu.Lock()
@@ -418,6 +381,10 @@ func joinVoiceRoom(ctx context.Context, logger runtime.Logger, nk runtime.Nakama
 		PushVoiceUpdate(ctx, logger, nk, p.CrewID)
 		// Refresh Live Now for the crew's sidebar (non-active) subscribers.
 		QueueSidebarVoiceDelta(logger, nk, p.CrewID)
+	}
+
+	if together {
+		questsMarkCall(ctx, logger, nk, p.CrewID, call)
 	}
 
 	return GetVoiceChannelSnapshot(p.ChannelID), nil
@@ -727,8 +694,6 @@ func voiceLeaveInternal(ctx context.Context, logger runtime.Logger, nk runtime.N
 	var joinedAtMs int64
 	isGuest := false
 	lastMemberLeft := false
-	var span voiceTogetherSpan
-	spanEnded := false
 	voiceRoomsMu.Lock()
 	if room, ok := voiceRooms[channelID]; ok {
 		if crewID == "" {
@@ -740,7 +705,6 @@ func voiceLeaveInternal(ctx context.Context, logger runtime.Logger, nk runtime.N
 			isGuest = m.IsGuest
 		}
 		delete(room.Members, userID)
-		span, spanEnded = room.endTogether(leftAt.UnixMilli())
 		if len(room.Members) == 0 {
 			lastMemberLeft = true
 			delete(voiceRooms, channelID)
@@ -760,12 +724,6 @@ func voiceLeaveInternal(ctx context.Context, logger runtime.Logger, nk runtime.N
 			recordVoiceActivity(ctx, logger, nk, userID, mins, leftAt)
 			recomputeHead2head(ctx, logger, nk, crewID, head2headTriggerSession, time.Now().UnixMilli())
 		}
-	}
-
-	// The first call quest step. The room dropped below two people after a
-	// together span; questsMarkCall checks the span is long enough.
-	if spanEnded {
-		questsMarkCall(ctx, logger, nk, crewID, span)
 	}
 
 	// Write voice_session event if this was the last member and session had 2+ participants
