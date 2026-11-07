@@ -323,6 +323,14 @@ Clips, weekly recaps, and stream replays are durable crew memory and are kept ou
 
 All three mirror the ledger storage pattern (system-owned, public read, server-only write, optimistic-concurrency retry).
 
+Crew quests (features/CREW-QUESTS.md) add these durable stores. All are system-owned and server-written, with the same retry:
+
+- **`crew_quests/{crew_id}`** -- the quest record of a crew made after quests shipped: the owner, the 14-day window, the four steps after crew made, `plus_granted`, `invite_copied_ms`. A step is written once. A crew made before has none.
+- **`crew_profile/{crew_id}`** -- the banner and the custom invite name.
+- **`crew_emoji/{crew_id}`** -- up to five crew emoji.
+- **`user_plus/{user_id}`** -- the m3llo+ entitlement of a user (`until_ms`, `source`, the one quest grant). `IsUserPremium` reads only it.
+- **`media_reports/{id}`** -- a report of an uploaded banner or a crew emoji, and its takedown or dismiss.
+
 Read paths:
 - `crew_feed` is the one feed endpoint. It merges the ledger, the durable clips, recaps and stream replays, and returns the zones (features/CREW-FEED-ZONES.md): the Stage, the Board, the clips and sessions of the free window, People, and one page of Crew history by week (`history_before`). No layout, styling or copy crosses the boundary.
 - `crew_catchup` merges recent clips (newer than `last_seen`) into the candidate set.

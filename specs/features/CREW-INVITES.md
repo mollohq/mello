@@ -41,6 +41,13 @@ Codes are stored in Nakama Storage under the system user in one collection:
 There is no crew→code index. A member gets a shareable link by calling
 `create_invite_code`, which returns a fresh code.
 
+A crew can also have one custom name, a gift of crew quests
+(`CREW-QUESTS.md` section 3.2). It is a key in the same collection, with
+`custom: true`, so `/join/{name}` works where `/join/{code}` does. A name in
+the shape of a generated code is refused, and `generateCode` skips a key that
+exists. When the crew changes its name, the old one keeps `held_until` and
+still leads to the crew for 30 days. The random codes keep working.
+
 Two helpers in `invite_codes.go` own the storage convention:
 
 | Function | Purpose |
@@ -69,6 +76,7 @@ Every caller uses them. Do not read the collection directly.
 | `member_count`, `members` | Up to 5 previews, shuffled |
 | `top_game`, `longest_session_min`, `most_active` | From the latest recap |
 | `inviter_display_name`, `inviter_avatar_seed` | Present when the code carries an inviter |
+| `banner_url`, `banner_version` | The crew banner (`CREW-QUESTS.md` section 3.1). Absent when the crew has none. The version changes on every save |
 | `recent_clips` | Up to 4. **Includes `media_url`** |
 | `session_snapshots` | Up to 8 image URLs |
 
@@ -330,7 +338,7 @@ Any other text is ignored. The client does not log, store or send it. The client
 **Flow:**
 1. User clicks invite button.
 2. `invite-share-requested` callback fires. Rust reads the `invite_code` from the active crew's data model.
-3. Constructs the full URL: `https://m3llo.app/join/{code}`.
+3. Constructs the full URL: `https://m3llo.app/join/{name}` when the crew has a custom name (`invite_name` in crew state), else `https://m3llo.app/join/{code}`. A copy also calls `report_invite_copied` once per crew.
 4. Opens the `InviteShareModal` (`invite_share_modal.slint`) showing the URL and a "Copy link" button.
 5. Clicking "Copy link" writes the URL to the system clipboard via `arboard` and visually confirms with "Copied!" + green button state.
 
@@ -434,6 +442,11 @@ ES modules. The site has no build step.
 `?mock=1` skips both RPCs and renders from fixtures. Use it to work on the page
 with no backend running.
 
+The crew banner (`CREW-QUESTS.md` section 3.1) draws in the lounge head, 96 px
+high, under a black wash. Only an https URL, or http on localhost, draws. An
+uploaded banner has "Report banner" under the crew name:
+`POST /api/report/{code}` resolves the crew and calls `report_crew_media`.
+
 Pages include `<meta name="robots" content="noindex, nofollow">`.
 
 ### 9.2 Design source
@@ -504,7 +517,7 @@ guest reaches first is measurable.
 ```html
 <meta property="og:title"       content="Join {crew_name} on m3llo" />
 <meta property="og:description" content="{highlight}" />
-<meta property="og:image"       content="https://m3llo.app/og/{code}" />
+<meta property="og:image"       content="https://m3llo.app/og/{code}?v={banner_version}" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
 <meta property="og:url"         content="https://m3llo.app/join/{code}" />
@@ -525,7 +538,11 @@ Generates a 1200×630 PNG Open Graph card on demand using `@resvg/resvg-wasm`.
 ### 10.1 Pipeline
 
 1. Call `resolve_crew_invite` on Nakama with HTTP key.
-2. Fetch the crew avatar PNG from `avatar.m3llo.app/{seed}.png`.
+2. Fetch the crew avatar PNG from `avatar.m3llo.app/{seed}.png`, and the crew
+   banner when `banner_url` is set. PNG and JPEG only; any other type, a failed
+   fetch or a large file draws the card without it. The banner sits inside the
+   card, under the card colour from the left, so the name and the stats read.
+   `?v=` carries the banner version, so a new banner is a new card.
 3. Build an SVG card with crew avatar, name, highlight text, and m3llo branding.
 4. Rasterize to PNG using `resvg-wasm` with embedded font buffers.
 5. Return with `Content-Type: image/png`. Cached via `caches.default`.

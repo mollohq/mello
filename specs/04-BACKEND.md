@@ -98,6 +98,10 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `s3.go` | S3/R2 presign client singleton, `GeneratePresignedPUT`, `S3PublicURL` helpers; the chat bucket (`MEDIA_S3_BUCKET`, `MEDIA_S3_PUBLIC_URL`) with `GeneratePresignedPUTChat` and `DeleteChatObjects` |
 | `chat_images.go` | `ChatUploadURLRPC`, `ChatDeleteImagesRPC`, the chat image key rules and `validateChatImages` for the message hook |
 | `chat_reactions.go` | `ChatReactRPC`, `ChatReactionsRPC`; `applyReaction` and `validReactionEmoji` are pure |
+| `crew_quests.go` | The quest record of a new crew, the step writers, the `quests` zone (features/CREW-QUESTS.md) |
+| `crew_gifts.go` | The quest gifts: banner, custom invite name, crew emoji, `giftOpen`, reports, `report_invite_copied`, the m3llo+ grant |
+| `entitlements.go` | `user_plus` and `IsUserPremium` |
+| `admin_media_reports.go` | `AdminMediaReportsListRPC`, `AdminMediaTakedownRPC`, `AdminMediaReportDismissRPC`: server-to-server list and handling of media reports |
 | `admin_live_snapshot.go` | `AdminLiveSnapshotRPC` — server-to-server snapshot of non-empty voice rooms (channel, crew, members) plus active streams (`stream_meta` scan). Powers the admin Live view. |
 | `admin_capture_policy.go` | `AdminCapturePolicyGetRPC`, `AdminCapturePolicySetRPC` — server-to-server read and conditional write of the game capture hook policy (§4.2). Powers the admin Hook policy page. |
 | `discover_curation.go` | `AdminDiscoverCurationGetRPC`, `AdminDiscoverCurationSetRPC`: server-to-server read and conditional write of the Discover curation (§4.3). `readDiscoverCuration` is also read by `DiscoverCrewsRPC`. Powers the admin Discover page. |
@@ -134,6 +138,19 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `chat_delete_images` | Yes | Removes up to four objects from the chat bucket. Only keys whose second segment is the caller's user id. |
 | `chat_react` | Yes | Adds or removes the caller under one emoji on one message (`chat_reactions/{message_id}`, system-owned, read by all). At most 20 distinct emoji per message. Every crew member then gets notification 117 with the message's reactions. |
 | `chat_reactions` | Yes | The reactions of up to 250 messages of one crew in one read, for the loaded window. |
+| `crew_banner_upload_url` | Yes | `{crew_id, mime, bytes}`. A presigned PUT for a banner JPEG of at most 400 KB. Owner only. See features/CREW-QUESTS.md §3.1. |
+| `set_crew_banner` | Yes | `{crew_id, kind: "game" \| "upload", game_id \| key}`. Sets the banner; a replaced upload is deleted. Owner only. |
+| `clear_crew_banner` | Yes | `{crew_id}`. Removes the banner. Owner only. |
+| `check_invite_name` | Yes | `{crew_id, name}` → `{state: "free" \| "taken" \| "not_allowed"}`. |
+| `set_invite_name` | Yes | `{crew_id, name}`. The custom invite name. Owner only, gift 2 open. §3.2 of CREW-QUESTS. |
+| `crew_emoji_upload_url` | Yes | `{crew_id, mime, bytes}`. A presigned PUT for a crew emoji of at most 256 KB, while a slot is free. Member, gift 3 open. |
+| `crew_emoji_add` | Yes | `{crew_id, name, key}`. Adds a crew emoji. Member, gift 3 open. |
+| `crew_emoji_remove` | Yes | `{crew_id, name}`. The adder or the owner. Deletes the object. |
+| `report_crew_media` | Optional | `{crew_id, kind: "banner" \| "emoji", name?}`. Records a report of an uploaded banner or a crew emoji. A user session, or the `http_key` from the join page. |
+| `report_invite_copied` | Yes | `{crew_id}`. Marks the first copy of an invite link in the quest record. Member. |
+| `admin_media_reports_list` | No (`http_key`, server-to-server only) | `{status?: "open"}` → `{reports}`: the media reports, newest first, at most 500, with the crew name and whether the image is still live. Rejects client sessions. |
+| `admin_media_takedown` | No (`http_key`, server-to-server only) | `{report_id, reason, actor}` → `{removed, closed}`. Removes the reported image when it is still the crew's, deletes its object, closes every open report of it. Rejects client sessions. |
+| `admin_media_report_dismiss` | No (`http_key`, server-to-server only) | `{report_id, reason, actor}` → `{closed}`. Closes the reports and keeps the image. Rejects client sessions. |
 | `admin_live_snapshot` | No (`http_key`, server-to-server only) | Returns live voice rooms and active streams (see §4.1). Rejects client sessions. Cached 15s, stale served on collect failure. |
 | `admin_capture_policy_get` | No (`http_key`, server-to-server only) | Returns the stored hook policy and its storage version (see §4.2). Rejects client sessions. |
 | `admin_capture_policy_set` | No (`http_key`, server-to-server only) | Replaces the stored hook policy, only if the storage version still matches (see §4.2). Rejects client sessions. |
