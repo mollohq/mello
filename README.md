@@ -201,6 +201,8 @@ Same client, same features. The difference is who runs the backend and the SFU.
 
 Apache 2.0. See [LICENSE](LICENSE). The SFU in [m3llo-sfu](https://github.com/mollohq/m3llo-sfu) uses FSL-1.1-ALv2: each release becomes Apache 2.0 two years after it ships.
 
+The notification sounds in `mello-core/assets/sounds` are by Petter B. and are not under Apache 2.0. See their [LICENSE](mello-core/assets/sounds/LICENSE).
+
 ---
 
 <p align="center">

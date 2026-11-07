@@ -577,6 +577,13 @@ func recordMemberJoined(ctx context.Context, logger runtime.Logger, nk runtime.N
 		InvitedBy:     data.InvitedBy,
 		InvitedByName: data.InvitedByName,
 	})
+	PushCrewEvent(ctx, logger, nk, crewID, "member_joined", memberJoinedPayload(userID))
+}
+
+// memberJoinedPayload is the data of the member_joined crew event (code 111).
+// The desktop client plays the new member sound on it. Ids only.
+func memberJoinedPayload(userID string) map[string]interface{} {
+	return map[string]interface{}{"user_id": userID}
 }
 
 func AfterLeaveCrew(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, in *api.LeaveGroupRequest) error {

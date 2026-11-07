@@ -119,6 +119,11 @@ pub fn dispatch(ctx: &crate::app_context::AppContext, action: MuteAction) {
     ctx.app.set_mic_muted(next.muted);
     ctx.app.set_deafened(next.deafened);
     ctx.muted_before_deafen.set(next.muted_before_deafen);
+    crate::sounds::cue_mute_change(
+        ctx,
+        (current.muted, current.deafened),
+        (next.muted, next.deafened),
+    );
 
     if let Some(deafened) = outcome.send_deafen {
         let _ = ctx.cmd_tx.send(Command::SetDeafen { deafened });

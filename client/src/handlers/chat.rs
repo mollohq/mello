@@ -305,6 +305,19 @@ pub fn handle(ctx: &AppContext, event: Event) {
             let is_own = sender_id == uid;
 
             let mentions_self = message.mentions_user(&uid);
+            // Only when the user does not look at m3llo. A mention replaces
+            // the message sound.
+            if !is_own && !message.is_system && !crate::activity_report::window_foreground(&ctx.app)
+            {
+                crate::sounds::cue(
+                    ctx,
+                    if mentions_self {
+                        mello_core::sounds::Sound::Mention
+                    } else {
+                        mello_core::sounds::Sound::Message
+                    },
+                );
+            }
 
             let active_crew = ctx.app.get_active_crew_id().to_string();
             let was_at_bottom = ctx.chat_scroll.at_bottom.get();

@@ -11,6 +11,7 @@ import {
     EmojiItemData,
     MentionMemberData,
     AudioDeviceData,
+    SoundSettings,
     VoiceChannelData,
     VoiceChannelMember,
     CaptureSourceData,
@@ -77,7 +78,7 @@ export { ClipPlayerUi }
 
 
 export { BannerPicker, InviteNamePicker, CrewEmojiUi }
-export { ChatFocus, BeltReveal, RecapSeal, Clock, SealedUi, CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, BeltHeroData, HeroStreamData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, NoticeEntryData, TesterData, InvitePersonData, Theme, VideoRect, FeedView, ForceUpdateWindow }
+export { ChatFocus, BeltReveal, RecapSeal, Clock, SealedUi, CrewData, MemberData, ChatMessageData, AudioDeviceData, SoundSettings, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, BeltHeroData, HeroStreamData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, NoticeEntryData, TesterData, InvitePersonData, Theme, VideoRect, FeedView, ForceUpdateWindow }
 
 export component MainWindow inherits Window {
     title: "m3llo";
@@ -329,6 +330,7 @@ export component MainWindow inherits Window {
     // Audio settings
     in-out property <float> settings-input-volume: 1.0;
     in-out property <float> settings-output-volume: 1.0;
+    in-out property <SoundSettings> settings-sounds: { volume: 0.8, voice: true, streams: true, chat: true, clips: true, crew: true };
     in-out property <bool> settings-noise-suppression: true;
     in-out property <bool> settings-echo-cancellation: true;
     in-out property <bool> settings-echo-suppression: false;
@@ -770,6 +772,7 @@ export component MainWindow inherits Window {
     callback setting-changed-openh264-enabled(bool);
     callback setting-changed-input-volume(float);
     callback setting-changed-output-volume(float);
+    callback setting-changed-sounds(SoundSettings);
     callback setting-changed-noise-suppression(bool);
     callback setting-changed-echo-cancellation(bool);
     callback setting-changed-echo-suppression(bool);
@@ -1880,6 +1883,7 @@ export component MainWindow inherits Window {
         // Audio
         input-volume <=> root.settings-input-volume;
         output-volume <=> root.settings-output-volume;
+        sounds <=> root.settings-sounds;
         noise-suppression <=> root.settings-noise-suppression;
         echo-cancellation <=> root.settings-echo-cancellation;
         echo-suppression <=> root.settings-echo-suppression;
@@ -2004,6 +2008,10 @@ export component MainWindow inherits Window {
         setting-changed-output-volume(v) => {
             root.settings-show-saved = true;
             root.setting-changed-output-volume(v);
+        }
+        setting-changed-sounds(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-sounds(v);
         }
         setting-changed-noise-suppression(v) => {
             root.settings-show-saved = true;

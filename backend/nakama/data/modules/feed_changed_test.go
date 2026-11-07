@@ -116,3 +116,51 @@ func TestFeedChangedSkipsMembersWhoDoNotHaveTheCrewOpen(t *testing.T) {
 		t.Fatalf("got %+v", n)
 	}
 }
+
+func crewEventsTo(userID, event string) []sentNote {
+	feedNotesMu.Lock()
+	defer feedNotesMu.Unlock()
+	var out []sentNote
+	for _, n := range feedNotes {
+		if n.userID == userID && n.code == NotifyCrewEvent && n.content["event"] == event {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func TestPostClipSendsClipPostedToTheCrew(t *testing.T) {
+	nk := feedChangedFixture("fc-crew-5")
+	payload := `{"crew_id":"fc-crew-5","clip_id":"c5","clip_type":"voice","duration_seconds":10}`
+	if _, err := PostClipRPC(ctxWithUser("fc-actor"), testLogger(), nil, nk, payload); err != nil {
+		t.Fatal(err)
+	}
+	got := crewEventsTo("fc-mate", "clip_posted")
+	if len(got) != 1 {
+		t.Fatalf("mate got %+v", got)
+	}
+	data, _ := got[0].content["data"].(map[string]interface{})
+	if got[0].content["crew_id"] != "fc-crew-5" || data["clip_id"] != "c5" || data["clipper_id"] != "fc-actor" || data["clip_type"] != "voice" {
+		t.Fatalf("clip_posted = %+v", got[0].content)
+	}
+	// A retry of the same clip returns the stored clip and sends nothing.
+	if _, err := PostClipRPC(ctxWithUser("fc-actor"), testLogger(), nil, nk, payload); err != nil {
+		t.Fatal(err)
+	}
+	if n := crewEventsTo("fc-mate", "clip_posted"); len(n) != 1 {
+		t.Fatalf("a retry sent clip_posted again: %+v", n)
+	}
+}
+
+func TestMemberJoinedIsSentToTheCrew(t *testing.T) {
+	nk := feedChangedFixture("fc-crew-6")
+	recordMemberJoined(context.Background(), testLogger(), nk, "fc-crew-6", "fc-newbie", "")
+	got := crewEventsTo("fc-mate", "member_joined")
+	if len(got) != 1 {
+		t.Fatalf("mate got %+v", got)
+	}
+	data, _ := got[0].content["data"].(map[string]interface{})
+	if data["user_id"] != "fc-newbie" || len(data) != 1 {
+		t.Fatalf("member_joined data = %+v, want the user id only", data)
+	}
+}

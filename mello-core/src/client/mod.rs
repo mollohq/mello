@@ -317,6 +317,12 @@ impl Client {
         self.refresh_gated_games();
     }
 
+    /// Lets `player` play the notification sounds on this client's voice
+    /// context. Call before `run()`.
+    pub fn set_sound_player(&mut self, player: crate::sounds::SoundPlayer) {
+        self.voice.attach_sound_player(player);
+    }
+
     /// Seed activity-sharing consent from persisted client settings. Must be
     /// called before `run()` so the first presence sync honors it.
     pub fn set_share_game_activity(&mut self, enabled: bool) {

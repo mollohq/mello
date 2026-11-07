@@ -31,7 +31,7 @@ pub fn start(ctx: &AppContext) -> slint::Timer {
 
 /// Visible and focused. A minimized or tray-hidden window, or one behind
 /// another app, is not in the foreground.
-fn window_foreground(app: &MainWindow) -> bool {
+pub(crate) fn window_foreground(app: &MainWindow) -> bool {
     let window = app.window();
     if !window.is_visible() {
         return false;

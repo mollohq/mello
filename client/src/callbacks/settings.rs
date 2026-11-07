@@ -223,6 +223,7 @@ pub fn wire(ctx: &AppContext) {
                 app.set_settings_openh264_enabled(settings.openh264_enabled);
                 app.set_settings_input_volume(settings.input_volume);
                 app.set_settings_output_volume(settings.output_volume);
+                app.set_settings_sounds(settings.sound_settings());
                 app.set_settings_noise_suppression(settings.noise_suppression);
                 app.set_settings_echo_cancellation(settings.echo_cancellation);
                 app.set_settings_echo_suppression(settings.echo_suppression);
@@ -445,6 +446,23 @@ pub fn wire(ctx: &AppContext) {
             settings.input_volume = v;
             settings.save();
             let _ = cmd.send(Command::SetInputVolume { volume: v });
+        });
+    }
+    {
+        let s = ctx.settings.clone();
+        ctx.app.on_setting_changed_sounds(move |v| {
+            let mut settings = s.borrow_mut();
+            settings.set_sound_settings(&v);
+            settings.save();
+            log::info!(
+                "settings: sounds volume={:.2} voice={} streams={} chat={} clips={} crew={}",
+                v.volume,
+                v.voice,
+                v.streams,
+                v.chat,
+                v.clips,
+                v.crew
+            );
         });
     }
     {
@@ -814,6 +832,7 @@ pub fn wire(ctx: &AppContext) {
                 app.set_settings_openh264_enabled(defaults.openh264_enabled);
                 app.set_settings_input_volume(defaults.input_volume);
                 app.set_settings_output_volume(defaults.output_volume);
+                app.set_settings_sounds(defaults.sound_settings());
                 app.set_settings_noise_suppression(defaults.noise_suppression);
                 app.set_settings_echo_cancellation(defaults.echo_cancellation);
                 app.set_settings_echo_suppression(defaults.echo_suppression);

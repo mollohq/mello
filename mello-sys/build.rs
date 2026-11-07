@@ -423,6 +423,8 @@ fn run_bindgen(manifest_dir: &str) {
         .allowlist_type("Mello.*")
         // Contract constant shared with the SFU (01-SFU.md section 5.5).
         .allowlist_var("MELLO_VOICE_RECV_SLOTS")
+        // Notification sound slots (specs/features/NOTIFICATION-SOUNDS.md).
+        .allowlist_var("MELLO_SOUND_SLOTS")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .generate()
         .expect("Failed to generate bindings");

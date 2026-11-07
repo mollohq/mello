@@ -385,6 +385,27 @@ MELLO_API MelloResult mello_clip_play_mp4(MelloContext* ctx, const char* mp4_pat
 /** Stop clip playback. */
 MELLO_API MelloResult mello_clip_stop_playback(MelloContext* ctx);
 
+/* ============================================================================
+ * Notification sounds (specs/features/NOTIFICATION-SOUNDS.md)
+ * Short sounds that play on app events. They play through the voice output
+ * device also outside a call, after the deafen gate, and not into a voice
+ * clip. The output volume does not apply; `gain` is the sound volume.
+ * ============================================================================ */
+
+/** Number of sound slots: ids are 0 .. MELLO_SOUND_SLOTS - 1. */
+#define MELLO_SOUND_SLOTS 32
+
+/** Copy `frames` frames of 48 kHz interleaved stereo int16 PCM into slot
+ *  `id`. At most 10 s. A second load of a slot replaces its sound.
+ *  Returns MELLO_ERROR_INVALID_PARAM for a bad id, no PCM or too many frames. */
+MELLO_API MelloResult mello_sound_load(MelloContext* ctx, uint32_t id,
+                                       const int16_t* stereo_pcm, size_t frames);
+
+/** Play slot `id` once at `gain` (0..1). It does not wait. At most 4 sounds
+ *  play at the same time: a fifth replaces the one that started first.
+ *  Returns MELLO_ERROR_FAILED when the slot is empty or 16 plays wait. */
+MELLO_API MelloResult mello_sound_play(MelloContext* ctx, uint32_t id, float gain);
+
 /** Returns true if a clip is currently playing (or paused mid-playback). */
 MELLO_API bool mello_clip_is_playing(MelloContext* ctx);
 

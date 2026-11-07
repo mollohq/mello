@@ -132,6 +132,9 @@ pub struct AppContext {
     /// Posts the notice that the closed window went to the tray. `None`
     /// posts nothing.
     pub tray_notice: Rc<RefCell<Option<crate::notifications::ShowNotice>>>,
+    /// Notification sounds (sounds.rs). A test has no player: the cues are
+    /// logged and nothing plays.
+    pub sounds: Rc<crate::sounds::SoundCues>,
     pub snapshot_loader: Rc<SnapshotLoader>,
     pub stream_frame_timer: Rc<crate::stream_frame_timer::StreamFrameTimer>,
     #[cfg(target_os = "windows")]
@@ -262,6 +265,7 @@ impl AppContext {
             startup_clipboard: Rc::new(RefCell::new(None)),
             // Never a real OS notification in a test.
             tray_notice: Rc::new(RefCell::new(None)),
+            sounds: Rc::new(crate::sounds::SoundCues::new(None)),
             snapshot_loader: Rc::new(SnapshotLoader::new(rt)),
             stream_frame_timer,
             #[cfg(target_os = "windows")]
@@ -341,6 +345,7 @@ impl Clone for AppContext {
             ipc_listener: self.ipc_listener.clone(),
             startup_clipboard: self.startup_clipboard.clone(),
             tray_notice: self.tray_notice.clone(),
+            sounds: self.sounds.clone(),
             snapshot_loader: self.snapshot_loader.clone(),
             stream_frame_timer: self.stream_frame_timer.clone(),
             #[cfg(target_os = "windows")]

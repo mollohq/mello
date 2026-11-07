@@ -793,6 +793,8 @@ Event types:
 - `channel_created` — a new voice channel was added
 - `channel_renamed` — a voice channel was renamed
 - `channel_deleted` — a voice channel was removed
+- `clip_posted` — `clip_id`, `clipper_id` and `clip_type` in `data`, sent from `post_clip` after the clip is stored
+- `member_joined` — `user_id` in `data`, sent when a member joins the crew
 - `mention` (always immediate)
 - `dm_received` (always immediate)
 
@@ -941,6 +943,8 @@ var PriorityEvents = map[string]bool{
     "channel_deleted":  true,
     "mention":          true,
     "dm_received":      true,
+    "clip_posted":      true,
+    "member_joined":    true,
 }
 
 func PushCrewEvent(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule,

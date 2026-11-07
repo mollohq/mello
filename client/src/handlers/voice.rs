@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use mello_core::sounds::Sound;
 use mello_core::{Command, Event, VoiceMode};
 use slint::Model;
 
@@ -54,6 +55,7 @@ pub(crate) fn sync_member_audio(ctx: &AppContext) {
             }
         }
     }
+    crate::sounds::sync_voice_members(ctx, &joined, &present);
     let commands = ctx
         .member_audio
         .borrow_mut()
@@ -78,6 +80,18 @@ pub(crate) fn sync_member_audio(ctx: &AppContext) {
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
         Event::VoiceStateChanged { in_call, transport } => {
+            // The sounds (specs/features/NOTIFICATION-SOUNDS.md §6): a call that comes
+            // up plays the join sound, and a call that was up and ends plays
+            // the leave sound. A call that comes back after a drop is silent,
+            // and a reconnect that gave up already played connection lost.
+            let was_reconnecting = ctx.app.get_voice_reconnecting();
+            let was_in_sfu_call = ctx.in_sfu_call.get();
+            let up = in_call && transport == VoiceMode::SFU;
+            if up && !was_in_sfu_call && !was_reconnecting {
+                crate::sounds::cue(ctx, Sound::YouJoin);
+            } else if !in_call && was_in_sfu_call && !was_reconnecting {
+                crate::sounds::cue(ctx, Sound::YouLeave);
+            }
             // The call is back (in_call) or over (the reconnect gave up, or
             // the user left): either way it no longer reconnects.
             ctx.app.set_voice_reconnecting(false);
@@ -540,6 +554,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
             );
             // The voice tick's scheduler reconnects; the channel header and
             // the local member's row say so until VoiceStateChanged.
+            if !ctx.app.get_voice_reconnecting() {
+                crate::sounds::cue(ctx, Sound::ConnectionLost);
+            }
             ctx.app.set_voice_reconnecting(true);
         }
         Event::VoiceLinkStalled { crew_id, stalled } => {
