@@ -2100,6 +2100,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 }
             }
             super::zones::refresh(ctx);
+            super::quests::refresh_emoji_gift(ctx);
             ctx.app.set_feed_clip_count(clip_count);
 
             let gen = ctx.snapshot_loader.bump_generation();

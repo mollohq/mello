@@ -271,7 +271,7 @@ func AdminMediaTakedownRPC(ctx context.Context, logger runtime.Logger, db *sql.D
 			logger.Warn("admin_media_takedown: delete %s: %v", key, err)
 		}
 		InvalidateCrewState(r.CrewID)
-		PushFeedChanged(ctx, logger, nk, r.CrewID, "media")
+		pushCrewGiftsChanged(ctx, logger, nk, r.CrewID, r.Kind)
 	}
 	closed := closeMediaReports(ctx, logger, nk, req.ReportID, *r, "taken_down", req)
 	logger.Info("admin_media_takedown: report=%s crew=%s kind=%s removed=%v closed=%d actor=%s",
