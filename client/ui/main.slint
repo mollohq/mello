@@ -453,6 +453,15 @@ export component MainWindow inherits Window {
     in property <int> active-stream-width: 0;
     in property <int> active-stream-height: 0;
     in property <int> active-stream-viewer-count: 0;
+    /// The catalogue id of the game the host captures (0: a display or an
+    /// unknown window), and the SFU's last picture of the stream.
+    in property <int> active-stream-igdb-id: 0;
+    in property <string> active-stream-thumbnail-url: "";
+    /// The last picture, decoded, and the URL it came from.
+    in property <image> active-stream-picture;
+    in property <string> active-stream-picture-url: "";
+    /// The catalogue id of the game of your own stream.
+    in property <int> stream-igdb-id: 0;
     // --- stage 6 (streaming-quality): stream session states ---
     /// The hosted stream: "" (none), "starting", "live", "reconnecting".
     in property <string> stream-host-state: "";

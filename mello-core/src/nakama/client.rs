@@ -1557,6 +1557,29 @@ impl NakamaClient {
         Ok(parsed.data)
     }
 
+    /// Fetch the URL of the newest public SFU picture of a live stream
+    /// session. The future owns everything it needs, so the caller spawns
+    /// it and the command loop does not wait on the backend. The URL is
+    /// empty when the SFU keeps no pictures or the stream ended.
+    pub fn stream_picture(
+        &self,
+        crew_id: &str,
+        session_id: &str,
+    ) -> Result<impl std::future::Future<Output = Result<String>> + Send + 'static> {
+        let payload = serde_json::json!({ "crew_id": crew_id, "session_id": session_id });
+        let request = self.rpc_detached("stream_picture", &payload)?;
+        Ok(async move {
+            let resp = request.await?;
+            #[derive(serde::Deserialize, Default)]
+            struct PictureResp {
+                #[serde(default)]
+                url: String,
+            }
+            let parsed: PictureResp = serde_json::from_str(&resp).unwrap_or_default();
+            Ok(parsed.url)
+        })
+    }
+
     /// Fetch the caller's own per-game stats (owner-read), newest first.
     pub async fn user_game_stats_get(
         &self,

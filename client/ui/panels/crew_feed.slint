@@ -2,7 +2,7 @@ import { Theme } from "../theme.slint";
 import { CutShape, CutMask, CutButtonShape } from "../components/cut.slint";
 import { UserAvatar, AvatarOverflow } from "../components/avatar.slint";
 import { FeedCardData, FeedView, StreamCardData, YouStripData } from "../types.slint";
-import { ActiveStreamsPanel } from "./active_streams_panel.slint";
+import { ActiveStreamsPanel, StreamCardSize } from "./active_streams_panel.slint";
 import { SessionPreviewCard } from "./session_preview_card.slint";
 import { GameClipCard } from "./game_clip_card.slint";
 import { BeltHero, TitleChip, H2hHue } from "../components/head2head.slint";
@@ -2004,8 +2004,16 @@ export component CrewFeed inherits Rectangle {
     property <length> rh: Theme.feed-row;
 
     property <bool> has-stage: zones.stage != "";
+    property <length> stage-w: has-board ? root.two : root.inner-w;
+    // While you watch, the live stage grows to the watched card's height:
+    // its picture is 16:9 at the card's width (ActiveStreamsPanel's
+    // watch-height, one formula in StreamCardSize). In the wide slot the
+    // card is shorter and sits at the top of the stage.
     property <length> stage-h: !has-stage ? 0px
-        : zones.stage == "card" && zones.stage-short ? rh : rh * 2 + 12px;
+        : zones.stage == "card" && zones.stage-short ? rh
+        : zones.stage == "live" && root.is-watching
+            ? max(rh * 2 + 12px, StreamCardSize.watch-height(root.stage-w, root.stream-cards.length))
+        : rh * 2 + 12px;
     property <bool> has-board: zones.board != "";
     property <length> board-h: zones.board == "sealed" || zones.board == "past" || zones.board == "solo"
         ? rh * 2 + 12px : rh * 3 + 24px;
@@ -2079,7 +2087,7 @@ export component CrewFeed inherits Rectangle {
                     alignment: start;
 
                     VerticalLayout {
-                        width: has-board ? root.two : root.inner-w;
+                        width: root.stage-w;
                         spacing: 12px;
                         alignment: start;
 

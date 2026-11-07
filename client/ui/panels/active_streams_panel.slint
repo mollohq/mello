@@ -4,6 +4,41 @@ import { UserAvatar } from "../components/avatar.slint";
 import { SmallToggle } from "../components/small_toggle.slint";
 import { MemberVolumeSlider } from "member_volume_popover.slint";
 import { StreamCardData, VideoRect, StreamCardUi, StreamStatsData } from "../types.slint";
+import { StreamTag, PlayButton, FootageWash, MediaChip } from "../components/stream_hero.slint";
+import { GameIcon } from "../components/game_icon.slint";
+
+/// The size of the stream card while the viewer watches. The picture is
+/// 16:9 at the card's width inside the keylines, with no black bars; the
+/// stats strip (when shown) and the footer go under it. The panel and the
+/// feed read the height here, so both use one formula.
+export global StreamCardSize {
+    out property <length> footer: 72px;
+    out property <length> stats: 40px;
+    out property <length> grid-row: 300px;
+    out property <length> grid-gap: 12px;
+
+    /// The height of the watched card at this width.
+    public pure function card-height(width: length) -> length {
+        return Theme.keyline + (width - 2 * Theme.keyline) * 9 / 16
+            + (StreamCardUi.stats-shown ? StreamCardSize.stats : 0px)
+            + StreamCardSize.footer;
+    }
+
+    /// The row height of the two-column grid at this panel width while the
+    /// viewer watches: the watched card must fit its row.
+    public pure function watch-row(width: length) -> length {
+        return max(StreamCardSize.grid-row,
+            StreamCardSize.card-height((width - StreamCardSize.grid-gap) / 2));
+    }
+
+    /// The height of the panel at this width while the viewer watches: one
+    /// card, or the grid of `count` cards.
+    public pure function watch-height(width: length, count: int) -> length {
+        return count <= 1 ? StreamCardSize.card-height(width)
+            : floor((count + 1) / 2) * StreamCardSize.watch-row(width)
+                + (floor((count + 1) / 2) - 1) * StreamCardSize.grid-gap;
+    }
+}
 
 component StreamIconButton inherits Rectangle {
     in property <image> icon;
@@ -91,6 +126,237 @@ component StreamStatCell inherits VerticalLayout {
     }
 }
 
+/// The streamer and the game: the octagon, the name, and under it the
+/// game's icon tile and name (mockup frame C, placement B of 2026-11-06).
+/// Without a catalogue game, what the host called the stream. On the
+/// bottom wash of a picture the name stands alone; in the card's footer
+/// the state tag (with the count) and the format chip stand beside it.
+component StreamerLine inherits HorizontalLayout {
+    in property <StreamCardData> card;
+    /// The footer's state tag ("LIVE", "YOU ARE LIVE", "STARTING", ...).
+    /// Empty: no tag.
+    in property <string> tag: "";
+    /// Red: live, or the link is down right now.
+    in property <bool> tag-live: false;
+    /// How many watch, on the tag. Empty: no count.
+    in property <string> tag-count: "";
+    /// The picture's format ("720p60"). Empty: no chip.
+    in property <string> format: "";
+    /// Added to the game line after a middot ("12 watching"): a narrow
+    /// footer has no room for the count on the tag.
+    in property <string> game-suffix: "";
+
+    property <string> game-text: root.card.game-name != "" ? root.card.game-name : root.card.subtitle;
+
+    spacing: 12px;
+    cross-axis-alignment: center;
+
+    Rectangle {
+        width: 40px;
+        height: 40px;
+        UserAvatar {
+            bg-color: #000000;
+            initials: root.card.avatar-initials;
+            avatar: root.card.avatar;
+            has-avatar: root.card.has-avatar;
+            color-index: root.card.avatar-color-index;
+            size: 40px;
+        }
+    }
+    VerticalLayout {
+        // The column takes the width it is given: a narrow footer elides
+        // the game line instead of widening the column past the clip.
+        min-width: 0px;
+        alignment: center;
+        spacing: 5px;
+        HorizontalLayout {
+            spacing: 10px;
+            // Items keep their width and the room is left at the end;
+            // a spacer would cost one more gap in a narrow footer.
+            alignment: start;
+            cross-axis-alignment: center;
+            Text {
+                text: root.card.streamer-name;
+                font-family: Theme.font-display;
+                font-weight: Theme.weight-display;
+                font-size: 17px;
+                color: Theme.text-primary;
+                overflow: elide;
+                // The name keeps 96 px before it elides.
+                min-width: min(self.preferred-width, 96px);
+            }
+            if root.tag != "": StreamTag {
+                label: root.tag;
+                live: root.tag-live;
+                count: root.tag-count;
+                count-label: "WATCHING";
+            }
+            if root.format != "": MediaChip {
+                Text {
+                    text: root.format;
+                    font-family: Theme.font-label;
+                    font-weight: Theme.weight-label;
+                    font-size: 9px;
+                    letter-spacing: 1.4px;
+                    color: #A2A2A8;
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            cross-axis-alignment: center;
+            if root.card.game-name != "": Rectangle {
+                width: 18px;
+                height: 18px;
+                GameIcon {
+                    size: 18px;
+                    short-name: root.card.game-monogram;
+                    runtime-icon: root.card.game-icon;
+                    has-runtime-icon: root.card.has-game-icon;
+                    bg-color: #000000;
+                    badge-color: Theme.raised;
+                }
+            }
+            // The game name elides; the count after it stays whole
+            // ("Counter-Str… · 12 watching").
+            HorizontalLayout {
+                horizontal-stretch: 1;
+                min-width: 0px;
+                spacing: 0px;
+                if root.game-text != "": Text {
+                    text: root.game-text;
+                    font-family: Theme.font-body;
+                    font-weight: Theme.weight-sentence;
+                    font-size: 13px;
+                    color: #C9C9CF;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                    min-width: 0px;
+                }
+                if root.game-suffix != "": Text {
+                    text: root.game-text == "" ? root.game-suffix : " · " + root.game-suffix;
+                    font-family: Theme.font-body;
+                    font-weight: Theme.weight-sentence;
+                    font-size: 13px;
+                    color: #C9C9CF;
+                    vertical-alignment: center;
+                    horizontal-stretch: 0;
+                    width: self.preferred-width;
+                }
+            }
+        }
+    }
+}
+
+/// One stream of the strips card (mockup frames D and G): its picture, the
+/// play ring, the streamer and the game on the bottom wash.
+component StreamStrip inherits Rectangle {
+    in property <StreamCardData> card;
+    in property <length> ring: 56px;
+    callback watch-clicked();
+
+    clip: true;
+    background: Theme.raised;
+
+    if root.card.picture-kind != "": Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.card.picture;
+        image-fit: cover;
+    }
+    if root.card.picture-kind == "": Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: @linear-gradient(135deg, #2A2140 0%, Theme.card-bg-inset 100%);
+        Text {
+            text: root.card.game-monogram;
+            font-family: Theme.font-display;
+            font-weight: Theme.weight-display-bold;
+            font-size: parent.height * 0.42;
+            color: #FFFFFF12;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+        }
+    }
+    FootageWash { width: parent.width; height: parent.height; }
+
+    PlayButton {
+        x: (parent.width - self.width) / 2;
+        y: parent.height * 0.44 - self.height / 2;
+        size: root.ring;
+        hover: strip-touch.has-hover;
+    }
+
+    StreamerLine {
+        x: 18px;
+        y: parent.height - self.height - 16px;
+        width: self.preferred-width;
+        height: self.preferred-height;
+        card: root.card;
+    }
+
+    strip-touch := TouchArea {
+        accessible-role: button;
+        accessible-label: "Watch " + root.card.streamer-name;
+        mouse-cursor: pointer;
+        clicked => { root.watch-clicked(); }
+    }
+}
+
+/// Two or three streams you have not joined share one card: strips, one
+/// above the other, and one tag that says how many stream.
+component LiveStripsCard inherits Rectangle {
+    in property <[StreamCardData]> cards;
+    callback watch-stream-clicked(string, string, int, int);
+
+    background: transparent;
+
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "br";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "br"; inset: Theme.keyline;
+        fill: #000000;
+    }
+    VerticalLayout {
+        padding: Theme.keyline;
+        spacing: 2px;
+        for c in root.cards: StreamStrip {
+            card: c;
+            ring: root.cards.length > 2 ? 48px : 56px;
+            watch-clicked => {
+                root.watch-stream-clicked(c.host-id, c.session-id, c.stream-width, c.stream-height);
+            }
+        }
+    }
+    CutMask {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "br";
+        fill: Theme.bg-app;
+    }
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: self.width / 1px;
+        viewbox-height: self.height / 1px;
+        stroke: Theme.card-border;
+        stroke-width: 1px;
+        commands: "M \{self.width / 1px} \{(self.height - Theme.notch) / 1px} L \{(self.width - Theme.notch) / 1px} \{self.height / 1px}";
+    }
+    StreamTag {
+        x: 18px;
+        y: 14px;
+        label: "LIVE";
+        live: true;
+        count: root.cards.length;
+        count-label: "STREAMING";
+    }
+}
+
 component StreamCard inherits Rectangle {
     in property <StreamCardData> card;
     in property <bool> is-watching: false;
@@ -140,7 +406,7 @@ component StreamCard inherits Rectangle {
     property <bool> viewer-starting: !is-notice && card.can-watch
         && card.host-id == active-streamer-id && StreamCardUi.viewer-starting;
     property <bool> show-stats: show-live-frame && StreamCardUi.stats-shown;
-    property <length> stats-height: 40px;
+    property <length> stats-height: StreamCardSize.stats;
     /// This card is the expanded view's (main.slint), not one in the feed.
     in property <bool> expanded-view: false;
     /// The watched stream plays in the pop-out window: the card says so.
@@ -155,11 +421,44 @@ component StreamCard inherits Rectangle {
         && show-live-frame;
     /// The host's card and a watched card open different settings.
     property <string> settings-popover: show-hosting-state ? "host-settings" : "settings";
-    /// A card in the two-column grid has no room for the count badge next
-    /// to the name: the count goes into the line under it.
-    property <bool> narrow: root.width < 560px;
     property <bool> show-count: !is-notice && card.viewer-count > 0;
+    /// The footer's state tag: the state words, else LIVE (YOU ARE LIVE on
+    /// your own stream). The count rides the tag of a live stream.
+    property <string> tag-label: root.reconnecting ? "RECONNECTING"
+        : root.starting ? "STARTING"
+        : card.state == "failed" ? "NOT LIVE"
+        : card.state == "ended" ? "ENDED"
+        : "LIVE";
+    /// Red is state: live, or the link is down right now.
+    property <bool> tag-live: !root.is-notice && !root.starting;
+    property <bool> count-shown: !root.is-notice && !root.starting && !root.reconnecting
+        && root.show-count;
+    /// A card in the two-column grid (under 480 px) has no room for the
+    /// count on the tag or for the format chip: the count goes to the game
+    /// line ("Counter-Strike 2 · 12 watching").
+    property <bool> narrow-footer: root.width < 480px;
+    property <string> tag-count: root.count-shown && !root.narrow-footer ? root.card.viewer-count : "";
     // --- end stage 9 ---
+    // --- the picture (mockup next-gen-feed frames C and D) ---
+    /// The card before you watch and the hosted card draw the last picture
+    /// of the stream, or the game's hero art, under black washes. Chrome
+    /// over footage is black, not the graphite ramp.
+    property <bool> picture-card: !show-live-frame && !is-notice;
+    property <bool> has-picture: picture-card && root.card.picture-kind != "";
+    /// Somebody is live and you have not joined: the picture fills the
+    /// whole card, the play ring is the action, and there is no footer.
+    property <bool> cta-card: show-watch-cta;
+    /// The height of the picture. While you watch it is 16:9 at the
+    /// card's width inside the keylines (the expanded view keeps the height
+    /// it is given); before, the card's own media height.
+    property <length> media-h: root.cta-card ? root.height
+        : root.show-live-frame && !root.expanded-view ? (root.width - 2 * Theme.keyline) * 9 / 16
+        : root.show-live-frame ? root.media-height - Theme.keyline - (root.show-stats ? root.stats-height : 0px)
+        : root.media-height;
+    /// The panel sizes a watched card from these: the card shows the live
+    /// picture, and its height at its width (StreamCardSize).
+    out property <bool> live-frame: root.show-live-frame;
+    out property <length> live-height: StreamCardSize.card-height(root.width);
 
     background: transparent;
     clip: true;
@@ -183,324 +482,364 @@ component StreamCard inherits Rectangle {
     VerticalLayout {
         spacing: 0px;
 
-        media-rect := Rectangle {
-            // Stage 9: the stats strip takes its height from the picture.
-            height: root.media-height - (root.show-stats ? root.stats-height : 0px);
-            // Graphite, not blue. Nothing but game footage carries colour.
-            background: @linear-gradient(135deg, Theme.card-bg 0%, Theme.card-bg-inset 100%);
-            clip: true;
+        // While you watch, the picture sits inside the card's keylines.
+        Rectangle {
+            height: root.media-h + (root.show-live-frame ? Theme.keyline : 0px);
 
-            if show-live-frame: Rectangle {
-                width: parent.width;
-                height: parent.height;
-                background: transparent;
+            media-rect := Rectangle {
+                x: root.show-live-frame ? Theme.keyline : 0px;
+                y: root.show-live-frame ? Theme.keyline : 0px;
+                width: parent.width - (root.show-live-frame ? 2 * Theme.keyline : 0px);
+                height: root.media-h;
+                // Black under the live picture (chrome under footage is black);
+                // graphite, not blue, before. Nothing but game footage carries
+                // colour.
+                background: root.show-live-frame ? #000000
+                    : @linear-gradient(135deg, Theme.card-bg 0%, Theme.card-bg-inset 100%);
+                clip: true;
 
-                if !show-paused: Image {
-                    source: root.stream-frame;
+                // The last picture of the stream, or the game's hero art, keeps
+                // its colour. Without either, the tint and the game's monogram.
+                if root.has-picture: Image {
                     width: parent.width;
                     height: parent.height;
-                    image-fit: contain;
+                    source: root.card.picture;
+                    image-fit: cover;
                 }
-
-                // Reconnecting: the last frame stays under a black wash (the
-                // design system's wash over footage). On Windows the video
-                // layer draws the same wash (DCompPresenter).
-                if root.reconnecting && !show-paused: Rectangle {
+                if root.picture-card && !root.has-picture && root.card.game-monogram != "": Rectangle {
                     width: parent.width;
                     height: parent.height;
-                    background: #00000066;
-                }
-
-                // Stage 9: the video layer shows nothing before the first
-                // frame, so this text under it shows then.
-                if !show-paused && !root.popped && root.viewer-starting: VerticalLayout {
-                    alignment: center;
-                    spacing: 8px;
-
+                    background: @linear-gradient(135deg, #2A2140 0%, Theme.card-bg-inset 100%);
                     Text {
-                        text: "STARTING";
-                        font-family: Theme.font-label;
-                        font-size: 14px;
-                        font-weight: 700;
-                        letter-spacing: 1.2px;
-                        color: Theme.text-primary;
-                        horizontal-alignment: center;
-                    }
-
-                    Text {
-                        text: "Connecting to " + root.card.streamer-name + "'s stream";
-                        font-family: Theme.font-body;
-                        font-weight: Theme.weight-sentence;
-                        font-size: 12px;
-                        color: Theme.text-secondary;
-                        horizontal-alignment: center;
+                        text: root.card.game-monogram;
+                        font-family: Theme.font-display;
+                        font-weight: Theme.weight-display-bold;
+                        font-size: parent.height * 0.42;
+                        color: #FFFFFF12;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
                     }
                 }
+                if root.picture-card: FootageWash { width: parent.width; height: parent.height; }
 
-                // Stage 9: the stream plays in its own window; the video
-                // layer is there, so the card says so and brings it back.
-                if !show-paused && root.popped: VerticalLayout {
-                    alignment: center;
-                    spacing: 8px;
-
-                    Text {
-                        text: "PLAYING IN A WINDOW";
-                        font-family: Theme.font-label;
-                        font-size: 14px;
-                        font-weight: 700;
-                        letter-spacing: 1.2px;
-                        color: Theme.text-primary;
-                        horizontal-alignment: center;
-                    }
-
-                    Text {
-                        text: root.card.streamer-name + "'s stream is in its own window";
-                        font-family: Theme.font-body;
-                        font-weight: Theme.weight-sentence;
-                        font-size: 12px;
-                        color: Theme.text-secondary;
-                        horizontal-alignment: center;
-                    }
-
-                    Rectangle {
-                        height: 34px;
-
-                        Rectangle {
-                            width: back-label.preferred-width + 28px;
-                            height: parent.height;
-                            x: (parent.width - self.width) / 2;
-                            background: transparent;
-
-                            CutButtonShape {
-                                width: parent.width;
-                                height: parent.height;
-                                n: Theme.cut;
-                                fill: back-ta.has-hover ? Theme.action-press : Theme.action;
-                            }
-
-                            back-label := Text {
-                                text: "Show it here";
-                                font-family: Theme.font-label;
-                                font-size: 11px;
-                                font-weight: Theme.weight-label;
-                                letter-spacing: Theme.track-label;
-                                color: Theme.on-action;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-
-                            back-ta := TouchArea {
-                                accessible-role: button;
-                                accessible-label: "Show it here";
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    StreamCardUi.popout-requested(false);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Pause UX: opaque cover over the stale frame (and over the
-                // detached DComp layer on Windows) with the host's name.
-                if show-paused: Rectangle {
+                if show-live-frame: Rectangle {
                     width: parent.width;
                     height: parent.height;
-                    background: Theme.bg-app;
+                    background: transparent;
 
-                    VerticalLayout {
+                    if !show-paused: Image {
+                        source: root.stream-frame;
+                        width: parent.width;
+                        height: parent.height;
+                        image-fit: contain;
+                    }
+
+                    // Reconnecting: the last frame stays under a black wash (the
+                    // design system's wash over footage). On Windows the video
+                    // layer draws the same wash (DCompPresenter).
+                    if root.reconnecting && !show-paused: Rectangle {
+                        width: parent.width;
+                        height: parent.height;
+                        background: #00000066;
+                    }
+
+                    // Stage 9: the video layer shows nothing before the first
+                    // frame, so this text under it shows then.
+                    if !show-paused && !root.popped && root.viewer-starting: VerticalLayout {
                         alignment: center;
-                        spacing: 10px;
-
-                        Rectangle {
-                            width: parent.width;
-                            height: 26px;
-                            background: transparent;
-
-                            Image {
-                                source: @image-url("../icons/pause.svg");
-                                width: 26px;
-                                height: 26px;
-                                colorize: Theme.text-secondary;
-                                x: (parent.width - self.width) / 2;
-                            }
-                        }
+                        spacing: 8px;
 
                         Text {
-                            text: root.pause-title;
+                            text: "STARTING";
                             font-family: Theme.font-label;
-                            font-size: 13px;
+                            font-size: 14px;
                             font-weight: 700;
-                            letter-spacing: 1px;
+                            letter-spacing: 1.2px;
                             color: Theme.text-primary;
                             horizontal-alignment: center;
                         }
 
                         Text {
-                            text: root.pause-subtitle;
+                            text: "Connecting to " + root.card.streamer-name + "'s stream";
                             font-family: Theme.font-body;
+                            font-weight: Theme.weight-sentence;
                             font-size: 12px;
                             color: Theme.text-secondary;
                             horizontal-alignment: center;
                         }
                     }
-                }
 
-                // Stage 9: one card at a time drives the video layer.
-                if root.track-geometry: geo-tracker := Rectangle {
-                    width: 0;
-                    height: 0;
-                    property <float> track-x: media-rect.absolute-position.x / 1px;
-                    property <float> track-y: media-rect.absolute-position.y / 1px;
-                    property <float> track-w: media-rect.width / 1px;
-                    property <float> track-h: media-rect.height / 1px;
+                    // Stage 9: the stream plays in its own window; the video
+                    // layer is there, so the card says so and brings it back.
+                    if !show-paused && root.popped: VerticalLayout {
+                        alignment: center;
+                        spacing: 8px;
 
-                    function notify() {
-                        VideoRect.geometry-changed(
-                            self.track-x, self.track-y,
-                            self.track-w, self.track-h,
-                            root.viewport-abs-y, root.viewport-height,
-                        );
-                    }
+                        Text {
+                            text: "PLAYING IN A WINDOW";
+                            font-family: Theme.font-label;
+                            font-size: 14px;
+                            font-weight: 700;
+                            letter-spacing: 1.2px;
+                            color: Theme.text-primary;
+                            horizontal-alignment: center;
+                        }
 
-                    init => { self.notify(); }
-                    changed track-x => { self.notify(); }
-                    changed track-y => { self.notify(); }
-                    changed track-w => { self.notify(); }
-                    changed track-h => { self.notify(); }
-                }
-            }
-
-            if !show-live-frame: Rectangle {
-                width: parent.width;
-                height: parent.height;
-                background: transparent;
-
-                VerticalLayout {
-                    alignment: center;
-                    spacing: 8px;
-
-                    if !show-watch-cta: Text {
-                        text: root.is-notice ? root.card.title
-                            : root.viewer-starting ? "STARTING"
-                            : !show-hosting-state ? root.card.streamer-name + " IS LIVE"
-                            : root.starting ? "STARTING"
-                            : root.reconnecting ? "RECONNECTING"
-                            : "YOU ARE LIVE";
-                        font-family: Theme.font-label;
-                        font-size: 14px;
-                        font-weight: 700;
-                        letter-spacing: 1.2px;
-                        // Red is state: the link is down right now.
-                        color: show-hosting-state && root.reconnecting ? Theme.live : Theme.text-primary;
-                        horizontal-alignment: center;
-                    }
-
-                    if !show-watch-cta: Text {
-                        font-weight: Theme.weight-sentence;
-                        font-family: Theme.font-body;
-                        text: root.viewer-starting ? "Connecting to " + root.card.streamer-name + "'s stream"
-                            : show-hosting-state && root.starting ? "Connecting to the stream server"
-                            : show-hosting-state && root.reconnecting ? "Viewers see your last frame"
-                            : root.card.subtitle;
-                        font-size: 12px;
-                        color: Theme.text-secondary;
-                        horizontal-alignment: center;
-                    }
-
-                    if show-watch-cta: Rectangle {
-                        width: parent.width;
-                        height: 34px;
+                        Text {
+                            text: root.card.streamer-name + "'s stream is in its own window";
+                            font-family: Theme.font-body;
+                            font-weight: Theme.weight-sentence;
+                            font-size: 12px;
+                            color: Theme.text-secondary;
+                            horizontal-alignment: center;
+                        }
 
                         Rectangle {
-                            width: watch-label.preferred-width + 28px;
-                            height: parent.height;
-                            x: (parent.width - self.width) / 2;
-                            background: transparent;
+                            height: 34px;
 
-                            CutButtonShape {
-                                width: parent.width;
+                            Rectangle {
+                                width: back-label.preferred-width + 28px;
                                 height: parent.height;
-                                n: Theme.cut;
-                                fill: Theme.action;
-                            }
+                                x: (parent.width - self.width) / 2;
+                                background: transparent;
 
-                            watch-label := Text {
-                                text: "Watch stream";
-                                font-family: Theme.font-label;
-                                font-size: 11px;
-                                font-weight: Theme.weight-label;
-                                letter-spacing: Theme.track-label;
-                                color: Theme.on-action;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
+                                CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: Theme.cut;
+                                    fill: back-ta.has-hover ? Theme.action-press : Theme.action;
+                                }
+
+                                back-label := Text {
+                                    text: "Show it here";
+                                    font-family: Theme.font-label;
+                                    font-size: 11px;
+                                    font-weight: Theme.weight-label;
+                                    letter-spacing: Theme.track-label;
+                                    color: Theme.on-action;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+
+                                back-ta := TouchArea {
+                                    accessible-role: button;
+                                    accessible-label: "Show it here";
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        StreamCardUi.popout-requested(false);
+                                    }
+                                }
                             }
                         }
                     }
 
-                    if show-hosting-state: Rectangle {
+                    // Pause UX: opaque cover over the stale frame (and over the
+                    // detached DComp layer on Windows) with the host's name.
+                    if show-paused: Rectangle {
                         width: parent.width;
-                        height: 38px;
+                        height: parent.height;
+                        background: Theme.bg-app;
 
-                        Rectangle {
-                            width: stop-text.preferred-width + 40px;
-                            height: parent.height;
-                            x: (parent.width - self.width) / 2;
-                            background: transparent;
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 10px;
 
-                            // Ending the stream commits, so it is red. It was
-                            // a white fill with a white label: a blank pill.
-                            CutButtonShape {
+                            Rectangle {
                                 width: parent.width;
-                                height: parent.height;
-                                n: Theme.cut;
-                                fill: stop-hover.has-hover ? Theme.confirm-press : Theme.confirm;
+                                height: 26px;
+                                background: transparent;
+
+                                Image {
+                                    source: @image-url("../icons/pause.svg");
+                                    width: 26px;
+                                    height: 26px;
+                                    colorize: Theme.text-secondary;
+                                    x: (parent.width - self.width) / 2;
+                                }
                             }
 
-                            stop-text := Text {
-                                text: "END STREAM";
+                            Text {
+                                text: root.pause-title;
                                 font-family: Theme.font-label;
-                                font-size: 12px;
-                                font-weight: Theme.weight-label;
-                                letter-spacing: Theme.track-label;
-                                color: Theme.on-confirm;
+                                font-size: 13px;
+                                font-weight: 700;
+                                letter-spacing: 1px;
+                                color: Theme.text-primary;
                                 horizontal-alignment: center;
-                                vertical-alignment: center;
                             }
 
-                            stop-hover := TouchArea {
-                                accessible-role: button;
-                                accessible-label: "END STREAM";
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.stop-stream-clicked();
+                            Text {
+                                text: root.pause-subtitle;
+                                font-family: Theme.font-body;
+                                font-size: 12px;
+                                color: Theme.text-secondary;
+                                horizontal-alignment: center;
+                            }
+                        }
+                    }
+
+                    // Stage 9: one card at a time drives the video layer.
+                    if root.track-geometry: geo-tracker := Rectangle {
+                        width: 0;
+                        height: 0;
+                        property <float> track-x: media-rect.absolute-position.x / 1px;
+                        property <float> track-y: media-rect.absolute-position.y / 1px;
+                        property <float> track-w: media-rect.width / 1px;
+                        property <float> track-h: media-rect.height / 1px;
+
+                        function notify() {
+                            VideoRect.geometry-changed(
+                                self.track-x, self.track-y,
+                                self.track-w, self.track-h,
+                                root.viewport-abs-y, root.viewport-height,
+                            );
+                        }
+
+                        init => { self.notify(); }
+                        changed track-x => { self.notify(); }
+                        changed track-y => { self.notify(); }
+                        changed track-w => { self.notify(); }
+                        changed track-h => { self.notify(); }
+                    }
+                }
+
+                if !show-live-frame: Rectangle {
+                    width: parent.width;
+                    height: parent.height;
+                    background: transparent;
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 8px;
+
+                        if !show-watch-cta: Text {
+                            text: root.is-notice ? root.card.title
+                                : root.viewer-starting ? "STARTING"
+                                : !show-hosting-state ? root.card.streamer-name + " IS LIVE"
+                                : root.starting ? "STARTING"
+                                : root.reconnecting ? "RECONNECTING"
+                                : "YOU ARE LIVE";
+                            font-family: Theme.font-label;
+                            font-size: 14px;
+                            font-weight: 700;
+                            letter-spacing: 1.2px;
+                            // Red is state: the link is down right now.
+                            color: show-hosting-state && root.reconnecting ? Theme.live : Theme.text-primary;
+                            horizontal-alignment: center;
+                        }
+
+                        // The running hosted card has its game or display in
+                        // the footer's game line: no line here.
+                        if !show-watch-cta && !(show-hosting-state && !root.starting && !root.reconnecting): Text {
+                            font-weight: Theme.weight-sentence;
+                            font-family: Theme.font-body;
+                            text: root.viewer-starting ? "Connecting to " + root.card.streamer-name + "'s stream"
+                                : show-hosting-state && root.starting ? "Connecting to the stream server"
+                                : show-hosting-state && root.reconnecting ? "Viewers see your last frame"
+                                : root.card.subtitle;
+                            font-size: 12px;
+                            color: Theme.text-secondary;
+                            horizontal-alignment: center;
+                        }
+
+                        if show-hosting-state: Rectangle {
+                            width: parent.width;
+                            height: 38px;
+
+                            Rectangle {
+                                width: stop-text.preferred-width + 40px;
+                                height: parent.height;
+                                x: (parent.width - self.width) / 2;
+                                background: transparent;
+
+                                // Ending the stream commits, so it is red. It was
+                                // a white fill with a white label: a blank pill.
+                                CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: Theme.cut;
+                                    fill: stop-hover.has-hover ? Theme.confirm-press : Theme.confirm;
+                                }
+
+                                stop-text := Text {
+                                    text: "END STREAM";
+                                    font-family: Theme.font-label;
+                                    font-size: 12px;
+                                    font-weight: Theme.weight-label;
+                                    letter-spacing: Theme.track-label;
+                                    color: Theme.on-confirm;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+
+                                stop-hover := TouchArea {
+                                    accessible-role: button;
+                                    accessible-label: "END STREAM";
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.stop-stream-clicked();
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            if root.card.can-watch && !show-live-frame && !root.viewer-starting: watch-click := TouchArea {
-                accessible-role: button;
-                accessible-label: "Watch " + root.card.streamer-name;
-                mouse-cursor: pointer;
-                clicked => {
-                    root.watch-stream-clicked(
-                        root.card.host-id,
-                        root.card.session-id,
-                        root.card.stream-width,
-                        root.card.stream-height,
-                    );
+                // Somebody is live and you have not joined (mockup frame C): the
+                // play ring in the centre, the streamer and the game on the
+                // bottom wash, the LIVE tag and the count on the top one. A
+                // click anywhere on the card starts the watch.
+                if root.cta-card: Rectangle {
+                    width: parent.width;
+                    height: parent.height;
+                    background: transparent;
+
+                    PlayButton {
+                        x: (parent.width - self.width) / 2;
+                        y: parent.height * 0.44 - self.height / 2;
+                        size: 56px;
+                        hover: watch-click.has-hover;
+                    }
+
+                    StreamerLine {
+                        x: 18px;
+                        y: parent.height - self.height - 16px;
+                        width: self.preferred-width;
+                        height: self.preferred-height;
+                        card: root.card;
+                    }
+
+                    StreamTag {
+                        x: 18px;
+                        y: 14px;
+                        label: "LIVE";
+                        live: true;
+                        count: root.show-count ? root.card.viewer-count : "";
+                        count-label: "WATCHING";
+                    }
+
+                    watch-click := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Watch " + root.card.streamer-name;
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.watch-stream-clicked(
+                                root.card.host-id,
+                                root.card.session-id,
+                                root.card.stream-width,
+                                root.card.stream-height,
+                            );
+                        }
+                    }
                 }
-            }
 
-            // Stage 9: a double-click on the picture expands it, or back.
-            if show-live-frame && !show-paused && !root.popped: TouchArea {
-                // a11y: none (a double-click shortcut; the Expand button is the control)
-                double-clicked => {
-                    StreamCardUi.popover = "";
-                    StreamCardUi.expand-requested(!StreamCardUi.expanded);
+                // Stage 9: a double-click on the picture expands it, or back.
+                if show-live-frame && !show-paused && !root.popped: TouchArea {
+                    // a11y: none (a double-click shortcut; the Expand button is the control)
+                    double-clicked => {
+                        StreamCardUi.popover = "";
+                        StreamCardUi.expand-requested(!StreamCardUi.expanded);
+                    }
                 }
             }
         }
@@ -514,7 +853,8 @@ component StreamCard inherits Rectangle {
                 x: Theme.keyline;
                 width: parent.width - 2 * Theme.keyline;
                 height: parent.height;
-                background: Theme.surface;
+                // Black, as the picture and the footer.
+                background: #000000;
 
                 Rectangle {
                     y: 0;
@@ -537,18 +877,19 @@ component StreamCard inherits Rectangle {
             }
         }
 
-        Rectangle {
-            height: 72px;
+        if !root.cta-card: Rectangle {
+            height: StreamCardSize.footer;
             background: transparent;
 
             // The footer is the bottom of the card, so it carries the cut.
+            // Black: chrome under footage is black, not graphite.
             CutShape {
                 width: parent.width;
                 height: parent.height;
                 n: Theme.notch;
                 corner: "br";
                 inset: Theme.keyline;
-                fill: Theme.surface;
+                fill: #000000;
             }
             Rectangle {
                 y: 0;
@@ -561,147 +902,26 @@ component StreamCard inherits Rectangle {
                 padding-right: 12px;
                 spacing: 12px;
 
-                // Avatar — wrapper stretches to row height, inner rect centers
+                // The streamer, the state tag with the count, the format,
+                // and under the name the game. A card in the two-column
+                // grid is too narrow for all of it: the count moves to the
+                // game line, the format chip drops, the name elides, and the
+                // line clips before it reaches the buttons.
                 Rectangle {
-                    width: 40px;
-                    horizontal-stretch: 0;
-
-                    UserAvatar {
-                        initials: root.card.avatar-initials;
-                        avatar: root.card.avatar;
-                        has-avatar: root.card.has-avatar;
-                        color-index: root.card.avatar-color-index;
-                        size: 40px;
-                        bg-color: Theme.card-bg;
-                        y: (parent.height - self.height) / 2;
-                    }
-                }
-
-                // Name + badges — stretches to fill
-                VerticalLayout {
                     horizontal-stretch: 1;
-                    alignment: center;
-                    spacing: 3px;
+                    min-width: 0px;
+                    clip: true;
 
-                    HorizontalLayout {
-                        spacing: 8px;
-
-                        Text {
-                            font-family: Theme.font-display;
-                            text: root.card.streamer-name;
-                            font-size: 15px;
-                            font-weight: Theme.weight-display-bold;
-                            color: Theme.text-primary;
-                            overflow: elide;
-                            horizontal-stretch: 0;
-                        }
-
-                        if !root.is-notice && !root.starting && !root.reconnecting: Rectangle {
-                            horizontal-stretch: 0;
-                            width: live-label.preferred-width + 14px;
-                            height: 20px;
-
-                            Rectangle {
-                                width: parent.width;
-                                height: parent.height;
-                                y: (parent.height - self.height) / 2;
-                                background: Theme.live;
-
-                                live-label := Text {
-                                    text: "LIVE";
-                                    font-family: Theme.font-label;
-                                    font-size: 10px;
-                                    font-weight: Theme.weight-label;
-                                    letter-spacing: Theme.track-label;
-                                    color: Theme.on-live;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-
-                        // Stage 6: the state in place of the LIVE badge. No
-                        // fill: the stream is not live right now. Red text
-                        // for a link that is down, as the voice channel.
-                        if root.is-notice || root.starting || root.reconnecting: Text {
-                            horizontal-stretch: 0;
-                            text: root.reconnecting ? "RECONNECTING"
-                                : root.starting ? "STARTING"
-                                : root.card.state == "failed" ? "NOT LIVE"
-                                : "ENDED";
-                            font-family: Theme.font-label;
-                            font-size: 10px;
-                            font-weight: Theme.weight-label;
-                            letter-spacing: Theme.track-label;
-                            color: root.reconnecting ? Theme.live : Theme.text-secondary;
-                            vertical-alignment: center;
-                        }
-
-                        // Stage 9: the picture's format ("720p60"): the
-                        // height from the SPS and the rung's frame rate. It
-                        // was the present rate, which is not the stream's.
-                        if show-live-frame && StreamCardUi.format-label != "": Text {
-                            horizontal-stretch: 0;
-                            letter-spacing: Theme.track-label;
-                            text: StreamCardUi.format-label;
-                            font-family: Theme.font-label;
-                            font-size: 10px;
-                            font-weight: Theme.weight-label;
-                            color: Theme.text-secondary;
-                            vertical-alignment: center;
-                        }
-
-                        // Stage 9: how many watch (the design system's
-                        // outline badge).
-                        if root.show-count && !root.narrow: Rectangle {
-                            horizontal-stretch: 0;
-                            width: watching-label.preferred-width + 14px;
-
-                            Rectangle {
-                                width: parent.width;
-                                height: 18px;
-                                y: (parent.height - self.height) / 2;
-
-                                CutButtonShape {
-                                    width: parent.width;
-                                    height: parent.height;
-                                    n: 4px;
-                                    fill: Theme.graphic-med;
-                                }
-                                CutButtonShape {
-                                    width: parent.width;
-                                    height: parent.height;
-                                    n: 4px;
-                                    inset: Theme.keyline;
-                                    fill: Theme.surface;
-                                }
-
-                                watching-label := Text {
-                                    text: root.card.viewer-count + " WATCHING";
-                                    font-family: Theme.font-label;
-                                    font-size: 9px;
-                                    font-weight: Theme.weight-label;
-                                    letter-spacing: Theme.track-label;
-                                    color: Theme.text-secondary;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-
-                        // Spacer absorbs remaining width
-                        Rectangle { horizontal-stretch: 1; }
-                    }
-
-                    Text {
-                        font-weight: Theme.weight-sentence;
-                        font-family: Theme.font-body;
-                        text: root.show-count && root.narrow
-                            ? root.card.subtitle + " · " + root.card.viewer-count + " watching"
-                            : root.card.subtitle;
-                        font-size: 11px;
-                        color: Theme.text-secondary;
-                        overflow: elide;
+                    StreamerLine {
+                        width: parent.width;
+                        height: parent.height;
+                        card: root.card;
+                        tag: root.tag-label;
+                        tag-live: root.tag-live;
+                        tag-count: root.tag-count;
+                        game-suffix: root.count-shown && root.narrow-footer
+                            ? root.card.viewer-count + " watching" : "";
+                        format: show-live-frame && !root.narrow-footer ? StreamCardUi.format-label : "";
                     }
                 }
 
@@ -810,6 +1030,23 @@ component StreamCard inherits Rectangle {
             }
         }
     }
+
+    // The picture of the cta card reaches the cut corner: paint the corner
+    // back and draw its keyline, as the two-stream hero does.
+    if root.cta-card: CutMask {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "br";
+        fill: Theme.bg-app;
+    }
+    if root.cta-card: Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: self.width / 1px;
+        viewbox-height: self.height / 1px;
+        stroke: Theme.card-border;
+        stroke-width: 1px;
+        commands: "M \{self.width / 1px} \{(self.height - Theme.notch) / 1px} L \{(self.width - Theme.notch) / 1px} \{self.height / 1px}";
+    }
 }
 
 export component ActiveStreamsPanel inherits Rectangle {
@@ -830,12 +1067,17 @@ export component ActiveStreamsPanel inherits Rectangle {
     callback stop-watching-clicked();
 
     out property <int> row-count: cards.length <= 1 ? 1 : (cards.length + 1) / 2;
-    out property <length> panel-height: cards.length <= 1 ? 420px : row-count * 300px + (row-count - 1) * 12px;
+    /// The height the panel needs at its width while the viewer watches:
+    /// the watched card's picture is 16:9 at the card's width
+    /// (StreamCardSize). The feed gives the stage at least this height.
+    out property <length> watch-height: StreamCardSize.watch-height(root.width, root.cards.length);
 
+    // A watched card takes its own height and sits at the top of the panel.
     if cards.length == 1: StreamCard {
+        y: 0;
         width: parent.width;
-        height: 420px;
-        media-height: 348px;
+        height: self.live-frame ? self.live-height : root.height;
+        media-height: root.height - StreamCardSize.footer;
         card: cards[0];
         is-watching: root.is-watching;
         is-hosting: root.is-hosting;
@@ -857,13 +1099,24 @@ export component ActiveStreamsPanel inherits Rectangle {
         }
     }
 
-    if cards.length > 1: VerticalLayout {
+    // Two or three streams and you have joined none: one card of strips
+    // (mockup frames D and G). Rust sets the switch from the cards.
+    if cards.length > 1 && StreamCardUi.strips-layout: LiveStripsCard {
+        width: parent.width;
+        height: root.height;
+        cards: root.cards;
+        watch-stream-clicked(host-id, session-id, w, h) => {
+            root.watch-stream-clicked(host-id, session-id, w, h);
+        }
+    }
+
+    if cards.length > 1 && !StreamCardUi.strips-layout: VerticalLayout {
         spacing: 12px;
 
         for row-start in [0, 2, 4, 6]: HorizontalLayout {
             visible: row-start < cards.length;
             spacing: 12px;
-            height: 300px;
+            height: root.is-watching ? StreamCardSize.watch-row(root.width) : StreamCardSize.grid-row;
 
             for col in [0, 1]: Rectangle {
                 property <int> card-index: row-start + col;
@@ -873,8 +1126,9 @@ export component ActiveStreamsPanel inherits Rectangle {
                 height: parent.height;
 
                 if in-range: StreamCard {
+                    y: 0;
                     width: parent.width;
-                    height: parent.height;
+                    height: self.live-frame ? self.live-height : parent.height;
                     media-height: 228px;
                     card: root.cards[card-index];
                     is-watching: root.is-watching;
@@ -1406,9 +1660,21 @@ component StreamsPreview inherits Rectangle {
     in property <bool> popped-out: false;
     in property <bool> muted: false;
     in property <string> popover: "";
+    // The picture and the game of the stream (mockup frames C and D).
+    in property <image> picture;
+    in property <string> picture-kind: "";
+    in property <string> game: "";
+    in property <string> monogram: "";
+    in property <image> game-icon;
+    in property <bool> has-game-icon: false;
+    /// The live picture while you watch.
+    in property <image> frame;
 
     width: 820px;
-    height: 470px;
+    // A watched card takes the height of its 16:9 picture.
+    height: root.watching ? panel.watch-height + 40px : 470px;
+    /// The top of the card's footer, for the popover previews.
+    out property <length> footer-top: 20px + panel.height - StreamCardSize.footer;
     background: Theme.bg-app;
 
     init => {
@@ -1424,9 +1690,10 @@ component StreamsPreview inherits Rectangle {
         };
         StreamCardUi.host-quality = "HIGH · 1080p30";
         StreamCardUi.host-sending = "6.2 Mbps";
+        StreamCardUi.strips-layout = false;
     }
 
-    ActiveStreamsPanel {
+    panel := ActiveStreamsPanel {
         x: 20px;
         y: 20px;
         width: parent.width - 40px;
@@ -1434,6 +1701,7 @@ component StreamsPreview inherits Rectangle {
         is-hosting: root.hosting;
         is-watching: root.watching;
         active-streamer-id: "h1";
+        stream-frame: root.frame;
         cards: [
             {
                 host-id: "h1", session-id: "s1",
@@ -1444,13 +1712,99 @@ component StreamsPreview inherits Rectangle {
                 can-watch: root.can-watch,
                 state: root.state,
                 title: root.title,
+                picture: root.picture,
+                picture-kind: root.picture-kind,
+                game-name: root.game,
+                game-monogram: root.monogram,
+                game-icon: root.game-icon,
+                has-game-icon: root.has-game-icon,
             },
         ];
     }
 }
 
+/// The footer states with the stream's picture and its game: the footer
+/// shows the game's icon tile and name under the streamer.
+component GamePreview inherits StreamsPreview {
+    frame: @image-url("../previews/fixtures/stream-sample-1.png");
+    picture: @image-url("../previews/fixtures/stream-sample-1.png");
+    picture-kind: "frame";
+    game: "Counter-Strike 2";
+    monogram: "CS";
+    game-icon: @image-url("../previews/fixtures/capsule-sample-1.png");
+    has-game-icon: true;
+}
+
+/// Somebody is live, you have not joined: the SFU's last picture fills the
+/// card, the game's icon and name under the streamer (mockup frame C).
+export component PreviewWatchCtaPicture inherits StreamsPreview {
+    can-watch: true;
+    picture: @image-url("../previews/fixtures/stream-sample-1.png");
+    picture-kind: "frame";
+    game: "Counter-Strike 2";
+    monogram: "CS";
+    game-icon: @image-url("../previews/fixtures/capsule-sample-1.png");
+    has-game-icon: true;
+}
+
+/// The same before the first picture: the game's hero art.
+export component PreviewWatchCtaArt inherits StreamsPreview {
+    can-watch: true;
+    picture: @image-url("../previews/fixtures/capsule-sample-2.png");
+    picture-kind: "poster";
+    game: "Rocket League";
+    monogram: "RL";
+}
+
+/// No picture and no art: the tint and the monogram.
+export component PreviewWatchCtaNoArt inherits StreamsPreview {
+    can-watch: true;
+    game: "Night Stones";
+    monogram: "NS";
+}
+
+/// Your own stream over your game's art, the footer with its controls.
+export component PreviewHostingPicture inherits StreamsPreview {
+    hosting: true;
+    picture: @image-url("../previews/fixtures/capsule-sample-1.png");
+    picture-kind: "poster";
+    game: "Counter-Strike 2";
+    monogram: "CS";
+    game-icon: @image-url("../previews/fixtures/capsule-sample-1.png");
+    has-game-icon: true;
+}
+
+component StripsPreview inherits Rectangle {
+    in property <int> count: 2;
+    width: 586px;
+    height: 516px;
+    background: Theme.bg-app;
+
+    init => { StreamCardUi.strips-layout = true; }
+
+    ActiveStreamsPanel {
+        x: 20px;
+        y: 20px;
+        width: parent.width - 40px;
+        height: parent.height - 40px;
+        cards: root.count == 3 ? [
+            { host-id: "h1", session-id: "s1", streamer-name: "Max", avatar-initials: "MA", avatar-color-index: 0, viewer-count: 2, stream-width: 1920, stream-height: 1080, can-watch: true, game-name: "Brawlhalla", game-monogram: "BR", picture: @image-url("../previews/fixtures/stream-sample-2.png"), picture-kind: "frame" },
+            { host-id: "h2", session-id: "s2", streamer-name: "Leo", avatar-initials: "LE", avatar-color-index: 4, viewer-count: 1, stream-width: 1920, stream-height: 1080, can-watch: true, game-name: "Counter-Strike 2", game-monogram: "CS", game-icon: @image-url("../previews/fixtures/capsule-sample-1.png"), has-game-icon: true, picture: @image-url("../previews/fixtures/stream-sample-3.png"), picture-kind: "frame" },
+            { host-id: "h3", session-id: "s3", streamer-name: "Jonas", avatar-initials: "JO", avatar-color-index: 2, viewer-count: 0, stream-width: 1920, stream-height: 1080, can-watch: true, game-name: "Portal", game-monogram: "PO", picture: @image-url("../previews/fixtures/stream-sample-1.png"), picture-kind: "frame" },
+        ] : [
+            { host-id: "h1", session-id: "s1", streamer-name: "Max", avatar-initials: "MA", avatar-color-index: 0, viewer-count: 2, stream-width: 1920, stream-height: 1080, can-watch: true, game-name: "Brawlhalla", game-monogram: "BR", picture: @image-url("../previews/fixtures/stream-sample-2.png"), picture-kind: "frame" },
+            { host-id: "h2", session-id: "s2", streamer-name: "Leo", avatar-initials: "LE", avatar-color-index: 4, viewer-count: 1, stream-width: 1920, stream-height: 1080, can-watch: true, game-name: "Counter-Strike 2", game-monogram: "CS", game-icon: @image-url("../previews/fixtures/capsule-sample-1.png"), has-game-icon: true, picture: @image-url("../previews/fixtures/stream-sample-3.png"), picture-kind: "frame" },
+        ];
+    }
+}
+
+/// Two streams you have not joined: strips (mockup frame D).
+export component PreviewStripsTwo inherits StripsPreview { count: 2; }
+/// Three streams: strips (mockup frame G).
+export component PreviewStripsThree inherits StripsPreview { count: 3; }
+
 /// Your own stream, running.
-export component PreviewHosting inherits StreamsPreview { hosting: true; }
+export component PreviewHosting inherits GamePreview { hosting: true; }
 
 /// Somebody else is live and you have not joined yet.
 export component PreviewWatchCta inherits StreamsPreview { can-watch: true; }
@@ -1462,12 +1816,12 @@ export component PreviewHostStarting inherits StreamsPreview { hosting: true; st
 export component PreviewHostReconnecting inherits StreamsPreview { hosting: true; state: "reconnecting"; }
 
 /// Stage 6: the watched stream reconnects; the last frame stays under a wash.
-export component PreviewWatchReconnecting inherits StreamsPreview {
+export component PreviewWatchReconnecting inherits GamePreview {
     watching: true; can-watch: true; state: "reconnecting";
 }
 
 /// Stage 6: a stream that ended says why.
-export component PreviewEnded inherits StreamsPreview {
+export component PreviewEnded inherits GamePreview {
     state: "ended"; title: "STREAM ENDED";
     subtitle: "The connection to the stream was lost for 30 seconds.";
 }
@@ -1482,22 +1836,22 @@ export component PreviewFailed inherits StreamsPreview {
 
 /// Stage 9: watching, with the format label, the viewer count and the
 /// three buttons.
-export component PreviewWatchLive inherits StreamsPreview {
+export component PreviewWatchLive inherits GamePreview {
     watching: true; can-watch: true; format: "720p60";
 }
 
 /// Stage 9: the stats strip under the picture.
-export component PreviewWatchStats inherits StreamsPreview {
+export component PreviewWatchStats inherits GamePreview {
     watching: true; can-watch: true; format: "1080p60"; stats: true;
 }
 
 /// Stage 9: the Watch click, before the first frame.
-export component PreviewWatchStarting inherits StreamsPreview {
+export component PreviewWatchStarting inherits GamePreview {
     can-watch: true; starting-watch: true; viewers: 2;
 }
 
 /// Stage 9: the stream plays in the pop-out window; the card says so.
-export component PreviewWatchPoppedOut inherits StreamsPreview {
+export component PreviewWatchPoppedOut inherits GamePreview {
     watching: true; can-watch: true; format: "720p60"; popped-out: true;
 }
 
@@ -1518,6 +1872,9 @@ export component PreviewWatchExpanded inherits Rectangle {
             avatar-initials: "b0", avatar-color-index: 0,
             viewer-count: 3, stream-width: 1920, stream-height: 1080,
             can-watch: true, state: "", title: "",
+            game-name: "Counter-Strike 2", game-monogram: "CS",
+            game-icon: @image-url("../previews/fixtures/capsule-sample-1.png"),
+            has-game-icon: true,
         };
     }
 
@@ -1526,6 +1883,7 @@ export component PreviewWatchExpanded inherits Rectangle {
         height: parent.height;
         is-watching: true;
         active-streamer-id: "h1";
+        stream-frame: @image-url("../previews/fixtures/stream-sample-1.png");
     }
 }
 
@@ -1542,8 +1900,10 @@ component PopoverPreview inherits Rectangle {
     width: 820px;
     height: 720px;
     background: Theme.bg-app;
+    /// The top of the card's footer: the anchors follow the card height.
+    out property <length> footer-top: card.footer-top;
 
-    StreamsPreview {
+    card := StreamsPreview {
         x: 0;
         y: 0;
         hosting: root.hosting;
@@ -1574,9 +1934,10 @@ export component PreviewVolumePopover inherits PopoverPreview {
     which: "volume";
     init => {
         // Under the volume button: the first of four 32 px buttons, 4 px
-        // apart, 12 px from the right edge of the card, in the footer.
+        // apart, 12 px from the right edge of the card, in the footer. The
+        // buttons and Leave (32 + 4 + 26) are centred in the 72 px footer.
         StreamCardUi.anchor-right = 800px - 12px - 3 * 36px;
-        StreamCardUi.anchor-bottom = 450px - 72px + 4px + 32px + 13px;
+        StreamCardUi.anchor-bottom = self.footer-top + 5px + 32px;
     }
 }
 
@@ -1585,7 +1946,7 @@ export component PreviewViewerSettings inherits PopoverPreview {
     which: "settings";
     init => {
         StreamCardUi.anchor-right = 800px - 12px - 2 * 36px;
-        StreamCardUi.anchor-bottom = 450px - 72px + 4px + 32px + 13px;
+        StreamCardUi.anchor-bottom = self.footer-top + 5px + 32px;
     }
 }
 
@@ -1594,8 +1955,9 @@ export component PreviewHostSettings inherits PopoverPreview {
     which: "host-settings";
     hosting: true;
     init => {
+        // The host's one button, centred in the 72 px footer.
         StreamCardUi.anchor-right = 800px - 12px;
-        StreamCardUi.anchor-bottom = 450px - 72px + 20px + 32px;
+        StreamCardUi.anchor-bottom = self.footer-top + 20px + 32px;
     }
 }
 
@@ -1603,7 +1965,7 @@ export component PreviewHostSettings inherits PopoverPreview {
 /// label, its count, the stats strip and the three buttons.
 export component PreviewGridWatch inherits Rectangle {
     width: 840px;
-    height: 360px;
+    height: panel.watch-height + 40px;
     background: Theme.bg-app;
 
     init => {
@@ -1615,21 +1977,25 @@ export component PreviewGridWatch inherits Rectangle {
         };
     }
 
-    ActiveStreamsPanel {
+    panel := ActiveStreamsPanel {
         x: 20px;
         y: 20px;
         width: 800px;
-        height: 320px;
+        height: parent.height - 40px;
         is-watching: true;
         active-streamer-id: "h1";
+        stream-frame: @image-url("../previews/fixtures/stream-sample-1.png");
         cards: [
             {
                 host-id: "h1", session-id: "s1",
                 streamer-name: "Propotato_the_long_name",
-                subtitle: "Counter-Strike 2",
+                subtitle: "Ranked",
                 avatar-initials: "pr", avatar-color-index: 1,
                 viewer-count: 12, stream-width: 1920, stream-height: 1080,
                 can-watch: true, state: "", title: "",
+                game-name: "Counter-Strike 2", game-monogram: "CS",
+                game-icon: @image-url("../previews/fixtures/capsule-sample-1.png"),
+                has-game-icon: true,
             },
             {
                 host-id: "h2", session-id: "s2",
@@ -1638,6 +2004,9 @@ export component PreviewGridWatch inherits Rectangle {
                 avatar-initials: "os", avatar-color-index: 2,
                 viewer-count: 2, stream-width: 1920, stream-height: 1080,
                 can-watch: true, state: "", title: "",
+                game-name: "Valorant", game-monogram: "VA",
+                picture: @image-url("../previews/fixtures/stream-sample-2.png"),
+                picture-kind: "frame",
             },
         ];
     }
