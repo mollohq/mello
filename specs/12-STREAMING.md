@@ -1679,7 +1679,7 @@ DComp presenter diagnostics:
 | Adapter/device mismatch diagnostics are log-based only | Better in-UI error reasons still needed | Small |
 | End-to-end certification matrix pending | Performance targets not yet certified across LAN/loss/multi-viewer gates | Medium |
 | macOS viewer has no DComp equivalent | macOS needs its own compositor path (Core Animation layer); the present thread hands RGBA to the Slint timer | Medium |
-| Media Foundation decode not run on an Intel GPU | Intel viewers decode with the Microsoft H.264 decoder; tested on an NVIDIA GPU (GPU and CPU mode), not yet on an Intel iGPU | Small (a run on an Intel laptop) |
+| ~~Media Foundation decode not run on an Intel GPU~~ **Tested (2026-11-07)** — an Intel Iris Xe viewer took Media Foundation from the decoder order; a live stream and clips played in GPU mode and in CPU mode with 0 decode errors | — | — |
 | No decoder on Windows N without the Media Feature Pack | A viewer with no NVDEC, no AMF and no Media Feature Pack gets no picture; only the log says why | Small (a UI message, Bob's decision) |
 | AMF decode slot copy untested on AMD | The array-slice copy follows the AMF samples; not run on an AMD GPU | Small |
 | macOS VideoToolbox session churn | Decode FPS drops on SPS/PPS change | Small |
